@@ -1,0 +1,66 @@
+# myPub .gitignore
+
+# Database files (contain indexed data, can be regenerated)
+data/*.ddb
+data/*.db
+data/*.duckdb
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Generated skills (optional - may want to track some)
+# skills/generated/
+
+# Test output
+tests/output/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.local
+
+# ePub files (source of truth is ~/Documents/ebooks)
+*.epub
+
+# Large exports
+exports/
