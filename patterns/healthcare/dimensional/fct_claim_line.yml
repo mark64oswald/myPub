@@ -1,0 +1,293 @@
+# Healthcare Claim Line Fact Pattern
+# Pattern ID: healthcare.dimensional.fct_claim_line
+
+pattern_id: healthcare.dimensional.fct_claim_line
+name: Healthcare Claim Line Fact
+version: 1.0.0
+domain: healthcare
+category: dimensional
+
+description: |
+  Fact table for healthcare claims at the service line grain.
+  Each row represents a single service/procedure on a claim.
+  This is the correct grain per Kimball (DW Toolkit Ch 11) -
+  do NOT use claim header grain for detailed analytics.
+
+problem_statement: |
+  Healthcare organizations need to analyze claims data for:
+  - Cost analysis (charges, allowed, paid amounts)
+  - Utilization metrics (services per member)
+  - Provider performance
+  - Quality measure calculation
+  - Risk adjustment (HCC)
+  
+  The claim LINE is the correct grain because:
+  - Services are rendered at the line level
+  - Procedures and diagnoses apply to specific lines
+  - Allows proper aggregation to any level
+
+context:
+  when_to_use:
+    - Building a healthcare data warehouse
+    - Claims analytics and reporting
+    - PMPM and utilization calculations
+    - Provider network analysis
+    - Quality measure calculation
+    - Risk adjustment/HCC analysis
+  
+  when_not_to_use:
+    - Executive summary dashboards only (may use header)
+    - Quick POC with limited scope
+    - Non-claims data (eligibility, clinical)
+  
+  prerequisites:
+    - dimensional_modeling
+    - healthcare_claims
+    - surrogate_key
+
+schema:
+  grain: One row per claim line (service)
+  
+  columns:
+    # Keys
+    - name: claim_line_sk
+      type: BIGINT
+      description: Surrogate key for the claim line
+      nullable: false
+      
+    - name: claim_id
+      type: VARCHAR(50)
+      description: Degenerate dimension - source claim identifier
+      nullable: false
+      
+    - name: line_number
+      type: INTEGER
+      description: Line number within the claim
+      nullable: false
+    
+    # Foreign Keys
+    - name: member_sk
+      type: BIGINT
+      description: FK to dim_member
+      nullable: false
+      references: dim_member(member_sk)
+      
+    - name: provider_sk
+      type: BIGINT
+      description: FK to dim_provider (rendering provider)
+      nullable: true
+      references: dim_provider(provider_sk)
+      
+    - name: billing_provider_sk
+      type: BIGINT
+      description: FK to dim_provider (billing provider)
+      nullable: true
+      references: dim_provider(provider_sk)
+      
+    - name: service_date_sk
+      type: INTEGER
+      description: FK to dim_date (service from date)
+      nullable: false
+      references: dim_date(date_sk)
+      
+    - name: service_end_date_sk
+      type: INTEGER
+      description: FK to dim_date (service to date)
+      nullable: true
+      references: dim_date(date_sk)
+      
+    - name: paid_date_sk
+      type: INTEGER
+      description: FK to dim_date (payment date)
+      nullable: true
+      references: dim_date(date_sk)
+      
+    - name: procedure_sk
+      type: BIGINT
+      description: FK to dim_procedure
+      nullable: true
+      references: dim_procedure(procedure_sk)
+      
+    - name: place_of_service_sk
+      type: INTEGER
+      description: FK to dim_place_of_service
+      nullable: true
+      references: dim_place_of_service(place_of_service_sk)
+      
+    - name: claim_type_sk
+      type: INTEGER
+      description: FK to dim_claim_type (medical, Rx, dental, etc.)
+      nullable: false
+      references: dim_claim_type(claim_type_sk)
+    
+    # Measures
+    - name: charge_amount
+      type: DECIMAL(12,2)
+      description: Billed/charged amount
+      nullable: true
+      
+    - name: allowed_amount
+      type: DECIMAL(12,2)
+      description: Contractual allowed amount
+      nullable: true
+      
+    - name: paid_amount
+      type: DECIMAL(12,2)
+      description: Amount paid by payer
+      nullable: true
+      
+    - name: copay_amount
+      type: DECIMAL(12,2)
+      description: Member copay
+      nullable: true
+      
+    - name: coinsurance_amount
+      type: DECIMAL(12,2)
+      description: Member coinsurance
+      nullable: true
+      
+    - name: deductible_amount
+      type: DECIMAL(12,2)
+      description: Amount applied to deductible
+      nullable: true
+      
+    - name: units
+      type: INTEGER
+      description: Service units/quantity
+      nullable: true
+    
+    # Audit
+    - name: source_system
+      type: VARCHAR(50)
+      description: Source system identifier
+      nullable: true
+      
+    - name: load_timestamp
+      type: TIMESTAMP
+      description: ETL load timestamp
+      nullable: false
+      default: CURRENT_TIMESTAMP
+
+  primary_key: [claim_line_sk]
+  
+  natural_key: [claim_id, line_number]
+  
+  indexes:
+    - columns: [member_sk, service_date_sk]
+      purpose: Member claim history queries
+    - columns: [provider_sk, service_date_sk]
+      purpose: Provider volume queries
+    - columns: [procedure_sk]
+      purpose: Procedure analysis
+
+implementation:
+  sql_template: |
+    CREATE TABLE IF NOT EXISTS fct_claim_line (
+        -- Surrogate key
+        claim_line_sk           BIGINT PRIMARY KEY,
+        
+        -- Degenerate dimensions
+        claim_id                VARCHAR(50) NOT NULL,
+        line_number             INTEGER NOT NULL,
+        
+        -- Foreign keys to dimensions
+        member_sk               BIGINT NOT NULL,
+        provider_sk             BIGINT,
+        billing_provider_sk     BIGINT,
+        service_date_sk         INTEGER NOT NULL,
+        service_end_date_sk     INTEGER,
+        paid_date_sk            INTEGER,
+        procedure_sk            BIGINT,
+        place_of_service_sk     INTEGER,
+        claim_type_sk           INTEGER NOT NULL,
+        
+        -- Measures
+        charge_amount           DECIMAL(12,2),
+        allowed_amount          DECIMAL(12,2),
+        paid_amount             DECIMAL(12,2),
+        copay_amount            DECIMAL(12,2),
+        coinsurance_amount      DECIMAL(12,2),
+        deductible_amount       DECIMAL(12,2),
+        units                   INTEGER,
+        
+        -- Audit
+        source_system           VARCHAR(50),
+        load_timestamp          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        
+        -- Natural key constraint
+        UNIQUE (claim_id, line_number)
+    );
+    
+    -- Indexes for common query patterns
+    CREATE INDEX IF NOT EXISTS idx_fct_claim_line_member 
+        ON fct_claim_line(member_sk, service_date_sk);
+    CREATE INDEX IF NOT EXISTS idx_fct_claim_line_provider 
+        ON fct_claim_line(provider_sk, service_date_sk);
+    CREATE INDEX IF NOT EXISTS idx_fct_claim_line_procedure 
+        ON fct_claim_line(procedure_sk);
+
+test_cases:
+  - name: Grain verification
+    description: Each claim_id + line_number combination should be unique
+    query: |
+      SELECT claim_id, line_number, COUNT(*) as cnt
+      FROM fct_claim_line
+      GROUP BY claim_id, line_number
+      HAVING COUNT(*) > 1
+    expected: Empty result (no duplicates)
+    
+  - name: Member FK integrity
+    description: All member_sk values should exist in dim_member
+    query: |
+      SELECT COUNT(*) 
+      FROM fct_claim_line f
+      LEFT JOIN dim_member m ON f.member_sk = m.member_sk
+      WHERE m.member_sk IS NULL
+    expected: 0
+    
+  - name: PMPM calculation
+    description: Test basic PMPM calculation
+    query: |
+      SELECT 
+          SUM(paid_amount) / COUNT(DISTINCT member_sk) as pmpm
+      FROM fct_claim_line
+      WHERE service_date_sk BETWEEN 20240101 AND 20240131
+    expected: Reasonable PMPM value (typically $200-600 for commercial)
+
+related_patterns:
+  - pattern_id: healthcare.dimensional.dim_member
+    relationship: requires
+    description: Member dimension for member attributes
+    
+  - pattern_id: healthcare.dimensional.dim_provider
+    relationship: requires
+    description: Provider dimension for provider attributes
+    
+  - pattern_id: healthcare.dimensional.diagnosis_handling
+    relationship: extends
+    description: How to handle multiple diagnoses per claim
+    
+  - pattern_id: healthcare.metrics.pmpm
+    relationship: enables
+    description: PMPM metrics calculated from this fact
+
+sources:
+  - book: The Data Warehouse Toolkit, 3rd Edition
+    author: Ralph Kimball, Margy Ross
+    chapter: Chapter 11 - Healthcare
+    authority: high
+    contribution: canonical
+    notes: Defines claim line as correct grain, core schema
+    
+  - book: Healthcare Analytics Made Simple
+    author: Various
+    chapter: Claims Data Modeling
+    authority: medium
+    contribution: extension
+    notes: Additional practical considerations
+
+metadata:
+  created_at: 2024-12-17
+  updated_at: 2024-12-17
+  created_by: myPub extraction
+  version_notes: Initial extraction from Kimball Chapter 11

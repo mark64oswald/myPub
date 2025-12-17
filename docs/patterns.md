@@ -1,453 +1,308 @@
 # Pattern Library Guide
 
-## Overview
+## What is a Pattern?
 
-Patterns are reusable building blocks extracted from your ePub collection. They transform narrative knowledge into actionable, AI-consumable templates.
+A pattern is a reusable building block extracted from your ePub collection. Unlike raw chapter content, patterns are:
 
-## Why Patterns?
-
-### Without Patterns
-
-```
-User: "Build a claims fact table"
-
-Claude: [Re-reads 15 pages of Kimball every time]
-        [May interpret differently each time]
-        [Uses many tokens for retrieval]
-        [No consistency guarantee]
-```
-
-### With Patterns
-
-```
-User: "Build a claims fact table"
-
-Claude: [Loads structured pattern definition]
-        [Applies decision framework]
-        [Generates consistent, correct schema]
-        [Explains rationale from pattern]
-```
+- **Structured**: Schema definitions, code templates, decision frameworks
+- **Parameterized**: Can be adapted to specific contexts
+- **Validated**: Tested approaches with known trade-offs
+- **Sourced**: Traceable to authoritative books/chapters
 
 ## Pattern Structure
 
-### Pattern YAML Schema
+Each pattern is stored as YAML with this structure:
 
 ```yaml
-pattern_id: healthcare.dimensional.fct_claim_line
-name: Claim Line Fact Table
-version: "1.0"
-domain: healthcare
-category: dimensional
-
-description: |
-  Fact table for healthcare claims at the claim line grain.
-  Each row represents a single service/procedure on a claim.
+pattern_id: domain.category.name
+name: Human-Readable Name
+description: What this pattern does
+domain: healthcare | dimensional_modeling | data_engineering | ...
+category: facts | dimensions | ingestion | metrics | ...
 
 problem_statement: |
-  Need to analyze healthcare claims for cost, utilization, and outcomes
-  while supporting drill-down to individual services.
-
-sources:
-  - book: "The Data Warehouse Toolkit"
-    chapter: 11
-    authority: high
-    contribution: canonical
+  What problem does this pattern solve?
+  When would you use it?
 
 context:
   when_to_use:
-    - Claims analytics and reporting
-    - Provider performance analysis
-    - Cost and utilization studies
-    - Quality measure calculation
-  
+    - Scenario 1
+    - Scenario 2
   when_not_to_use:
-    - Real-time claims processing
-    - OLTP systems
-    - When only header-level aggregates needed
-
+    - Anti-pattern scenario
   prerequisites:
-    - Understanding of dimensional modeling
-    - Healthcare claims domain knowledge
+    - required_concept_1
+    - required_concept_2
 
 schema:
-  grain: "One row per claim line (service/procedure)"
-  
-  primary_key:
-    name: claim_line_key
-    type: BIGINT
-    generation: surrogate_sequence
-  
+  description: The data structure
+  columns:
+    - name: column_name
+      type: data_type
+      description: What this column represents
+      nullable: true|false
+  primary_key: [column1, column2]
   foreign_keys:
-    - name: member_key
-      references: dim_member
-      role: patient
-    
-    - name: provider_key
-      references: dim_provider
-      role: rendering_provider
-    
-    - name: facility_key
-      references: dim_provider
-      role: service_facility
-    
-    - name: service_date_key
-      references: dim_date
-      role: date_of_service
-    
-    - name: paid_date_key
-      references: dim_date
-      role: payment_date
-    
-    - name: procedure_key
-      references: dim_procedure
-    
-    - name: primary_diagnosis_key
-      references: dim_diagnosis
-      role: primary_dx
+    - columns: [fk_column]
+      references: other_table(pk_column)
 
-  degenerate_dimensions:
-    - name: claim_id
-      type: VARCHAR(50)
-      description: Source system claim identifier
-    
-    - name: claim_line_number
-      type: INTEGER
-      description: Line number within claim
-
-  measures:
-    - name: charge_amount
-      type: DECIMAL(12,2)
-      aggregation: SUM
-      description: Billed amount
-    
-    - name: allowed_amount
-      type: DECIMAL(12,2)
-      aggregation: SUM
-      description: Contracted allowed amount
-    
-    - name: paid_amount
-      type: DECIMAL(12,2)
-      aggregation: SUM
-      description: Amount paid by payer
-    
-    - name: member_liability
-      type: DECIMAL(12,2)
-      aggregation: SUM
-      description: Member cost sharing
-    
-    - name: units
-      type: DECIMAL(8,2)
-      aggregation: SUM
-      description: Service units
-
-template:
-  sql: |
-    CREATE TABLE fct_claim_line (
-        -- Surrogate key
-        claim_line_key BIGINT PRIMARY KEY,
-        
-        -- Foreign keys to dimensions
-        member_key BIGINT NOT NULL REFERENCES dim_member(member_key),
-        provider_key BIGINT NOT NULL REFERENCES dim_provider(provider_key),
-        facility_key BIGINT REFERENCES dim_provider(provider_key),
-        service_date_key INTEGER NOT NULL REFERENCES dim_date(date_key),
-        paid_date_key INTEGER REFERENCES dim_date(date_key),
-        procedure_key BIGINT NOT NULL REFERENCES dim_procedure(procedure_key),
-        primary_diagnosis_key BIGINT REFERENCES dim_diagnosis(diagnosis_key),
-        
-        -- Degenerate dimensions
-        claim_id VARCHAR(50) NOT NULL,
-        claim_line_number INTEGER NOT NULL,
-        
-        -- Measures
-        charge_amount DECIMAL(12,2),
-        allowed_amount DECIMAL(12,2),
-        paid_amount DECIMAL(12,2),
-        member_liability DECIMAL(12,2),
-        units DECIMAL(8,2),
-        
-        -- Audit
-        source_system VARCHAR(50),
-        loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+implementation:
+  sql_template: |
+    -- Parameterized SQL template
+    CREATE TABLE ${table_name} (
+      ...
     );
-    
-    -- Indexes for common query patterns
-    CREATE INDEX idx_fct_claim_line_member ON fct_claim_line(member_key);
-    CREATE INDEX idx_fct_claim_line_provider ON fct_claim_line(provider_key);
-    CREATE INDEX idx_fct_claim_line_service_date ON fct_claim_line(service_date_key);
-    CREATE INDEX idx_fct_claim_line_claim ON fct_claim_line(claim_id);
+  example: |
+    -- Concrete example
+    CREATE TABLE fct_claim_line (
+      ...
+    );
 
 test_cases:
-  - name: Basic aggregation
-    query: |
-      SELECT 
-          SUM(paid_amount) as total_paid,
-          COUNT(*) as line_count
-      FROM fct_claim_line
-      WHERE service_date_key BETWEEN 20240101 AND 20241231
-    expected: "Returns total paid and line count for 2024"
-
-  - name: PMPM calculation
-    query: |
-      SELECT 
-          d.year_month,
-          SUM(f.paid_amount) / COUNT(DISTINCT f.member_key) as pmpm
-      FROM fct_claim_line f
-      JOIN dim_date d ON f.service_date_key = d.date_key
-      GROUP BY d.year_month
-    expected: "Returns per-member-per-month costs"
+  - name: Test case description
+    query: SELECT ...
+    expected: Description of expected result
 
 related_patterns:
-  - dim_member
-  - dim_provider
-  - dim_diagnosis
-  - dim_procedure
-  - dim_date
-  - metrics.pmpm
+  - pattern_id: related.pattern.id
+    relationship: uses | alternative_to | extends
+
+sources:
+  - book: Book Title
+    chapter: Chapter Name
+    authority: high | medium | low
+    contribution: canonical | variation | extension
 ```
 
-## Variations
+## Pattern Variations
 
-Variations represent alternative valid approaches within a pattern.
+Variations represent alternative valid approaches within a pattern:
+
+```yaml
+variations:
+  - variation_id: pattern_id:variation_name
+    name: Variation Name
+    description: How this differs from canonical
+    when_to_use: |
+      Context where this variation is preferred
+    when_not_to_use: |
+      Context where canonical is better
+    schema_changes:
+      - description of schema differences
+    implementation:
+      sql_template: |
+        -- Variation-specific template
+```
 
 ### Example: Diagnosis Handling Variations
 
 ```yaml
-# In fct_claim_line pattern
+pattern_id: healthcare.dimensional.diagnosis_handling
+
+canonical:
+  name: Positional Columns
+  description: Store diagnoses in numbered columns (dx_1, dx_2, ...)
+  when_to_use: Primary diagnosis queries, simple star schema
+
 variations:
-  - variation_id: positional_diagnosis
-    name: Positional Diagnosis Columns
-    description: |
-      Store diagnoses in positional columns (dx_1, dx_2, ... dx_25).
-      This is the canonical Kimball approach.
+  - variation_id: healthcare.dimensional.diagnosis_handling:bridge_table
+    name: Bridge Table
+    description: Many-to-many relationship via bridge
+    when_to_use: "'Any diagnosis contains X' queries, unlimited diagnoses"
     
-    when_to_use:
-      - Primary diagnosis queries are most common
-      - Simple star schema preferred
-      - Limited number of diagnoses (≤25)
-    
-    when_not_to_use:
-      - Need to query "any diagnosis contains X"
-      - Unlimited diagnosis codes
-      - Building for flexible analytics
-    
-    schema_additions:
-      - name: dx_1_key
-        type: BIGINT
-        references: dim_diagnosis
-      - name: dx_2_key
-        type: BIGINT
-        references: dim_diagnosis
-      # ... up to dx_25_key
-
-  - variation_id: bridge_table
-    name: Diagnosis Bridge Table
-    description: |
-      Use a bridge table to handle multiple diagnoses per claim.
-      Supports flexible "any diagnosis" queries.
-    
-    when_to_use:
-      - Frequently query "find claims with diagnosis X anywhere"
-      - Need unlimited diagnosis codes
-      - HCC risk adjustment analysis
-      - Quality measure calculation
-    
-    when_not_to_use:
-      - Only need primary diagnosis
-      - Query performance is critical
-      - Simple reporting requirements
-    
-    schema_additions:
-      tables:
-        - name: bridge_claim_diagnosis
-          columns:
-            - claim_line_key BIGINT
-            - diagnosis_key BIGINT
-            - diagnosis_position INTEGER
-            - poa_indicator VARCHAR(1)
-          primary_key: [claim_line_key, diagnosis_key]
-
-  - variation_id: array_column
-    name: Array/JSON Diagnosis Column
-    description: |
-      Store diagnoses in an array or JSON column.
-      Modern approach for cloud data warehouses.
-    
-    when_to_use:
-      - Databricks, Snowflake, BigQuery
-      - ML feature engineering
-      - Schema flexibility needed
-    
-    when_not_to_use:
-      - Traditional RDBMS
-      - Need referential integrity
-      - Complex joins required
-    
-    schema_additions:
-      - name: diagnosis_codes
-        type: ARRAY<VARCHAR(10)>
-      - name: diagnosis_keys
-        type: ARRAY<BIGINT>
+  - variation_id: healthcare.dimensional.diagnosis_handling:array_column
+    name: Array/JSON Column
+    description: Store diagnoses as array or JSON
+    when_to_use: "ML features, modern platforms (Spark, Snowflake)"
 ```
 
-## Extensions
+## Pattern Extensions
 
-Extensions add capabilities to a base pattern.
-
-### Example: HCC Risk Adjustment Extension
+Extensions add capabilities to base patterns:
 
 ```yaml
-extension_id: hcc_risk_mapping
-name: HCC Risk Adjustment
-base_pattern: healthcare.dimensional.fct_claim_line
-description: |
-  Adds HCC (Hierarchical Condition Category) risk adjustment
-  support for Medicare Advantage analysis.
-
-when_required:
-  - Medicare Advantage population
-  - Risk adjustment analytics
-  - RAF score calculation
-
-schema_additions:
-  tables:
-    - name: xref_diagnosis_hcc
-      description: Crosswalk from ICD-10 to HCC
-      columns:
-        - icd10_code VARCHAR(10)
-        - hcc_code VARCHAR(10)
-        - hcc_version VARCHAR(10)
-        - effective_date DATE
-        - end_date DATE
-    
-    - name: dim_hcc
-      description: HCC dimension
-      columns:
-        - hcc_key BIGINT PRIMARY KEY
-        - hcc_code VARCHAR(10)
-        - hcc_description VARCHAR(200)
-        - hcc_category VARCHAR(50)
-        - coefficient DECIMAL(6,4)
-
-  views:
-    - name: v_claim_hcc_mapping
-      description: Maps claim diagnoses to HCCs
-      sql: |
-        SELECT 
-            f.claim_line_key,
-            f.member_key,
-            x.hcc_code,
-            h.coefficient
-        FROM fct_claim_line f
-        JOIN bridge_claim_diagnosis bd ON f.claim_line_key = bd.claim_line_key
-        JOIN dim_diagnosis d ON bd.diagnosis_key = d.diagnosis_key
-        JOIN xref_diagnosis_hcc x ON d.icd10_code = x.icd10_code
-        JOIN dim_hcc h ON x.hcc_code = h.hcc_code
+extensions:
+  - extension_id: healthcare.dimensional.hcc_risk_mapping
+    name: HCC Risk Mapping
+    description: Add diagnosis-to-HCC crosswalk for risk adjustment
+    extends_pattern: healthcare.dimensional.fct_claim_line
+    when_required: Medicare Advantage analysis, risk adjustment
+    additional_tables:
+      - xref_diagnosis_hcc
+      - dim_hcc
+    schema_additions:
+      - column: hcc_flag
+        description: Whether any diagnosis maps to an HCC
 ```
 
-## Decision Framework
+## Using Patterns
 
-Patterns include decision trees for Claude to select appropriate variations:
-
-```yaml
-decision_framework:
-  - question: "What is the primary query pattern?"
-    options:
-      - answer: "Primary diagnosis only"
-        recommendation: positional_diagnosis
-      - answer: "Any diagnosis contains X"
-        recommendation: bridge_table
-      - answer: "ML feature engineering"
-        recommendation: array_column
-  
-  - question: "What is the target platform?"
-    options:
-      - answer: "Traditional RDBMS (Postgres, SQL Server)"
-        recommendation: positional_diagnosis or bridge_table
-      - answer: "Cloud DW (Snowflake, Databricks, BigQuery)"
-        recommendation: array_column acceptable
-  
-  - question: "Is HCC risk adjustment needed?"
-    options:
-      - answer: "Yes (Medicare Advantage)"
-        recommendation: Add hcc_risk_mapping extension
-        note: "Requires bridge_table or array_column variation"
-      - answer: "No"
-        recommendation: Base pattern sufficient
-```
-
-## Using Patterns in Claude
-
-### Query Workflow
-
-```
-1. User: "Build a claims dimensional model for MA risk adjustment"
-
-2. Claude queries patterns:
-   SELECT * FROM patterns WHERE domain = 'healthcare' 
-   AND category = 'dimensional';
-
-3. Claude loads fct_claim_line pattern with variations
-
-4. Claude applies decision framework:
-   - MA → HCC extension required
-   - HCC needs flexible dx queries → bridge_table variation
-
-5. Claude generates:
-   - Base fact table DDL
-   - Bridge table DDL  
-   - HCC extension tables
-   - Explains rationale
-```
-
-### Pattern Retrieval SQL
+### Finding Patterns
 
 ```sql
--- Get pattern with all variations
-SELECT 
-    p.pattern_id,
-    p.name,
-    p.canonical_yaml
-FROM patterns p
-WHERE p.pattern_id = 'healthcare.dimensional.fct_claim_line';
+-- By domain and category
+SELECT pattern_id, name, description
+FROM patterns
+WHERE domain = 'healthcare'
+  AND category = 'dimensional';
+
+-- By keyword
+SELECT pattern_id, name, description
+FROM patterns
+WHERE name ILIKE '%claim%'
+   OR description ILIKE '%claim%';
+```
+
+### Loading a Pattern
+
+```sql
+-- Get canonical pattern
+SELECT pattern_id, name, canonical_yaml
+FROM patterns
+WHERE pattern_id = 'healthcare.dimensional.fct_claim_line';
 
 -- Get variations
-SELECT 
-    v.variation_id,
-    v.name,
-    v.when_to_use,
-    v.variation_yaml
-FROM pattern_variations v
-WHERE v.pattern_id = 'healthcare.dimensional.fct_claim_line';
+SELECT variation_id, name, when_to_use, variation_yaml
+FROM pattern_variations
+WHERE pattern_id = 'healthcare.dimensional.fct_claim_line';
 
--- Get required extensions for context
-SELECT 
-    e.extension_id,
-    e.name,
-    e.when_required,
-    e.extension_yaml
-FROM pattern_extensions e
-WHERE e.pattern_id = 'healthcare.dimensional.fct_claim_line';
+-- Get extensions
+SELECT extension_id, name, when_required, extension_yaml
+FROM pattern_extensions
+WHERE pattern_id = 'healthcare.dimensional.fct_claim_line';
+```
+
+### Decision Framework
+
+When Claude loads a pattern, it should:
+
+1. **Analyze context** from user request
+2. **Check variation conditions** against context
+3. **Select appropriate variation** or canonical
+4. **Identify required extensions**
+5. **Generate code** from templates
+6. **Explain rationale** for choices
+
+Example decision flow:
+```
+Request: "Build claims dimensional model for Medicare Advantage"
+         ↓
+Context clues: "Medicare Advantage" → needs HCC analysis
+         ↓
+Pattern: healthcare.dimensional.fct_claim_line
+         ↓
+Check variations: HCC queries need "any dx contains" → bridge_table
+         ↓
+Check extensions: Medicare Advantage → hcc_risk_mapping required
+         ↓
+Generate: fct_claim_line + bridge_claim_diagnosis + dim_diagnosis + xref_diagnosis_hcc + dim_hcc
+```
+
+## Example Patterns
+
+### Healthcare Claim Line Fact
+
+```yaml
+pattern_id: healthcare.dimensional.fct_claim_line
+name: Healthcare Claim Line Fact
+domain: healthcare
+category: dimensional
+
+problem_statement: |
+  Model healthcare claims at the service line level for analytics.
+  The claim line is the correct grain per Kimball (DW Toolkit Ch 11).
+
+schema:
+  columns:
+    - name: claim_line_sk
+      type: BIGINT
+      description: Surrogate key
+    - name: claim_id
+      type: VARCHAR
+      description: Degenerate dimension - source claim identifier
+    - name: line_number
+      type: INTEGER
+      description: Line number within claim
+    - name: member_sk
+      type: BIGINT
+      description: FK to dim_member
+    - name: provider_sk
+      type: BIGINT
+      description: FK to dim_provider
+    - name: service_date_sk
+      type: INTEGER
+      description: FK to dim_date
+    - name: procedure_sk
+      type: BIGINT
+      description: FK to dim_procedure
+    - name: place_of_service_sk
+      type: INTEGER
+      description: FK to dim_place_of_service
+    - name: charge_amount
+      type: DECIMAL(12,2)
+      description: Billed amount
+    - name: allowed_amount
+      type: DECIMAL(12,2)
+      description: Contracted allowed amount
+    - name: paid_amount
+      type: DECIMAL(12,2)
+      description: Amount paid
+    - name: units
+      type: INTEGER
+      description: Service units
+
+implementation:
+  sql_template: |
+    CREATE TABLE fct_claim_line (
+        claim_line_sk       BIGINT PRIMARY KEY,
+        claim_id            VARCHAR(50) NOT NULL,
+        line_number         INTEGER NOT NULL,
+        member_sk           BIGINT REFERENCES dim_member(member_sk),
+        provider_sk         BIGINT REFERENCES dim_provider(provider_sk),
+        service_date_sk     INTEGER REFERENCES dim_date(date_sk),
+        procedure_sk        BIGINT REFERENCES dim_procedure(procedure_sk),
+        place_of_service_sk INTEGER REFERENCES dim_place_of_service(place_of_service_sk),
+        charge_amount       DECIMAL(12,2),
+        allowed_amount      DECIMAL(12,2),
+        paid_amount         DECIMAL(12,2),
+        units               INTEGER,
+        -- Audit columns
+        source_system       VARCHAR(50),
+        load_timestamp      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+sources:
+  - book: The Data Warehouse Toolkit
+    chapter: Chapter 11 - Healthcare
+    authority: high
+    contribution: canonical
 ```
 
 ## Creating Patterns
 
 ### From Books
 
-1. Identify reusable structures in chapters
-2. Extract schema definitions
-3. Parameterize examples
-4. Document when to use/not use
-5. Note variations from different sources
-6. Add test cases
+1. Identify chapters with reusable structures
+2. Extract the core pattern
+3. Parameterize for reuse
+4. Document variations found in other sources
+5. Add decision framework
 
-### Pattern Quality Checklist
+### From Experience
+
+1. Document a working implementation
+2. Abstract to pattern form
+3. Identify variation points
+4. Add test cases
+5. Link to sources that informed the approach
+
+## Pattern Quality Checklist
 
 - [ ] Clear problem statement
-- [ ] Specific grain definition
-- [ ] Complete schema (keys, FKs, measures)
-- [ ] Working SQL template
 - [ ] When to use / when not to use
-- [ ] At least one variation documented
-- [ ] Source references with authority
-- [ ] Test cases included
+- [ ] Complete schema definition
+- [ ] Working SQL template
+- [ ] Concrete example
+- [ ] At least one test case
+- [ ] Sources cited
+- [ ] Variations documented if applicable

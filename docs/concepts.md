@@ -2,83 +2,97 @@
 
 ## Overview
 
-The concept graph represents knowledge relationships across your ePub collection. It enables discovery, learning path generation, and multi-perspective exploration.
+The concept graph represents relationships between ideas, technologies, and methodologies across your ePub collection. Unlike a vector database that finds similar text, the concept graph captures semantic relationships.
 
-## Concept Structure
+## Concept Types
 
-### Concept Record
+Concepts can represent:
 
-```sql
-concepts
-├── concept_id     -- Unique identifier (slugified)
-├── name           -- Display name
-├── description    -- Brief explanation
-├── domain         -- Category (data_engineering, healthcare, etc.)
-└── aliases        -- Alternative names/spellings
-```
-
-### Example
-
-```sql
-INSERT INTO concepts VALUES (
-    'change_data_capture',
-    'Change Data Capture',
-    'A technique for identifying and tracking changes in source data',
-    'data_engineering',
-    ['CDC', 'incremental extraction', 'delta detection']
-);
-```
+- **Technologies**: Spark, Kafka, DuckDB, dbt
+- **Methodologies**: Dimensional Modeling, Data Vault, Medallion Architecture
+- **Techniques**: SCD Type 2, CDC, Deduplication
+- **Domains**: Healthcare Analytics, Claims Processing, Risk Adjustment
+- **Patterns**: Fact Tables, Bridge Tables, Slowly Changing Dimensions
 
 ## Relationship Types
 
 ### REQUIRES (Prerequisites)
 
-Indicates concept A requires understanding of concept B first.
+One concept requires understanding another first.
 
 ```
-dimensional_modeling ──REQUIRES──► sql_fundamentals
-dimensional_modeling ──REQUIRES──► data_warehouse_concepts
-star_schema ──REQUIRES──► dimensional_modeling
+Dimensional Modeling → REQUIRES → SQL Fundamentals
+SCD Type 2 → REQUIRES → Dimensional Modeling
+HCC Risk Adjustment → REQUIRES → Healthcare Claims
 ```
 
-Use for: Learning path generation, prerequisite checking
+### RELATED_TO (Associated Concepts)
 
-### RELATED_TO (Association)
-
-Concepts that are often discussed together or share context.
+Concepts frequently discussed together or in similar contexts.
 
 ```
-cdc ──RELATED_TO──► event_sourcing
-cdc ──RELATED_TO──► streaming_pipelines
-cdc ──RELATED_TO──► database_replication
+CDC → RELATED_TO → Event Sourcing
+Kafka → RELATED_TO → Streaming
+Data Warehouse → RELATED_TO → Data Lake
 ```
-
-Use for: Topic exploration, "see also" suggestions
 
 ### EXTENDS (Builds Upon)
 
-Concept A is a specialized version or extension of concept B.
+One concept extends or specializes another.
 
 ```
-scd_type_2 ──EXTENDS──► slowly_changing_dimension
-accumulating_snapshot ──EXTENDS──► fact_table
+SCD Type 2 → EXTENDS → Slowly Changing Dimensions
+Data Lakehouse → EXTENDS → Data Lake
 ```
-
-Use for: Understanding specializations, drilling down
 
 ### CONTRASTS_WITH (Alternative Approaches)
 
-Concepts that represent different approaches to the same problem.
+Concepts that represent different approaches to similar problems.
 
 ```
-kimball_methodology ──CONTRASTS_WITH──► inmon_methodology
-star_schema ──CONTRASTS_WITH──► snowflake_schema
-batch_processing ──CONTRASTS_WITH──► stream_processing
+Kimball → CONTRASTS_WITH → Inmon
+Batch Processing → CONTRASTS_WITH → Stream Processing
+Star Schema → CONTRASTS_WITH → Snowflake Schema
 ```
 
-Use for: Comparison requests, methodology discussions
+### IMPLEMENTS (Realization)
 
-## Graph Queries
+A technology implements a concept or pattern.
+
+```
+Delta Lake → IMPLEMENTS → ACID Transactions
+dbt → IMPLEMENTS → ELT Pattern
+```
+
+## Chapter-Concept Mapping
+
+Each chapter can discuss multiple concepts with different levels of treatment:
+
+### Treatment Levels
+
+| Level | Description | Token Hint |
+|-------|-------------|------------|
+| `deep_dive` | Primary focus, extensive coverage | Load first |
+| `explain` | Explains the concept with context | Good secondary source |
+| `mention` | References but doesn't explain | Skip unless needed |
+
+### Relevance Score
+
+0.0 to 1.0 indicating how central the concept is to the chapter:
+- 1.0: Chapter is primarily about this concept
+- 0.5: Significant discussion
+- 0.2: Brief mention in context
+
+## SQL Queries for Concepts
+
+### Find a Concept
+
+```sql
+SELECT concept_id, name, description, domain, aliases
+FROM concepts
+WHERE name ILIKE '%dimensional%'
+   OR '%dimensional%' = ANY(aliases);
+```
 
 ### Find Prerequisites (Direct)
 
@@ -103,7 +117,7 @@ WITH RECURSIVE prereq_chain AS (
     
     UNION ALL
     
-    -- Recursive case: prerequisites of prerequisites
+    -- Recursive case
     SELECT 
         cr.target_id,
         pc.depth + 1,
@@ -111,44 +125,42 @@ WITH RECURSIVE prereq_chain AS (
     FROM concept_relationships cr
     JOIN prereq_chain pc ON cr.source_id = pc.concept_id
     WHERE cr.relationship = 'REQUIRES'
-      AND pc.depth < 3  -- Limit depth
+      AND pc.depth < 5
       AND NOT array_contains(pc.path, cr.target_id)  -- Prevent cycles
 )
-SELECT DISTINCT c.name, MIN(pc.depth) AS depth
+SELECT DISTINCT 
+    c.name,
+    MIN(pc.depth) AS depth
 FROM prereq_chain pc
 JOIN concepts c ON pc.concept_id = c.concept_id
 GROUP BY c.name
 ORDER BY depth;
 ```
 
-### Find Related Concepts
+### Find Related Concepts (Co-occurrence)
 
 ```sql
+WITH my_chapters AS (
+    SELECT chapter_id 
+    FROM chapter_concepts 
+    WHERE concept_id = 'cdc'
+)
 SELECT 
-    related_name,
-    relationship,
-    strength
-FROM v_concept_related
-WHERE concept_id = 'cdc'
-ORDER BY strength DESC;
+    c.name,
+    COUNT(*) AS shared_chapters,
+    array_agg(DISTINCT cc.treatment) AS treatments
+FROM chapter_concepts cc
+JOIN concepts c ON cc.concept_id = c.concept_id
+WHERE cc.chapter_id IN (SELECT chapter_id FROM my_chapters)
+  AND cc.concept_id != 'cdc'
+GROUP BY c.concept_id, c.name
+ORDER BY shared_chapters DESC
+LIMIT 10;
 ```
 
-### Find Contrasting Approaches
+### Generate Learning Path
 
 ```sql
-SELECT 
-    c2.name AS alternative,
-    cr.notes
-FROM concept_relationships cr
-JOIN concepts c2 ON cr.target_id = c2.concept_id
-WHERE cr.source_id = 'kimball_methodology'
-  AND cr.relationship = 'CONTRASTS_WITH';
-```
-
-### Learning Path Generation
-
-```sql
--- Generate ordered reading list for a target concept
 WITH RECURSIVE learning_path AS (
     SELECT 
         'target_concept' AS concept_id,
@@ -166,126 +178,69 @@ WITH RECURSIVE learning_path AS (
 )
 SELECT 
     c.name,
-    lp.level,
-    (SELECT chapter_title || ' (' || book_title || ')'
+    lp.level AS learn_order,
+    (SELECT vcc.book_title || ': ' || vcc.chapter_title
      FROM v_concept_chapters vcc
      WHERE vcc.concept_id = lp.concept_id
        AND vcc.treatment = 'deep_dive'
      LIMIT 1) AS recommended_reading
 FROM learning_path lp
 JOIN concepts c ON lp.concept_id = c.concept_id
+GROUP BY c.concept_id, c.name, lp.level
 ORDER BY lp.level DESC;  -- Start with fundamentals
 ```
 
-## Chapter-Concept Mapping
-
-### Treatment Levels
-
-| Treatment | Meaning | Token Threshold |
-|-----------|---------|-----------------|
-| `mention` | Brief reference | < 200 tokens about concept |
-| `explain` | Substantial coverage | 200-1000 tokens |
-| `deep_dive` | Primary focus | > 1000 tokens or dedicated section |
-
-### Mapping Example
-
-```sql
-INSERT INTO chapter_concepts VALUES (
-    'data-warehouse-toolkit:7',  -- chapter_id
-    'dimensional_modeling',       -- concept_id
-    'deep_dive',                  -- treatment
-    0.95,                         -- relevance (0-1)
-    'This chapter introduces the dimensional modeling technique...'
-);
-```
-
-## Building the Graph
+## Building the Concept Graph
 
 ### Phase 1: Seed Concepts
 
-Start with well-known concepts from your domain:
+Start with core concepts from your domains:
 
 ```sql
--- Data Engineering concepts
-INSERT INTO concepts (concept_id, name, domain) VALUES
-('dimensional_modeling', 'Dimensional Modeling', 'data_engineering'),
-('star_schema', 'Star Schema', 'data_engineering'),
-('snowflake_schema', 'Snowflake Schema', 'data_engineering'),
-('fact_table', 'Fact Table', 'data_engineering'),
-('dimension_table', 'Dimension Table', 'data_engineering'),
-('slowly_changing_dimension', 'Slowly Changing Dimension', 'data_engineering'),
-('cdc', 'Change Data Capture', 'data_engineering'),
-('etl', 'ETL', 'data_engineering'),
-('elt', 'ELT', 'data_engineering');
+INSERT INTO concepts (concept_id, name, domain, description) VALUES
+('dimensional_modeling', 'Dimensional Modeling', 'data_engineering', 
+ 'Technique for organizing data warehouses around business processes'),
+('kimball', 'Kimball Methodology', 'data_engineering',
+ 'Bottom-up approach to data warehouse design using conformed dimensions'),
+('cdc', 'Change Data Capture', 'data_engineering',
+ 'Pattern for capturing incremental changes from source systems'),
+('healthcare_claims', 'Healthcare Claims', 'healthcare',
+ 'Insurance claim records for healthcare services');
 ```
 
-### Phase 2: Add Relationships
+### Phase 2: Extract from Chapters
 
-Connect concepts based on book content:
+Use Claude to analyze chapters and identify concepts:
 
-```sql
-INSERT INTO concept_relationships (source_id, target_id, relationship) VALUES
-('dimensional_modeling', 'sql_fundamentals', 'REQUIRES'),
-('star_schema', 'dimensional_modeling', 'REQUIRES'),
-('star_schema', 'snowflake_schema', 'CONTRASTS_WITH'),
-('scd_type_2', 'slowly_changing_dimension', 'EXTENDS');
+1. Load a chapter via ebook-mcp
+2. Ask: "What concepts does this chapter explain?"
+3. For each concept, determine treatment level
+4. Save to chapter_concepts table
+
+### Phase 3: Build Relationships
+
+Relationships emerge from:
+- Explicit statements ("Before learning X, you should know Y")
+- Chapter structure (concepts in prerequisites section)
+- Co-occurrence analysis (concepts discussed together)
+- Domain knowledge (CDC is related to streaming)
+
+### Phase 4: Validate and Refine
+
+- Check for cycles in REQUIRES relationships
+- Verify relationship types make sense
+- Merge duplicate concepts via aliases
+- Adjust strengths based on usage
+
+## Using the Memory MCP
+
+For dynamic exploration during conversations, use the Memory MCP:
+
+```
+1. Create entities for concepts being discussed
+2. Create relations as you discover connections
+3. Search to find previously discussed concepts
+4. Build session-specific concept maps
 ```
 
-### Phase 3: Map Chapters
-
-Link chapters to concepts they cover:
-
-```sql
-INSERT INTO chapter_concepts (chapter_id, concept_id, treatment, relevance) VALUES
-('data-warehouse-toolkit:3', 'dimensional_modeling', 'deep_dive', 0.95),
-('data-warehouse-toolkit:4', 'fact_table', 'deep_dive', 0.90),
-('data-warehouse-toolkit:5', 'dimension_table', 'deep_dive', 0.90);
-```
-
-### Phase 4: Claude-Assisted Enrichment
-
-Use Claude to analyze chapters and suggest:
-- New concepts to add
-- Relationships between concepts
-- Chapter-concept mappings
-
-See: `scripts/extract_concepts.py`
-
-## Maintenance
-
-### Adding New Books
-
-1. Index the book: `python scripts/index_books.py --book new-book.epub`
-2. Extract concepts: Work with Claude to identify concepts in new chapters
-3. Add mappings: Link new chapters to existing concepts
-4. Add new concepts: Create any concepts unique to this book
-
-### Handling Conflicts
-
-When sources disagree:
-1. Note both perspectives in concept description
-2. Use `CONTRASTS_WITH` relationship
-3. Document in pattern variations if applicable
-
-### Quality Checks
-
-```sql
--- Concepts without chapters
-SELECT c.name FROM concepts c
-LEFT JOIN chapter_concepts cc ON c.concept_id = cc.concept_id
-WHERE cc.chapter_id IS NULL;
-
--- Orphan chapters (no concepts)
-SELECT ch.title, b.title 
-FROM chapters ch
-JOIN books b ON ch.book_id = b.book_id
-LEFT JOIN chapter_concepts cc ON ch.chapter_id = cc.chapter_id
-WHERE cc.concept_id IS NULL
-  AND ch.token_count > 1000;
-
--- Isolated concepts (no relationships)
-SELECT c.name FROM concepts c
-LEFT JOIN concept_relationships cr1 ON c.concept_id = cr1.source_id
-LEFT JOIN concept_relationships cr2 ON c.concept_id = cr2.target_id
-WHERE cr1.source_id IS NULL AND cr2.target_id IS NULL;
-```
+This complements the persistent DuckDB graph with ephemeral exploration.
