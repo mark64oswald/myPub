@@ -1,0 +1,246 @@
+# Variations for fct_claim_line pattern
+
+base_pattern: healthcare.dimensional.fct_claim_line
+
+variations:
+  - variation_id: positional_diagnosis
+    name: Positional Diagnosis Columns
+    description: |
+      Store diagnoses in positional columns (dx_1 through dx_25).
+      This is the canonical Kimball approach for handling multiple
+      diagnoses on a single claim line.
+    
+    source:
+      book: "The Data Warehouse Toolkit"
+      chapter: 11
+      authority: high
+    
+    when_to_use:
+      - Primary diagnosis is the most common query filter
+      - Simple star schema is preferred
+      - Maximum 25 diagnosis codes per claim
+      - Query patterns focus on "primary diagnosis is X"
+      - Traditional RDBMS without array support
+    
+    when_not_to_use:
+      - Need to query "any diagnosis contains X"
+      - Unlimited diagnosis codes per claim
+      - HCC risk adjustment analysis (need all diagnoses)
+      - Quality measures that check secondary diagnoses
+    
+    trade_offs:
+      pros:
+        - Simple star schema
+        - Good performance for primary diagnosis queries
+        - Easy to understand and maintain
+        - Standard SQL without extensions
+      cons:
+        - Sparse columns (many NULLs)
+        - Fixed maximum diagnoses
+        - "Any diagnosis" queries require OR across all columns
+        - Schema changes if more positions needed
+    
+    schema_additions: |
+      -- Add to fct_claim_line
+      dx_1_key BIGINT REFERENCES dim_diagnosis(diagnosis_key),
+      dx_2_key BIGINT REFERENCES dim_diagnosis(diagnosis_key),
+      dx_3_key BIGINT REFERENCES dim_diagnosis(diagnosis_key),
+      dx_4_key BIGINT REFERENCES dim_diagnosis(diagnosis_key),
+      dx_5_key BIGINT REFERENCES dim_diagnosis(diagnosis_key),
+      -- ... continue to dx_25_key
+      
+    example_query: |
+      -- Find claims with primary diagnosis of diabetes
+      SELECT f.*, d.diagnosis_description
+      FROM fct_claim_line f
+      JOIN dim_diagnosis d ON f.dx_1_key = d.diagnosis_key
+      WHERE d.icd10_code LIKE 'E11%'
+
+  - variation_id: bridge_table
+    name: Diagnosis Bridge Table
+    description: |
+      Use a bridge table to handle multiple diagnoses per claim.
+      Each claim-diagnosis combination is a separate row.
+      Supports unlimited diagnoses and flexible querying.
+    
+    source:
+      book: "The Data Warehouse Toolkit"
+      chapter: 11
+      authority: high
+      notes: "Kimball documents both approaches"
+    
+    when_to_use:
+      - Frequently query "find claims with diagnosis X anywhere"
+      - Need unlimited diagnosis codes per claim
+      - HCC risk adjustment analysis
+      - Quality measure calculation (HEDIS, Stars)
+      - Diagnosis prevalence studies
+    
+    when_not_to_use:
+      - Only need primary diagnosis
+      - Query performance is critical (adds join)
+      - Simple reporting requirements
+      - Team unfamiliar with bridge tables
+    
+    trade_offs:
+      pros:
+        - Unlimited diagnoses per claim
+        - Efficient "any diagnosis" queries
+        - Clean schema (no sparse columns)
+        - Easy to add POA indicator per diagnosis
+      cons:
+        - Additional join required
+        - More complex for simple queries
+        - Weighting factors needed for some calculations
+        - Larger data volume
+    
+    schema_additions: |
+      -- New bridge table
+      CREATE TABLE bridge_claim_diagnosis (
+          claim_line_key BIGINT NOT NULL,
+          diagnosis_key BIGINT NOT NULL,
+          diagnosis_position INTEGER NOT NULL,
+          poa_indicator VARCHAR(1),  -- Present on Admission
+          PRIMARY KEY (claim_line_key, diagnosis_key)
+      );
+      
+      CREATE INDEX idx_bcd_claim ON bridge_claim_diagnosis(claim_line_key);
+      CREATE INDEX idx_bcd_diagnosis ON bridge_claim_diagnosis(diagnosis_key);
+      
+    example_query: |
+      -- Find claims with ANY diagnosis of diabetes
+      SELECT DISTINCT f.claim_id, f.paid_amount
+      FROM fct_claim_line f
+      JOIN bridge_claim_diagnosis bd ON f.claim_line_key = bd.claim_line_key
+      JOIN dim_diagnosis d ON bd.diagnosis_key = d.diagnosis_key
+      WHERE d.icd10_code LIKE 'E11%'
+
+  - variation_id: array_column
+    name: Array/JSON Diagnosis Column
+    description: |
+      Store diagnoses in an array or JSON column.
+      Modern approach supported by cloud data warehouses.
+    
+    source:
+      book: "Fundamentals of Data Engineering"
+      authority: medium
+      notes: "Emerging pattern in modern data stacks"
+    
+    when_to_use:
+      - Databricks, Snowflake, BigQuery, or similar
+      - ML feature engineering pipelines
+      - Schema flexibility is important
+      - Complex nested data structures
+    
+    when_not_to_use:
+      - Traditional RDBMS (Postgres, SQL Server)
+      - Need referential integrity constraints
+      - Complex joins across diagnosis dimension
+      - Team prefers traditional SQL
+    
+    trade_offs:
+      pros:
+        - Compact storage
+        - No additional tables
+        - Flexible schema
+        - Great for ML features
+      cons:
+        - Platform-specific syntax
+        - No referential integrity
+        - Complex query syntax for analysis
+        - May require UNNEST/EXPLODE operations
+    
+    schema_additions: |
+      -- Databricks/Spark SQL
+      diagnosis_codes ARRAY<STRING>,
+      diagnosis_positions MAP<STRING, INT>,
+      poa_indicators MAP<STRING, STRING>
+      
+      -- OR Snowflake
+      diagnosis_data VARIANT
+      -- Contains: {"codes": ["E11.9", "I10"], "poa": ["Y", "N"]}
+      
+    example_query: |
+      -- Databricks: Find claims with any diabetes diagnosis
+      SELECT claim_id, paid_amount
+      FROM fct_claim_line
+      WHERE EXISTS (
+          SELECT 1 FROM EXPLODE(diagnosis_codes) AS dx
+          WHERE dx LIKE 'E11%'
+      )
+      
+      -- Snowflake equivalent
+      SELECT claim_id, paid_amount
+      FROM fct_claim_line,
+      LATERAL FLATTEN(input => diagnosis_data:codes) dx
+      WHERE dx.value LIKE 'E11%'
+
+decision_framework:
+  questions:
+    - question: "What is your primary diagnosis query pattern?"
+      options:
+        - answer: "Primary diagnosis only (first listed)"
+          score:
+            positional_diagnosis: 3
+            bridge_table: 1
+            array_column: 1
+        - answer: "Any diagnosis contains X"
+          score:
+            positional_diagnosis: 0
+            bridge_table: 3
+            array_column: 2
+        - answer: "Both patterns equally"
+          score:
+            positional_diagnosis: 1
+            bridge_table: 3
+            array_column: 2
+            
+    - question: "What is your target platform?"
+      options:
+        - answer: "Traditional RDBMS (Postgres, SQL Server, Oracle)"
+          score:
+            positional_diagnosis: 2
+            bridge_table: 3
+            array_column: 0
+        - answer: "Cloud DW (Snowflake, BigQuery, Redshift)"
+          score:
+            positional_diagnosis: 1
+            bridge_table: 2
+            array_column: 3
+        - answer: "Databricks/Spark"
+          score:
+            positional_diagnosis: 0
+            bridge_table: 2
+            array_column: 3
+            
+    - question: "Do you need HCC risk adjustment?"
+      options:
+        - answer: "Yes (Medicare Advantage)"
+          score:
+            positional_diagnosis: -2
+            bridge_table: 3
+            array_column: 2
+          notes: "HCC requires checking ALL diagnoses, not just primary"
+        - answer: "No"
+          score:
+            positional_diagnosis: 1
+            bridge_table: 0
+            array_column: 0
+            
+    - question: "Team SQL expertise level?"
+      options:
+        - answer: "Traditional SQL only"
+          score:
+            positional_diagnosis: 2
+            bridge_table: 1
+            array_column: -1
+        - answer: "Comfortable with complex joins"
+          score:
+            positional_diagnosis: 0
+            bridge_table: 2
+            array_column: 1
+        - answer: "Experienced with modern SQL extensions"
+          score:
+            positional_diagnosis: 0
+            bridge_table: 1
+            array_column: 3

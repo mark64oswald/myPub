@@ -1,242 +1,222 @@
 #!/usr/bin/env python3
 """
-generate_skill.py - Generate a Skill file from knowledge base content
+generate_skill.py - Generate skill files from knowledge base content
 
-This script queries the catalog for chapters covering a topic and
-generates a structured SKILL.md file that Claude can use.
+This script creates SKILL.md files by gathering relevant chapters
+and preparing them for Claude to synthesize.
 
 Usage:
-    python scripts/generate_skill.py "Change Data Capture" --domain data-engineering
-    python scripts/generate_skill.py "HCC Risk Adjustment" --domain healthcare
+    python scripts/generate_skill.py --topic "CDC" --output skills/generated/cdc/
+    python scripts/generate_skill.py --concept "change_data_capture" --output skills/generated/cdc/
 
-The script outputs a template that should be reviewed and enhanced
-with Claude's help for the actual content synthesis.
-
-Requirements:
-    pip install duckdb
+Note: This prepares the content. Claude does the actual synthesis in conversation.
 """
 
 import argparse
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
 try:
     import duckdb
 except ImportError:
-    print("Missing required package: duckdb")
-    print("Install with: pip install duckdb")
+    print("Missing duckdb. Install with: pip install duckdb")
     sys.exit(1)
 
 
 DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
-DEFAULT_OUTPUT = os.path.expanduser("~/Developer/projects/myPub/skills/generated")
 
-
-def find_relevant_chapters(conn: duckdb.DuckDBPyConnection, 
-                           topic: str,
-                           domain: str = None,
-                           limit: int = 10) -> list:
-    """Find chapters relevant to a topic."""
-    
-    # Search in concepts first
-    concept_query = """
-        SELECT DISTINCT
-            vcc.chapter_id,
-            vcc.chapter_title,
-            vcc.book_title,
-            vcc.authors,
-            vcc.treatment,
-            vcc.token_count,
-            vcc.concept_name
-        FROM v_concept_chapters vcc
-        WHERE vcc.concept_name ILIKE ?
-           OR vcc.concept_name ILIKE ?
-    """
-    params = [f"%{topic}%", topic.replace(' ', '_')]
-    
-    if domain:
-        concept_query += " AND vcc.domain = ?"
-        params.append(domain)
-    
-    concept_query += " ORDER BY vcc.treatment DESC LIMIT ?"
-    params.append(limit)
-    
-    results = conn.execute(concept_query, params).fetchall()
-    
-    # If no concept matches, search in chapter titles/summaries
-    if not results:
-        chapter_query = """
-            SELECT DISTINCT
-                ch.chapter_id,
-                ch.title AS chapter_title,
-                b.title AS book_title,
-                b.authors,
-                'unknown' AS treatment,
-                ch.token_count,
-                NULL AS concept_name
-            FROM chapters ch
-            JOIN books b ON ch.book_id = b.book_id
-            WHERE ch.title ILIKE ?
-               OR ch.summary ILIKE ?
-            ORDER BY ch.token_count DESC
-            LIMIT ?
-        """
-        results = conn.execute(chapter_query, [f"%{topic}%", f"%{topic}%", limit]).fetchall()
-    
-    return results
-
-
-
-def generate_skill_template(topic: str, domain: str, chapters: list) -> str:
-    """Generate a SKILL.md template."""
-    
-    slug = topic.lower().replace(' ', '-').replace('_', '-')
-    
-    # Group chapters by book
-    books = {}
-    for ch in chapters:
-        chapter_id, chapter_title, book_title, authors, treatment, tokens, concept = ch
-        if book_title not in books:
-            books[book_title] = {'authors': authors, 'chapters': []}
-        books[book_title]['chapters'].append({
-            'id': chapter_id,
-            'title': chapter_title,
-            'treatment': treatment,
-            'tokens': tokens
-        })
-    
-    template = f"""# {topic} Skill
+SKILL_TEMPLATE = '''# {title} Skill
 
 ## Overview
 
-[TODO: Synthesize overview from source chapters]
-
-This skill provides Claude with expertise on {topic}, 
-derived from {len(chapters)} chapters across {len(books)} books.
+{overview_placeholder}
 
 ## Key Concepts
 
-[TODO: List and explain key concepts]
-
-- **Concept 1**: Description
-- **Concept 2**: Description
+{concepts_placeholder}
 
 ## Common Patterns
 
-[TODO: Document common patterns and approaches]
-
-### Pattern 1: [Name]
-
-**When to use:** [Context]
-
-**Implementation:**
-```sql
--- Example code
-```
+{patterns_placeholder}
 
 ## Best Practices
 
-[TODO: Synthesize best practices from sources]
+{practices_placeholder}
 
-1. Practice 1
-2. Practice 2
+## Pitfalls to Avoid
 
-## Common Pitfalls
+{pitfalls_placeholder}
 
-[TODO: Document common mistakes and how to avoid them]
+## Sources
 
-- Pitfall 1: How to avoid
-- Pitfall 2: How to avoid
+This skill was generated from the following chapters:
 
-## Source Chapters
+{sources_list}
 
-The following chapters were used to create this skill:
+---
+*Generated: {timestamp}*
+*Topic: {topic}*
+'''
 
-"""
+
+def find_relevant_chapters(conn, topic: str, limit: int = 10) -> list:
+    """Find chapters relevant to a topic."""
     
-    for book_title, book_info in books.items():
-        authors = book_info['authors']
+    # Search in chapter titles and summaries
+    query = """
+        SELECT 
+            ch.chapter_id,
+            ch.title,
+            ch.summary,
+            ch.token_count,
+            b.title as book_title,
+            b.authors,
+            b.filepath,
+            ch.href
+        FROM chapters ch
+        JOIN books b ON ch.book_id = b.book_id
+        WHERE ch.title ILIKE ?
+           OR ch.summary ILIKE ?
+        ORDER BY ch.token_count DESC
+        LIMIT ?
+    """
+    
+    search_term = f'%{topic}%'
+    return conn.execute(query, [search_term, search_term, limit]).fetchall()
+
+
+def find_chapters_by_concept(conn, concept_id: str, limit: int = 10) -> list:
+    """Find chapters that cover a specific concept."""
+    
+    query = """
+        SELECT 
+            ch.chapter_id,
+            ch.title,
+            ch.summary,
+            ch.token_count,
+            b.title as book_title,
+            b.authors,
+            b.filepath,
+            ch.href,
+            cc.treatment
+        FROM chapter_concepts cc
+        JOIN chapters ch ON cc.chapter_id = ch.chapter_id
+        JOIN books b ON ch.book_id = b.book_id
+        WHERE cc.concept_id = ?
+        ORDER BY 
+            CASE cc.treatment 
+                WHEN 'deep_dive' THEN 1 
+                WHEN 'explain' THEN 2 
+                ELSE 3 
+            END,
+            ch.token_count DESC
+        LIMIT ?
+    """
+    
+    return conn.execute(query, [concept_id, limit]).fetchall()
+
+
+def prepare_skill_scaffold(topic: str, chapters: list, output_dir: str):
+    """Create a skill scaffold with source references."""
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Build sources list
+    sources = []
+    for ch in chapters:
+        chapter_id = ch[0]
+        chapter_title = ch[1]
+        book_title = ch[4]
+        authors = ch[5]
         author_str = ', '.join(authors) if authors else 'Unknown'
-        template += f"\n### {book_title}\n*by {author_str}*\n\n"
-        
-        for ch in book_info['chapters']:
-            treatment_badge = {
-                'deep_dive': '🔬',
-                'explain': '📖',
-                'mention': '📌',
-                'unknown': '📄'
-            }.get(ch['treatment'], '📄')
-            
-            tokens_str = f"~{ch['tokens']} tokens" if ch['tokens'] else "unknown size"
-            template += f"- {treatment_badge} **{ch['title']}** ({tokens_str})\n"
-            template += f"  - Chapter ID: `{ch['id']}`\n"
+        sources.append(f"- **{book_title}** by {author_str}")
+        sources.append(f"  - Chapter: {chapter_title}")
+        sources.append(f"  - ID: `{chapter_id}`")
+        sources.append("")
     
-    template += f"""
-
-## Usage Notes
-
-To use this skill effectively:
-
-1. Load this skill when working on {topic.lower()} tasks
-2. Query the catalog for specific chapter content when needed
-3. Reference source chapters for detailed explanations
-
-## Metadata
-
-- **Generated:** {datetime.now().isoformat()}
-- **Domain:** {domain or 'general'}
-- **Topic:** {topic}
-- **Source chapters:** {len(chapters)}
-- **Source books:** {len(books)}
-"""
+    # Create skill file
+    content = SKILL_TEMPLATE.format(
+        title=topic.title(),
+        overview_placeholder="[To be synthesized by Claude from source chapters]",
+        concepts_placeholder="[To be extracted by Claude]",
+        patterns_placeholder="[To be identified by Claude]",
+        practices_placeholder="[To be synthesized by Claude]",
+        pitfalls_placeholder="[To be identified by Claude]",
+        sources_list='\n'.join(sources),
+        timestamp=datetime.now().isoformat(),
+        topic=topic
+    )
     
-    return template
+    skill_file = output_path / "SKILL.md"
+    skill_file.write_text(content)
+    
+    # Create a chapters manifest for Claude
+    manifest = {
+        'topic': topic,
+        'chapters': [
+            {
+                'chapter_id': ch[0],
+                'title': ch[1],
+                'book': ch[4],
+                'filepath': ch[6],
+                'href': ch[7]
+            }
+            for ch in chapters
+        ]
+    }
+    
+    import json
+    manifest_file = output_path / "chapters.json"
+    manifest_file.write_text(json.dumps(manifest, indent=2))
+    
+    return skill_file, manifest_file
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate a Skill file from knowledge base content"
+        description="Generate skill file scaffolds from knowledge base"
     )
-    parser.add_argument('topic', help="Topic to generate skill for")
-    parser.add_argument('--domain', '-d', help="Domain to filter by")
     parser.add_argument('--catalog', '-c', default=DEFAULT_CATALOG)
-    parser.add_argument('--output', '-o', default=DEFAULT_OUTPUT)
-    parser.add_argument('--limit', '-l', type=int, default=10)
+    parser.add_argument('--topic', '-t', help="Topic to search for")
+    parser.add_argument('--concept', help="Concept ID to use")
+    parser.add_argument('--output', '-o', required=True, help="Output directory")
+    parser.add_argument('--limit', '-l', type=int, default=5, 
+                       help="Max chapters to include")
     
     args = parser.parse_args()
     
-    conn = duckdb.connect(args.catalog)
-    
-    print(f"Searching for chapters on: {args.topic}")
-    chapters = find_relevant_chapters(conn, args.topic, args.domain, args.limit)
-    
-    if not chapters:
-        print("No relevant chapters found.")
-        print("Try a different search term or check if books are indexed.")
+    if not args.topic and not args.concept:
+        print("Error: Specify --topic or --concept")
         sys.exit(1)
     
-    print(f"Found {len(chapters)} relevant chapters")
+    conn = duckdb.connect(args.catalog)
     
-    # Generate skill template
-    template = generate_skill_template(args.topic, args.domain, chapters)
+    # Find relevant chapters
+    if args.concept:
+        chapters = find_chapters_by_concept(conn, args.concept, args.limit)
+        topic = args.concept.replace('_', ' ').title()
+    else:
+        chapters = find_relevant_chapters(conn, args.topic, args.limit)
+        topic = args.topic
     
-    # Create output directory
-    slug = args.topic.lower().replace(' ', '-').replace('_', '-')
-    output_dir = Path(args.output) / slug
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if not chapters:
+        print(f"No chapters found for: {args.topic or args.concept}")
+        sys.exit(1)
     
-    output_file = output_dir / "SKILL.md"
-    output_file.write_text(template)
+    print(f"Found {len(chapters)} relevant chapters:")
+    for ch in chapters:
+        print(f"  - {ch[1]} ({ch[4]})")
     
-    print(f"\nSkill template saved to: {output_file}")
-    print("\nNext steps:")
-    print("1. Load the source chapters with Claude")
-    print("2. Ask Claude to synthesize the [TODO] sections")
-    print("3. Review and refine the generated content")
+    # Create scaffold
+    skill_file, manifest_file = prepare_skill_scaffold(topic, chapters, args.output)
     
-    conn.close()
+    print(f"\nCreated skill scaffold:")
+    print(f"  Skill: {skill_file}")
+    print(f"  Manifest: {manifest_file}")
+    print(f"\nNext: Ask Claude to synthesize the skill from these chapters")
 
 
 if __name__ == "__main__":

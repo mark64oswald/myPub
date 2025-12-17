@@ -1,176 +1,248 @@
-# Tutorial 1: Getting Started with myPub
+# Getting Started with myPub
 
-This tutorial walks you through setting up myPub and running your first queries.
+This tutorial walks you through setting up and using the myPub knowledge base.
 
 ## Prerequisites
 
-- Python 3.10+
-- DuckDB CLI (optional but helpful)
-- Claude Desktop with MCP support
-- ePub files in `~/Documents/ebooks/`
+- Python 3.9+
+- DuckDB CLI or Python package
+- Claude Desktop or Claude Code
+- Your ePub collection in `~/Documents/ebooks/`
 
 ## Step 1: Install Dependencies
 
 ```bash
+# Create virtual environment (optional but recommended)
 cd ~/Developer/projects/myPub
-
-# Create virtual environment (optional)
-python -m venv .venv
-source .venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 
 # Install required packages
 pip install duckdb ebooklib beautifulsoup4 tiktoken
 ```
 
-## Step 2: Initialize the Catalog
+## Step 2: Initialize the Catalog Database
 
 ```bash
-# Create data directory
+# Create the data directory
 mkdir -p data
 
-# Initialize the database schema
+# Initialize the database with schema
 duckdb data/catalog.ddb < schemas/catalog.sql
 
-# Verify
-duckdb data/catalog.ddb "SELECT name FROM sqlite_master WHERE type='table';"
+# Verify it worked
+duckdb data/catalog.ddb -c "SELECT name FROM sqlite_master WHERE type='table';"
 ```
 
-Expected output:
-```
-┌────────────────────────┐
-│          name          │
-├────────────────────────┤
-│ books                  │
-│ chapters               │
-│ concepts               │
-│ concept_relationships  │
-│ chapter_concepts       │
-│ patterns               │
-│ ...                    │
-└────────────────────────┘
-```
+You should see tables: `books`, `chapters`, `concepts`, etc.
 
 ## Step 3: Index Your First Books
 
 Start with a small batch to verify everything works:
 
 ```bash
-# Index first 5 books (verbose mode)
-python scripts/index_books.py --source ~/Documents/ebooks --limit 5 --verbose
+# Index first 10 books
+python scripts/index_books.py --source ~/Documents/ebooks --limit 10 --verbose
 
 # Or index a specific book
-python scripts/index_books.py --book "fundamentals-of-data-engineering.epub" --verbose
+python scripts/index_books.py --book "data-warehouse-toolkit.epub" --verbose
 ```
 
-Expected output:
-```
-Connecting to catalog: /Users/.../data/catalog.ddb
-Found 5 ePub files to index
---------------------------------------------------
-[1/5] fundamentals-of-data-engineering.epub
-  Reading: /Users/.../ebooks/fundamentals-of-data-engineering.epub
-  Title: Fundamentals of Data Engineering
-  Authors: Joe Reis, Matt Housley
-  Chapters: 42
-  ✓ Indexed successfully (125000 tokens)
-...
-```
-
-## Step 4: Verify the Index
+Check the results:
 
 ```bash
-# Check books
-duckdb data/catalog.ddb "SELECT book_id, title, array_length(authors) as num_authors, chapter_count FROM books;"
-
-# Check chapters
-duckdb data/catalog.ddb "SELECT chapter_id, title, token_count FROM chapters WHERE book_id = 'fundamentals-of-data-engineering' LIMIT 10;"
+duckdb data/catalog.ddb -c "
+SELECT title, chapter_count, total_tokens 
+FROM books 
+LIMIT 5;
+"
 ```
 
-## Step 5: Query the Catalog
+## Step 4: Explore the Catalog
 
-Now you can query the knowledge base:
+### List indexed books
 
 ```sql
--- Find books about a topic
-SELECT title, authors
+SELECT 
+    title,
+    authors[1] as primary_author,
+    chapter_count,
+    total_tokens
 FROM books
-WHERE title ILIKE '%data%warehouse%'
-   OR array_to_string(subjects, ',') ILIKE '%dimensional%';
-
--- Find chapters about CDC
-SELECT b.title, ch.title, ch.token_count
-FROM chapters ch
-JOIN books b ON ch.book_id = b.book_id
-WHERE ch.title ILIKE '%cdc%'
-   OR ch.title ILIKE '%change data capture%';
-
--- Get chapter details for loading
-SELECT ch.chapter_id, ch.href, b.filepath
-FROM chapters ch
-JOIN books b ON ch.book_id = b.book_id
-WHERE ch.chapter_id = 'fundamentals-of-data-engineering:7';
+ORDER BY title;
 ```
 
-## Step 6: Load Chapter Content
+### Find chapters by topic
 
-Using the ebook-mcp in Claude Desktop:
-
+```sql
+SELECT 
+    b.title as book,
+    ch.title as chapter,
+    ch.token_count
+FROM chapters ch
+JOIN books b ON ch.book_id = b.book_id
+WHERE ch.title ILIKE '%dimensional%'
+ORDER BY ch.token_count DESC;
 ```
-You: "Load chapter 7 from Fundamentals of Data Engineering"
+
+## Step 5: Add Skills to Claude
+
+### Option A: Claude Desktop Projects
+
+1. Create a new Project in Claude Desktop
+2. Add the skills folder path to project settings
+3. The kb-usage skill will guide Claude
+
+### Option B: Reference in Conversation
+
+Tell Claude:
+```
+I have a knowledge base of technical ePubs. The catalog is at 
+~/Developer/projects/myPub/data/catalog.ddb. Please read the 
+skill file at ~/Developer/projects/myPub/skills/kb-usage/SKILL.md
+to understand how to use it.
+```
+
+## Step 6: Your First Query
+
+Try asking Claude:
+
+> "Search my knowledge base for chapters about dimensional modeling 
+> and show me the top 5 by token count."
+
+Claude should:
+1. Query the DuckDB catalog
+2. Return matching chapters
+3. Offer to load and explain content
+
+## Step 7: Add Concepts (Optional but Recommended)
+
+### Seed basic concepts
+
+```sql
+-- Add some foundational concepts
+INSERT INTO concepts (concept_id, name, domain, description) VALUES
+('dimensional_modeling', 'Dimensional Modeling', 'data_engineering', 
+ 'A data modeling technique optimized for query and analysis'),
+('star_schema', 'Star Schema', 'data_engineering',
+ 'A dimensional model with a central fact table surrounded by dimensions'),
+('fact_table', 'Fact Table', 'data_engineering',
+ 'A table containing measurements/metrics at a specific grain'),
+('dimension_table', 'Dimension Table', 'data_engineering',
+ 'A table containing descriptive attributes for analysis');
+
+-- Add relationships
+INSERT INTO concept_relationships (source_id, target_id, relationship) VALUES
+('star_schema', 'dimensional_modeling', 'REQUIRES'),
+('star_schema', 'fact_table', 'REQUIRES'),
+('star_schema', 'dimension_table', 'REQUIRES');
+```
+
+### Map chapters to concepts
+
+```sql
+-- Example: Map Kimball chapters to concepts
+INSERT INTO chapter_concepts (chapter_id, concept_id, treatment, relevance) VALUES
+('data-warehouse-toolkit:3', 'dimensional_modeling', 'deep_dive', 0.95),
+('data-warehouse-toolkit:4', 'fact_table', 'deep_dive', 0.90),
+('data-warehouse-toolkit:5', 'dimension_table', 'deep_dive', 0.90);
+```
+
+## Step 8: Ask Learning Questions
+
+Now you can ask Claude:
+
+> "Explain dimensional modeling using my knowledge base. 
+> What are the prerequisites I should understand first?"
 
 Claude will:
-1. Query catalog for chapter href and filepath
-2. Use get_epub_chapter_markdown(filepath, href)
-3. Display the full chapter content
-```
+1. Find the concept and related chapters
+2. Load relevant chapter content
+3. Synthesize an explanation
+4. Show prerequisites from the concept graph
 
-## Step 7: Test with Claude
+## Step 9: Index More Books
 
-Start a conversation in Claude Desktop:
+Once satisfied, index your full collection:
 
-```
-You: "Using my knowledge base, explain how CDC fits into data pipelines"
-
-Claude (with kb-usage skill):
-1. Queries catalog for 'cdc' or 'change data capture'
-2. Finds relevant chapters
-3. Loads chapter content
-4. Synthesizes explanation with citations
-```
-
-## Troubleshooting
-
-### "No module named 'duckdb'"
 ```bash
-pip install duckdb
-```
+# Index all books (may take a while)
+python scripts/index_books.py --source ~/Documents/ebooks --verbose
 
-### "Permission denied" errors
-```bash
-# Check file permissions
-ls -la ~/Documents/ebooks/
-chmod 644 ~/Documents/ebooks/*.epub
-```
-
-### "No chapters found"
-The ePub might have a non-standard TOC. Check:
-```bash
-python -c "import ebooklib; from ebooklib import epub; b = epub.read_epub('path/to/book.epub'); print(b.toc)"
-```
-
-### Database locked
-```bash
-# Close any open DuckDB connections
-# The database file can only be open by one process
+# Check progress
+duckdb data/catalog.ddb -c "SELECT COUNT(*) as books, SUM(chapter_count) as chapters FROM books;"
 ```
 
 ## Next Steps
 
-1. **Index more books**: Remove the `--limit` flag to index all
-2. **Extract concepts**: Run `extract_concepts.py` to build the concept graph
-3. **Generate skills**: Use `generate_skill.py` to create domain skills
-4. **Explore patterns**: See Tutorial 3 for pattern library usage
+1. **Build the concept graph**: Work with Claude to extract concepts from chapters
+2. **Create domain skills**: Generate skills for specific domains
+3. **Extract patterns**: Identify reusable patterns in your books
+4. **Customize commands**: Add custom commands for frequent workflows
 
----
+## Troubleshooting
 
-**Tutorial completed!** You now have a working knowledge base with indexed books.
+### "No such table: books"
+
+Run the schema initialization:
+```bash
+duckdb data/catalog.ddb < schemas/catalog.sql
+```
+
+### "ebooklib not found"
+
+Install dependencies:
+```bash
+pip install ebooklib beautifulsoup4
+```
+
+### "Permission denied reading ePub"
+
+Check file permissions:
+```bash
+chmod 644 ~/Documents/ebooks/*.epub
+```
+
+### "Chapter content empty"
+
+Some ePubs have unusual structure. Check:
+```bash
+python -c "
+import ebooklib
+from ebooklib import epub
+book = epub.read_epub('path/to/book.epub')
+print([item.get_name() for item in book.get_items()])
+"
+```
+
+## Quick Reference
+
+### Key Paths
+
+| What | Where |
+|------|-------|
+| Project | `~/Developer/projects/myPub/` |
+| Catalog DB | `~/Developer/projects/myPub/data/catalog.ddb` |
+| Skills | `~/Developer/projects/myPub/skills/` |
+| ePub Source | `~/Documents/ebooks/` |
+
+### Key Commands
+
+```bash
+# Index books
+python scripts/index_books.py --source ~/Documents/ebooks
+
+# Query catalog
+duckdb data/catalog.ddb
+
+# Generate skill scaffold
+python scripts/generate_skill.py --topic "CDC" --output skills/generated/cdc/
+```
+
+### Key Claude Queries
+
+- "Search my KB for [topic]"
+- "Explain [concept] from my books"
+- "Compare how different authors treat [topic]"
+- "What are the prerequisites for [concept]?"
+- "Generate a skill file for [topic]"

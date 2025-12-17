@@ -1,248 +1,251 @@
-# Healthcare Claim Line Fact Table Pattern
-# Pattern ID: healthcare.dimensional.fct_claim_line
-
 pattern_id: healthcare.dimensional.fct_claim_line
 name: Claim Line Fact Table
-description: >
-  Transaction grain fact table for healthcare claims at the service line level.
-  Each row represents a single service/procedure on a claim.
+version: "1.0"
 domain: healthcare
 category: dimensional
 
-version: 1.0.0
-last_updated: 2024-12-16
-
-sources:
-  - book: The Data Warehouse Toolkit, 3rd Edition
-    chapter: Chapter 11 - Healthcare
-    authority: high
-    contribution: canonical
-    notes: Kimball's authoritative guidance on healthcare dimensional modeling
-  
-  - book: Star Schema: The Complete Reference
-    chapter: Healthcare Data Warehouse
-    authority: medium
-    contribution: variation
-    notes: Additional perspectives on healthcare fact tables
+description: |
+  Fact table for healthcare claims at the claim line grain.
+  Each row represents a single service/procedure on a claim.
+  This is the foundational fact table for claims analytics.
 
 problem_statement: |
-  Healthcare organizations need to analyze claims data for:
-  - Cost analysis (charges, allowed amounts, paid amounts)
-  - Utilization patterns (services, procedures, diagnoses)
-  - Provider performance
-  - Member health outcomes
-  - Regulatory reporting
-  
-  The claim line grain provides the most granular, flexible foundation
-  for these analyses while maintaining additive measures.
+  Healthcare organizations need to analyze claims data for cost management,
+  utilization analysis, provider performance, and quality measurement.
+  The challenge is modeling claims to support diverse analytical needs
+  while maintaining data integrity and query performance.
 
-when_to_use:
-  - Building a healthcare data warehouse
-  - Need detailed service-level analysis
-  - Calculating PMPM, MLR, or other financial metrics
-  - Analyzing procedure/diagnosis patterns
-  - Provider performance measurement
+sources:
+  - book: "The Data Warehouse Toolkit (3rd Edition)"
+    chapter: "Chapter 11: Healthcare"
+    authors: ["Ralph Kimball", "Margy Ross"]
+    authority: high
+    contribution: canonical
+    notes: "Primary source for healthcare dimensional modeling patterns"
 
-when_not_to_use:
-  - Quick POC where claim header grain is sufficient
-  - Executive dashboards with only high-level cost totals
-  - When source system doesn't provide line-level detail
+context:
+  when_to_use:
+    - Claims analytics and reporting
+    - Provider performance analysis
+    - Cost and utilization studies
+    - Quality measure calculation (HEDIS, Stars)
+    - Risk adjustment analytics
+    - Network analysis
+    
+  when_not_to_use:
+    - Real-time claims adjudication
+    - OLTP/transactional systems
+    - When only header-level aggregates needed
+    - Pre-adjudicated claims processing
 
-prerequisites:
-  - concepts/dimensional_modeling
-  - concepts/healthcare_claims
-  - patterns/dimensional-modeling/common/date_dimension
-  - patterns/dimensional-modeling/dimensions/scd_type_2
-
-grain: |
-  One row per claim line (service/procedure).
-  Each claim has one or more lines.
-  Lines are identified by claim_id + line_number.
-
+  prerequisites:
+    - dimensional_modeling
+    - fact_table
+    - healthcare_claims_domain
 
 schema:
-  table_name: fct_claim_line
+  grain: "One row per claim line (individual service/procedure)"
   
-  keys:
-    primary_key: claim_line_key  # Surrogate key
-    natural_key: [claim_id, line_number]
-    
+  primary_key:
+    name: claim_line_key
+    type: BIGINT
+    generation: surrogate_sequence
+    description: "Surrogate key for the claim line"
+  
   foreign_keys:
     - name: member_key
-      references: dim_member
+      references: dim_member(member_key)
       role: patient
+      required: true
       
-    - name: provider_key
-      references: dim_provider
+    - name: rendering_provider_key
+      references: dim_provider(provider_key)
       role: rendering_provider
+      required: true
       
     - name: billing_provider_key
-      references: dim_provider
+      references: dim_provider(provider_key)
       role: billing_provider
+      required: false
+      
+    - name: facility_key
+      references: dim_provider(provider_key)
+      role: service_facility
+      required: false
       
     - name: service_date_key
-      references: dim_date
-      role: service_date
+      references: dim_date(date_key)
+      role: date_of_service
+      required: true
       
     - name: paid_date_key
-      references: dim_date
-      role: paid_date
+      references: dim_date(date_key)
+      role: payment_date
+      required: false
       
     - name: procedure_key
-      references: dim_procedure
+      references: dim_procedure(procedure_key)
+      role: primary_procedure
+      required: true
       
-    - name: place_of_service_key
-      references: dim_place_of_service
-  
+    - name: primary_diagnosis_key
+      references: dim_diagnosis(diagnosis_key)
+      role: primary_diagnosis
+      required: false
+      notes: "See variations for handling multiple diagnoses"
+
   degenerate_dimensions:
     - name: claim_id
-      description: Source claim identifier
+      type: VARCHAR(50)
+      description: "Source system claim identifier"
       
-    - name: line_number
-      description: Line sequence on the claim
+    - name: claim_line_number
+      type: INTEGER
+      description: "Line number within the claim"
       
-    - name: authorization_number
-      description: Prior auth reference if applicable
-  
+    - name: place_of_service_code
+      type: VARCHAR(2)
+      description: "CMS place of service code"
+      
+    - name: type_of_bill
+      type: VARCHAR(4)
+      description: "UB-04 type of bill (institutional claims)"
+
   measures:
     - name: charge_amount
-      type: DECIMAL(18,2)
+      type: DECIMAL(12,2)
       aggregation: SUM
-      description: Billed amount from provider
+      description: "Billed/submitted amount"
       
     - name: allowed_amount
-      type: DECIMAL(18,2)
+      type: DECIMAL(12,2)
       aggregation: SUM
-      description: Amount allowed by payer
+      description: "Contracted allowed amount"
       
     - name: paid_amount
-      type: DECIMAL(18,2)
+      type: DECIMAL(12,2)
       aggregation: SUM
-      description: Amount paid by payer
+      description: "Amount paid by payer"
       
-    - name: member_liability_amount
-      type: DECIMAL(18,2)
+    - name: member_liability
+      type: DECIMAL(12,2)
       aggregation: SUM
-      description: Member responsibility (copay, coinsurance, deductible)
+      description: "Member cost sharing (copay + coinsurance + deductible)"
+      
+    - name: copay_amount
+      type: DECIMAL(12,2)
+      aggregation: SUM
+      description: "Member copay amount"
+      
+    - name: coinsurance_amount
+      type: DECIMAL(12,2)
+      aggregation: SUM
+      description: "Member coinsurance amount"
+      
+    - name: deductible_amount
+      type: DECIMAL(12,2)
+      aggregation: SUM
+      description: "Amount applied to deductible"
       
     - name: units
-      type: DECIMAL(10,2)
+      type: DECIMAL(8,2)
       aggregation: SUM
-      description: Service units
+      description: "Service units"
       
-    - name: line_count
+    - name: days
       type: INTEGER
       aggregation: SUM
-      default: 1
-      description: For counting lines
-  
-  diagnosis_handling:
-    approach: positional_columns  # See variations for alternatives
-    columns:
-      - name: primary_diagnosis_key
-        references: dim_diagnosis
-        description: Principal diagnosis (dx_1)
-      - name: diagnosis_2_key
-        references: dim_diagnosis
-      - name: diagnosis_3_key
-        references: dim_diagnosis
-      - name: diagnosis_4_key
-        references: dim_diagnosis
-  
-  attributes:
-    - name: claim_type
-      type: VARCHAR(20)
-      values: [professional, institutional, pharmacy]
-      
-    - name: claim_status
-      type: VARCHAR(20)
-      values: [paid, denied, pending, adjusted]
-      
-    - name: in_network_flag
-      type: BOOLEAN
-      
-    - name: capitated_flag
-      type: BOOLEAN
-
+      description: "Days (for inpatient)"
 
 template:
-  ddl: |
-    CREATE TABLE {{ schema }}.fct_claim_line (
+  sql: |
+    CREATE TABLE fct_claim_line (
         -- Surrogate key
-        claim_line_key          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        claim_line_key BIGINT PRIMARY KEY,
         
         -- Foreign keys to dimensions
-        member_key              BIGINT NOT NULL REFERENCES {{ schema }}.dim_member(member_key),
-        provider_key            BIGINT REFERENCES {{ schema }}.dim_provider(provider_key),
-        billing_provider_key    BIGINT REFERENCES {{ schema }}.dim_provider(provider_key),
-        service_date_key        INTEGER NOT NULL REFERENCES {{ schema }}.dim_date(date_key),
-        paid_date_key           INTEGER REFERENCES {{ schema }}.dim_date(date_key),
-        procedure_key           BIGINT REFERENCES {{ schema }}.dim_procedure(procedure_key),
-        place_of_service_key    INTEGER REFERENCES {{ schema }}.dim_place_of_service(pos_key),
-        
-        -- Diagnosis keys (positional)
-        primary_diagnosis_key   BIGINT REFERENCES {{ schema }}.dim_diagnosis(diagnosis_key),
-        diagnosis_2_key         BIGINT REFERENCES {{ schema }}.dim_diagnosis(diagnosis_key),
-        diagnosis_3_key         BIGINT REFERENCES {{ schema }}.dim_diagnosis(diagnosis_key),
-        diagnosis_4_key         BIGINT REFERENCES {{ schema }}.dim_diagnosis(diagnosis_key),
+        member_key BIGINT NOT NULL,
+        rendering_provider_key BIGINT NOT NULL,
+        billing_provider_key BIGINT,
+        facility_key BIGINT,
+        service_date_key INTEGER NOT NULL,
+        paid_date_key INTEGER,
+        procedure_key BIGINT NOT NULL,
+        primary_diagnosis_key BIGINT,
         
         -- Degenerate dimensions
-        claim_id                VARCHAR(50) NOT NULL,
-        line_number             INTEGER NOT NULL,
-        authorization_number    VARCHAR(50),
+        claim_id VARCHAR(50) NOT NULL,
+        claim_line_number INTEGER NOT NULL,
+        place_of_service_code VARCHAR(2),
+        type_of_bill VARCHAR(4),
         
         -- Measures
-        charge_amount           DECIMAL(18,2),
-        allowed_amount          DECIMAL(18,2),
-        paid_amount             DECIMAL(18,2),
-        member_liability_amount DECIMAL(18,2),
-        units                   DECIMAL(10,2),
-        line_count              INTEGER DEFAULT 1,
+        charge_amount DECIMAL(12,2),
+        allowed_amount DECIMAL(12,2),
+        paid_amount DECIMAL(12,2),
+        member_liability DECIMAL(12,2),
+        copay_amount DECIMAL(12,2),
+        coinsurance_amount DECIMAL(12,2),
+        deductible_amount DECIMAL(12,2),
+        units DECIMAL(8,2),
+        days INTEGER,
         
-        -- Attributes
-        claim_type              VARCHAR(20),
-        claim_status            VARCHAR(20),
-        in_network_flag         BOOLEAN,
-        capitated_flag          BOOLEAN,
-        
-        -- Audit
-        source_system           VARCHAR(50),
-        load_timestamp          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        
-        -- Natural key constraint
-        UNIQUE (claim_id, line_number)
+        -- Audit columns
+        source_system VARCHAR(50),
+        source_claim_line_id VARCHAR(100),
+        loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
     );
     
-    -- Indexes for common query patterns
-    CREATE INDEX idx_fct_claim_line_member ON {{ schema }}.fct_claim_line(member_key);
-    CREATE INDEX idx_fct_claim_line_service_date ON {{ schema }}.fct_claim_line(service_date_key);
-    CREATE INDEX idx_fct_claim_line_provider ON {{ schema }}.fct_claim_line(provider_key);
-    CREATE INDEX idx_fct_claim_line_procedure ON {{ schema }}.fct_claim_line(procedure_key);
+    -- Performance indexes
+    CREATE INDEX idx_fcl_member ON fct_claim_line(member_key);
+    CREATE INDEX idx_fcl_provider ON fct_claim_line(rendering_provider_key);
+    CREATE INDEX idx_fcl_service_date ON fct_claim_line(service_date_key);
+    CREATE INDEX idx_fcl_procedure ON fct_claim_line(procedure_key);
+    CREATE INDEX idx_fcl_claim ON fct_claim_line(claim_id);
 
-  sample_queries:
-    pmpm: |
-      -- Per Member Per Month calculation
+test_cases:
+  - name: total_paid_by_year
+    description: "Calculate total paid amount by year"
+    query: |
+      SELECT 
+          d.calendar_year,
+          SUM(f.paid_amount) as total_paid
+      FROM fct_claim_line f
+      JOIN dim_date d ON f.service_date_key = d.date_key
+      GROUP BY d.calendar_year
+      ORDER BY d.calendar_year
+      
+  - name: pmpm_by_month
+    description: "Calculate per-member-per-month cost"
+    query: |
       SELECT 
           d.year_month,
-          COUNT(DISTINCT f.member_key) AS members_with_claims,
-          SUM(f.paid_amount) AS total_paid,
-          SUM(f.paid_amount) / COUNT(DISTINCT f.member_key) AS pmpm
-      FROM {{ schema }}.fct_claim_line f
-      JOIN {{ schema }}.dim_date d ON f.service_date_key = d.date_key
-      WHERE d.calendar_year = {{ year }}
+          SUM(f.paid_amount) / COUNT(DISTINCT f.member_key) as pmpm
+      FROM fct_claim_line f
+      JOIN dim_date d ON f.service_date_key = d.date_key
       GROUP BY d.year_month
-      ORDER BY d.year_month;
-    
-    top_diagnoses: |
-      -- Top 10 diagnoses by cost
+      ORDER BY d.year_month
+      
+  - name: top_procedures
+    description: "Top 10 procedures by paid amount"
+    query: |
       SELECT 
-          dx.diagnosis_code,
-          dx.diagnosis_description,
-          COUNT(*) AS line_count,
-          SUM(f.paid_amount) AS total_paid
-      FROM {{ schema }}.fct_claim_line f
-      JOIN {{ schema }}.dim_diagnosis dx ON f.primary_diagnosis_key = dx.diagnosis_key
-      GROUP BY dx.diagnosis_code, dx.diagnosis_description
+          p.procedure_code,
+          p.procedure_description,
+          SUM(f.paid_amount) as total_paid,
+          COUNT(*) as claim_lines
+      FROM fct_claim_line f
+      JOIN dim_procedure p ON f.procedure_key = p.procedure_key
+      GROUP BY p.procedure_code, p.procedure_description
       ORDER BY total_paid DESC
-      LIMIT 10;
+      LIMIT 10
 
+related_patterns:
+  - healthcare.dimensional.dim_member
+  - healthcare.dimensional.dim_provider
+  - healthcare.dimensional.dim_diagnosis
+  - healthcare.dimensional.dim_procedure
+  - healthcare.reference.dim_date
+  - healthcare.metrics.pmpm
+  - healthcare.metrics.mlr

@@ -1,205 +1,210 @@
 # myPub Architecture
 
-## System Overview
+## Overview
 
-myPub is a Claude-native knowledge base system that transforms a collection of technical ePub books into an intelligent, queryable resource.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Claude Desktop / Claude Code                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
-│   │     SKILLS       │  │   MCP SERVERS    │  │  CUSTOM COMMANDS │         │
-│   │                  │  │                  │  │                  │         │
-│   │  kb-usage/       │  │  DuckDB          │  │  /kb-search      │         │
-│   │  domains/        │  │  ebook-mcp       │  │  /kb-compare     │         │
-│   │  patterns/       │  │  memory          │  │  /kb-prereqs     │         │
-│   │  generated/      │  │  filesystem      │  │  /kb-pattern     │         │
-│   │                  │  │                  │  │                  │         │
-│   └──────────────────┘  └────────┬─────────┘  └──────────────────┘         │
-│                                  │                                          │
-└──────────────────────────────────┼──────────────────────────────────────────┘
-                                   │
-                    ┌──────────────┴──────────────┐
-                    │                             │
-                    ▼                             ▼
-         ┌─────────────────────┐      ┌─────────────────────┐
-         │   DuckDB Catalog    │      │   ePub Source Files │
-         │                     │      │                     │
-         │   data/catalog.ddb  │      │   ~/Documents/      │
-         │                     │      │   ebooks/*.epub     │
-         │   • books           │      │                     │
-         │   • chapters        │      │   (Source of truth, │
-         │   • concepts        │      │    never modified)  │
-         │   • relationships   │      │                     │
-         │   • patterns        │      │                     │
-         │   • skills          │      │                     │
-         └─────────────────────┘      └─────────────────────┘
-```
+myPub is a Claude-native knowledge base that transforms a collection of technical ePub books into an intelligent, queryable resource for learning and building.
 
 ## Design Principles
 
 ### 1. Native-First Retrieval
 
-Unlike RAG systems that chunk documents into vectors, myPub preserves the author's intended structure:
+Unlike traditional RAG systems that chunk documents into vectors, myPub preserves the author's intended structure:
 
 - **Full chapters** are loaded into context, not fragments
 - **Author organization** is preserved (sections, examples, flow)
-- **Token-aware** - most chapters (4K-17K tokens) fit in modern context windows
+- **Semantic integrity** is maintained
 
-This approach provides:
-- Better coherence in explanations
-- Preserved context for code examples
-- Author's pedagogical intent intact
+Most technical chapters are 4K-17K tokens, which fits well within Claude's context window.
 
-### 2. Structure-First Extraction
+### 2. Structure-Preserved Indexing
 
-The indexing process captures structure, not just content:
+The catalog captures structure without modifying source files:
 
 ```
-ePub File
-    └── Metadata (title, authors, date)
-    └── Table of Contents
-        └── Chapter 1
-            └── href (reference to content)
-            └── token_count (size estimate)
-            └── key_concepts (extracted)
-            └── summary (AI-generated)
+ePub File (Source of Truth)
+    ↓
+Metadata Extraction
+    ↓
+DuckDB Catalog (Index)
+    ├── books (metadata)
+    ├── chapters (TOC + summaries)
+    ├── concepts (graph nodes)
+    └── patterns (reusable building blocks)
 ```
 
-### 3. Concept Graph (Relational, Not Neo4j)
+### 3. Graph-Based Discovery
 
-Concepts and their relationships are stored in DuckDB using standard relational tables:
+Concepts form a knowledge graph enabling:
 
-```sql
-concepts                    -- Canonical concepts
-concept_relationships       -- Edges: REQUIRES, RELATED_TO, etc.
-chapter_concepts           -- Which chapters discuss which concepts
-```
+- **Prerequisite chains**: What do I need to know first?
+- **Related topics**: What else should I explore?
+- **Multi-perspective**: How do different authors treat this?
 
-This provides:
-- SQL you already know
-- Single database (no separate graph DB)
-- Recursive CTEs for graph traversal
+### 4. Pattern-Informed Building
 
-### 4. Pattern Library
+Patterns extracted from books provide:
 
-Reusable building blocks extracted from books:
+- **Canonical implementations**: The standard approach
+- **Documented variations**: Alternative valid approaches
+- **Decision frameworks**: When to use which approach
 
-```yaml
-pattern:
-  id: healthcare.dimensional.fct_claim_line
-  canonical: [base implementation]
-  variations:
-    - positional_columns (simple, limited)
-    - bridge_table (flexible, complex)
-  extensions:
-    - hcc_risk_mapping (for Medicare Advantage)
-```
-
-## Data Flow
-
-### Indexing (One-time, incremental)
+## Component Architecture
 
 ```
-ePub Files → index_books.py → DuckDB Catalog
-                                  │
-                                  ├── books table
-                                  └── chapters table
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         User Interaction Layer                           │
+│                                                                          │
+│   Claude Desktop          Claude Code           Custom Commands          │
+│   (Conversations)         (Agentic coding)      (/kb-search, etc.)      │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Skills Layer                                   │
+│                                                                          │
+│   kb-usage/SKILL.md      domains/*/SKILL.md    patterns/*/SKILL.md      │
+│   (How to use KB)        (Domain expertise)    (Pattern guidance)       │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            MCP Layer                                     │
+│                                                                          │
+│   DuckDB MCP             ebook-mcp              memory MCP               │
+│   (Catalog queries)      (Chapter content)      (Session state)         │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Data Layer                                     │
+│                                                                          │
+│   catalog.ddb            ~/Documents/ebooks/    patterns/*.yaml          │
+│   (Metadata + Graph)     (Source ePubs)         (Pattern definitions)   │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Concept Extraction (Batch or incremental)
+## Data Model
+
+### Core Entities
 
 ```
-Chapters → extract_concepts.py → Claude Analysis → DuckDB
-                                                       │
-                                                       ├── concepts
-                                                       ├── concept_relationships
-                                                       └── chapter_concepts
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│    books    │──────<│  chapters   │>──────│  concepts   │
+└─────────────┘       └─────────────┘       └─────────────┘
+                            │                      │
+                            │                      │
+                            ▼                      ▼
+                      ┌───────────┐         ┌───────────────┐
+                      │ patterns  │         │ relationships │
+                      └───────────┘         └───────────────┘
 ```
 
-### Query Flow (Runtime)
+### Relationship Types
+
+| Relationship | Meaning | Example |
+|--------------|---------|---------|
+| REQUIRES | Prerequisite knowledge | Dimensional Modeling → SQL |
+| RELATED_TO | Associated concept | CDC → Event Sourcing |
+| EXTENDS | Builds upon | SCD Type 2 → SCD Type 1 |
+| CONTRASTS_WITH | Alternative approach | Kimball → Inmon |
+
+## Workflow Patterns
+
+### Learning Workflow
 
 ```
-User Query
+User Question
     │
     ▼
-Claude (with kb-usage skill loaded)
+Query Concepts ──────────────────────────┐
+    │                                    │
+    ▼                                    ▼
+Find Chapters ◄─────────────────── No Match? Search books/chapters
     │
-    ├── Query DuckDB: Find relevant concepts/chapters
+    ▼
+Load Full Chapter (native-first)
     │
-    ├── Load chapter content via ebook-mcp
+    ▼
+Synthesize Explanation
     │
-    └── Synthesize response with citations
+    ▼
+Cite Sources + Offer Exploration
 ```
 
-## Component Details
-
-### DuckDB Catalog
-
-Single SQLite-like database containing all metadata:
-
-| Table | Purpose |
-|-------|---------|
-| books | Book metadata (title, authors, filepath) |
-| chapters | Chapter metadata (title, href, tokens, summary) |
-| concepts | Canonical concept definitions |
-| concept_relationships | Edges between concepts |
-| chapter_concepts | Many-to-many: chapters ↔ concepts |
-| patterns | Reusable building blocks |
-| pattern_variations | Alternative approaches |
-| pattern_extensions | Additive capabilities |
-| skills | Generated skill file tracking |
-
-### Skills System
-
-Skills are markdown files that guide Claude's behavior:
+### Building Workflow
 
 ```
-skills/
-├── kb-usage/SKILL.md          # Core: how to use the KB
-├── domains/
-│   ├── data-engineering/      # Domain expertise
-│   └── healthcare-analytics/
-├── patterns/
-│   └── healthcare/            # Pattern-specific guidance
-└── generated/                 # Ad-hoc generated skills
+Build Request
+    │
+    ▼
+Identify Patterns
+    │
+    ▼
+Load Pattern + Variations
+    │
+    ▼
+Apply Decision Framework
+    │
+    ▼
+Select Variation + Extensions
+    │
+    ▼
+Generate Code/Schema
+    │
+    ▼
+Explain Rationale
 ```
 
-### MCP Servers
+### Research Workflow
 
-| Server | Purpose |
-|--------|---------|
-| DuckDB | Query catalog database |
-| ebook-mcp | Read ePub content |
-| memory | Dynamic concept exploration |
-| filesystem | Read/write generated files |
-
-## Security & Privacy
-
-- **ePub files**: Read-only, never modified
-- **Catalog**: Local database, no external access
-- **No cloud dependencies**: Everything runs locally
-- **Git-ignored data**: catalog.ddb excluded from repo
-
-## Extensibility
-
-### Adding New Books
-
-```bash
-# Copy to ebooks folder, then re-index
-python scripts/index_books.py --book "new-book.epub"
 ```
+Research Question
+    │
+    ▼
+Find All Relevant Chapters
+    │
+    ▼
+Group by Author/Perspective
+    │
+    ▼
+Load Multiple Chapters
+    │
+    ▼
+Identify Agreements/Conflicts
+    │
+    ▼
+Synthesize with Citations
+```
+
+## File Locations
+
+| Component | Location |
+|-----------|----------|
+| Project Root | `~/Developer/projects/myPub/` |
+| Catalog Database | `~/Developer/projects/myPub/data/catalog.ddb` |
+| Skills Files | `~/Developer/projects/myPub/skills/` |
+| Pattern YAML | `~/Developer/projects/myPub/patterns/` |
+| Scripts | `~/Developer/projects/myPub/scripts/` |
+| ePub Source | `~/Documents/ebooks/` (configurable) |
+
+## Extension Points
 
 ### Adding New Domains
 
-1. Create domain skill: `skills/domains/new-domain/SKILL.md`
-2. Index relevant books
-3. Extract concepts with domain tag
+1. Create skill file: `skills/domains/{domain}/SKILL.md`
+2. Add domain to concepts table
+3. Map chapters to concepts
+4. Extract domain patterns
 
 ### Adding New Patterns
 
-1. Create pattern YAML in `patterns/` directory
-2. Register in patterns table
-3. Update relevant domain skills
+1. Create pattern YAML in `patterns/{domain}/{category}/`
+2. Insert into patterns table
+3. Link to source chapters
+4. Document variations and extensions
+
+### Integrating External Data
+
+1. Add MCP server for data source
+2. Create skill for integration guidance
+3. Reference in kb-usage skill
