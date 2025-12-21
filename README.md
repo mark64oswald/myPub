@@ -177,7 +177,7 @@ python scripts/index_books.py --source /your/ebooks/path --catalog /your/catalog
 
 ## License
 
-Private - All rights reserved.
+Apache License 2.0 - See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
