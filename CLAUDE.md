@@ -9,12 +9,14 @@ myPub is a Claude-native knowledge base for technical ePub books. It provides:
 
 ## Key Locations
 
+> **Note:** Update these paths for your environment
+
 | Resource | Path |
 |----------|------|
-| ePub Library | `/Users/markoswald/Documents/ebooks/` |
-| Catalog Database | `/Users/markoswald/Developer/projects/myPub/data/catalog.ddb` |
-| Patterns | `/Users/markoswald/Developer/projects/myPub/patterns/` |
-| Scripts | `/Users/markoswald/Developer/projects/myPub/scripts/` |
+| ePub Library | `~/Documents/ebooks/` ← *Change to your ebook location* |
+| Catalog Database | `./data/catalog.ddb` (relative to project root) |
+| Patterns | `./patterns/` |
+| Scripts | `./scripts/` |
 
 ## Opening ePub Files
 
@@ -31,7 +33,7 @@ Use Python with DuckDB to query the catalog:
 ```bash
 python3 -c "
 import duckdb
-conn = duckdb.connect('/Users/markoswald/Developer/projects/myPub/data/catalog.ddb')
+conn = duckdb.connect('./data/catalog.ddb')  # Run from project root
 result = conn.execute('YOUR QUERY HERE').fetchall()
 for row in result:
     print(row)
@@ -73,11 +75,11 @@ Use the **ebook-mcp** tools to load chapter content:
 Example workflow:
 ```python
 # 1. Query catalog for chapter info
-# Result: filepath="/Users/markoswald/Documents/ebooks/book.epub", href="chapter1.xhtml"
+# Result: filepath="~/Documents/ebooks/book.epub", href="chapter1.xhtml"
 
 # 2. Load via ebook-mcp
 ebook-mcp:get_epub_chapter_markdown(
-    epub_path="/Users/markoswald/Documents/ebooks/book.epub",
+    epub_path="~/Documents/ebooks/book.epub",
     chapter_id="chapter1.xhtml"
 )
 ```
@@ -127,7 +129,7 @@ Load patterns by reading the YAML files directly.
 
 Use OmniReader Pro:
 ```bash
-open -a "OmniReader Pro" "/Users/markoswald/Documents/ebooks/book-name.epub"
+open -a "OmniReader Pro" "~/Documents/ebooks/book-name.epub"
 ```
 
 ## Domain Coverage

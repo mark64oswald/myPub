@@ -118,22 +118,59 @@ Reusable patterns extracted from books, with:
 
 ## Configuration
 
-### Environment Variables
+### ⚠️ Paths to Configure
+
+This project has default paths that you'll need to update for your environment:
+
+| Setting | Default Value | Where to Change |
+|---------|---------------|-----------------|
+| ePub library location | `~/Documents/ebooks` | `scripts/index_books.py` → `DEFAULT_SOURCE` |
+| Catalog database | `~/Developer/projects/myPub/data/catalog.ddb` | All scripts → `DEFAULT_CATALOG` |
+
+**Files with configurable paths:**
+
+1. **`scripts/index_books.py`** (lines 20-21)
+   ```python
+   DEFAULT_SOURCE = os.path.expanduser("~/Documents/ebooks")
+   DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
+   ```
+
+2. **`scripts/extract_concepts.py`** (line 18)
+   ```python
+   DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
+   ```
+
+3. **`scripts/generate_skill.py`** (lines 19-20)
+   ```python
+   DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
+   DEFAULT_OUTPUT = os.path.expanduser("~/Developer/projects/myPub/skills/generated")
+   ```
+
+4. **`CLAUDE.md`** — Update the paths in the "Key Locations" table for Claude Code
+
+**Note:** You can also override paths via command-line arguments without editing files:
 ```bash
-export MYPUB_EBOOKS_PATH=~/Documents/ebooks
-export MYPUB_CATALOG_PATH=~/Developer/projects/myPub/data/catalog.ddb
+python scripts/index_books.py --source /your/ebooks/path --catalog /your/catalog/path.ddb
 ```
 
-### Claude Desktop Config
-Add to `claude_desktop_config.json`:
+### Claude Desktop / Claude Code Setup
+
+**MCP Server for ebook access** — Add to your MCP config:
 ```json
 {
-  "mcpServers": {
-    "epub-kb": {
-      "command": "python",
-      "args": ["-m", "mcp_servers.epub_kb.server"],
-      "cwd": "~/Developer/projects/myPub"
-    }
+  "ebook-mcp": {
+    "command": "uv",
+    "args": ["--directory", "/path/to/ebook-mcp/", "run", "main.py"]
+  }
+}
+```
+
+**Optional: DuckDB MCP for catalog queries:**
+```json
+{
+  "mypub-catalog": {
+    "command": "uvx",
+    "args": ["mcp-server-motherduck", "--db-path", "/your/path/to/data/catalog.ddb"]
   }
 }
 ```
