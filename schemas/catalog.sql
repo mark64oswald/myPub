@@ -1,408 +1,297 @@
 -- ============================================================================
--- myPub Catalog Database Schema
--- DuckDB schema for the ePub knowledge base
--- 
+-- myPub v2 Catalog Schema
+-- DuckDB schema for the knowledge-base substrate.
+-- Source of truth: docs/mypub-v2-architecture.md §7.1 and §5.2.
+--
 -- Usage: duckdb data/catalog.ddb < schemas/catalog.sql
+--
+-- Conventions:
+--   * Singular table names (book, chapter, concept, …).
+--   * BIGINT primary keys backed by dedicated SEQUENCE objects
+--     (DuckDB 1.5 does not support GENERATED ... AS IDENTITY).
+--   * Embeddings are FLOAT[384] (sentence-transformers/all-MiniLM-L6-v2).
+--   * Polymorphic provenance uses (source_type, source_id) pairs; these
+--     cannot be enforced as DuckDB FKs and are validated in application code.
 -- ============================================================================
 
+
 -- ============================================================================
--- CORE CATALOG TABLES
+-- SEQUENCES (one per table with a surrogate PK)
 -- ============================================================================
 
--- Books table - metadata about each ePub
-CREATE TABLE IF NOT EXISTS books (
-    book_id         VARCHAR PRIMARY KEY,  -- slug from filename
-    title           VARCHAR NOT NULL,
-    authors         VARCHAR[],            -- DuckDB array of authors
-    publisher       VARCHAR,
-    pub_date        DATE,
-    filepath        VARCHAR NOT NULL,     -- path to ePub file
-    description     TEXT,
-    subjects        VARCHAR[],            -- subject tags
-    total_tokens    INTEGER,              -- estimated token count
-    chapter_count   INTEGER,
-    indexed_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TIMESTAMP
+CREATE SEQUENCE seq_author_id                    START 1;
+CREATE SEQUENCE seq_book_id                      START 1;
+CREATE SEQUENCE seq_chapter_id                   START 1;
+CREATE SEQUENCE seq_concept_id                   START 1;
+CREATE SEQUENCE seq_concept_alias_id             START 1;
+CREATE SEQUENCE seq_concept_resolution_queue_id  START 1;
+CREATE SEQUENCE seq_concept_query_log_id         START 1;
+CREATE SEQUENCE seq_doc_source_id                START 1;
+CREATE SEQUENCE seq_doc_snapshot_id              START 1;
+CREATE SEQUENCE seq_doc_section_id               START 1;
+CREATE SEQUENCE seq_procedure_id                 START 1;
+CREATE SEQUENCE seq_skill_package_id             START 1;
+CREATE SEQUENCE seq_skill_id                     START 1;
+CREATE SEQUENCE seq_skill_file_id                START 1;
+
+
+-- ============================================================================
+-- AUTHOR / BOOK / CHAPTER
+-- ============================================================================
+
+CREATE TABLE author (
+    author_id  BIGINT   PRIMARY KEY DEFAULT nextval('seq_author_id'),
+    name       VARCHAR  NOT NULL,
+    UNIQUE (name)
 );
 
--- Chapters table - table of contents with metadata
-CREATE TABLE IF NOT EXISTS chapters (
-    chapter_id      VARCHAR PRIMARY KEY,  -- book_id:sequence
-    book_id         VARCHAR NOT NULL REFERENCES books(book_id),
-    title           VARCHAR NOT NULL,
-    sequence        INTEGER NOT NULL,     -- order in book
-    href            VARCHAR,              -- internal ePub reference
-    parent_id       VARCHAR,              -- for nested chapters
-    token_count     INTEGER,
-    summary         TEXT,                 -- AI-generated 2-3 sentences
-    key_concepts    VARCHAR[],            -- extracted concept names
-    content_type    VARCHAR,              -- 'tutorial', 'reference', 'conceptual'
-    difficulty      VARCHAR,              -- 'beginner', 'intermediate', 'advanced'
-    indexed_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE book (
+    book_id          BIGINT     PRIMARY KEY DEFAULT nextval('seq_book_id'),
+    title            VARCHAR    NOT NULL,
+    publisher        VARCHAR,
+    publication_date DATE,
+    source_path      VARCHAR    NOT NULL,
+    description      TEXT,
+    subjects         VARCHAR[],
+    total_tokens     INTEGER,
+    chapter_count    INTEGER,
+    indexed_at       TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP,
+    UNIQUE (source_path)
 );
 
-CREATE INDEX IF NOT EXISTS idx_chapters_book ON chapters(book_id);
-CREATE INDEX IF NOT EXISTS idx_chapters_parent ON chapters(parent_id);
+-- Many-to-many book ↔ author (most technical books have multiple authors).
+CREATE TABLE book_author (
+    book_id   BIGINT  NOT NULL REFERENCES book(book_id),
+    author_id BIGINT  NOT NULL REFERENCES author(author_id),
+    position  INTEGER,
+    PRIMARY KEY (book_id, author_id)
+);
+
+CREATE TABLE chapter (
+    chapter_id        BIGINT     PRIMARY KEY DEFAULT nextval('seq_chapter_id'),
+    book_id           BIGINT     NOT NULL REFERENCES book(book_id),
+    chapter_num       INTEGER,
+    parent_chapter_id BIGINT     REFERENCES chapter(chapter_id),
+    title             VARCHAR,
+    href              VARCHAR,
+    content           TEXT,
+    token_count       INTEGER,
+    embedding         FLOAT[384],
+    indexed_at        TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_chapter_book   ON chapter(book_id);
+CREATE INDEX idx_chapter_parent ON chapter(parent_chapter_id);
 
 
 -- ============================================================================
--- CONCEPT GRAPH TABLES
+-- CONCEPT + ENTITY RESOLUTION
 -- ============================================================================
 
--- Concepts - canonical concepts across all books
-CREATE TABLE IF NOT EXISTS concepts (
-    concept_id      VARCHAR PRIMARY KEY,  -- slugified name
-    name            VARCHAR NOT NULL,     -- display name
-    description     TEXT,
-    domain          VARCHAR,              -- 'data_engineering', 'healthcare', etc.
-    aliases         VARCHAR[],            -- alternative names/spellings
+CREATE TABLE concept (
+    concept_id       BIGINT     PRIMARY KEY DEFAULT nextval('seq_concept_id'),
+    name             VARCHAR    NOT NULL,
+    concept_type     VARCHAR,
+    description      TEXT,
+    domain           VARCHAR,
+    embedding        FLOAT[384],
+    pending_review   BOOLEAN    DEFAULT FALSE,
+    query_count      BIGINT     DEFAULT 0,
+    last_queried_at  TIMESTAMP,
+    created_at       TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP,
+    UNIQUE (name, concept_type)
+);
+
+CREATE INDEX idx_concept_domain ON concept(domain);
+CREATE INDEX idx_concept_type   ON concept(concept_type);
+
+CREATE TABLE concept_alias (
+    alias_id    BIGINT   PRIMARY KEY DEFAULT nextval('seq_concept_alias_id'),
+    concept_id  BIGINT   NOT NULL REFERENCES concept(concept_id),
+    alias       VARCHAR  NOT NULL,
+    alias_type  VARCHAR,
+    UNIQUE (concept_id, alias)
+);
+
+CREATE INDEX idx_concept_alias_alias ON concept_alias(alias);
+
+CREATE TABLE concept_resolution_queue (
+    queue_id           BIGINT     PRIMARY KEY DEFAULT nextval('seq_concept_resolution_queue_id'),
+    candidate_name     VARCHAR    NOT NULL,
+    candidate_context  TEXT,
+    source_type        VARCHAR,
+    source_id          BIGINT,
+    nearest_concept_id BIGINT     REFERENCES concept(concept_id),
+    similarity_score   DOUBLE,
+    resolution_action  VARCHAR    DEFAULT 'pending',
+    reviewed_at        TIMESTAMP,
+    created_at         TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_concept_resq_action ON concept_resolution_queue(resolution_action);
+
+CREATE TABLE concept_relation (
+    from_concept_id BIGINT    NOT NULL REFERENCES concept(concept_id),
+    to_concept_id   BIGINT    NOT NULL REFERENCES concept(concept_id),
+    relation_type   VARCHAR   NOT NULL,
+    confidence      DOUBLE    DEFAULT 1.0,
+    source_type     VARCHAR   NOT NULL,
+    source_id       BIGINT    NOT NULL,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TIMESTAMP
+    PRIMARY KEY (from_concept_id, to_concept_id, relation_type, source_type, source_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_concepts_domain ON concepts(domain);
+CREATE INDEX idx_concept_relation_from ON concept_relation(from_concept_id);
+CREATE INDEX idx_concept_relation_to   ON concept_relation(to_concept_id);
+CREATE INDEX idx_concept_relation_src  ON concept_relation(source_type, source_id);
 
--- Concept relationships - edges in the concept graph
-CREATE TABLE IF NOT EXISTS concept_relationships (
-    source_id       VARCHAR NOT NULL REFERENCES concepts(concept_id),
-    target_id       VARCHAR NOT NULL REFERENCES concepts(concept_id),
-    relationship    VARCHAR NOT NULL,     -- REQUIRES, RELATED_TO, EXTENDS, CONTRASTS_WITH
-    strength        FLOAT DEFAULT 1.0,    -- 0-1 confidence/relevance
-    source_ref      VARCHAR,              -- chapter_id where derived
-    notes           TEXT,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (source_id, target_id, relationship)
+CREATE TABLE concept_query_log (
+    log_id      BIGINT     PRIMARY KEY DEFAULT nextval('seq_concept_query_log_id'),
+    concept_id  BIGINT     NOT NULL REFERENCES concept(concept_id),
+    queried_at  TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    mode        VARCHAR
 );
 
-CREATE INDEX IF NOT EXISTS idx_concept_rel_source ON concept_relationships(source_id);
-CREATE INDEX IF NOT EXISTS idx_concept_rel_target ON concept_relationships(target_id);
-CREATE INDEX IF NOT EXISTS idx_concept_rel_type ON concept_relationships(relationship);
-
--- Chapter-Concept mapping - which chapters discuss which concepts
-CREATE TABLE IF NOT EXISTS chapter_concepts (
-    chapter_id      VARCHAR NOT NULL REFERENCES chapters(chapter_id),
-    concept_id      VARCHAR NOT NULL REFERENCES concepts(concept_id),
-    treatment       VARCHAR,              -- 'mention', 'explain', 'deep_dive'
-    relevance       FLOAT DEFAULT 1.0,    -- 0-1 how central to the chapter
-    excerpt         TEXT,                 -- brief quote showing treatment
-    PRIMARY KEY (chapter_id, concept_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_chapter_concepts_concept ON chapter_concepts(concept_id);
-CREATE INDEX IF NOT EXISTS idx_chapter_concepts_treatment ON chapter_concepts(treatment);
+CREATE INDEX idx_concept_query_log_concept ON concept_query_log(concept_id, queried_at);
 
 
 -- ============================================================================
--- PATTERN LIBRARY TABLES
+-- LIVE DOC SOURCES (Context7 / DeepWiki / GitHub raw)
 -- ============================================================================
 
--- Patterns - reusable building blocks extracted from books
-CREATE TABLE IF NOT EXISTS patterns (
-    pattern_id      VARCHAR PRIMARY KEY,  -- hierarchical: domain.category.name
-    name            VARCHAR NOT NULL,
-    description     TEXT,
-    domain          VARCHAR,              -- 'healthcare', 'dimensional_modeling', etc.
-    category        VARCHAR,              -- 'facts', 'dimensions', 'metrics', etc.
-    problem_statement TEXT,               -- what problem does this solve
-    canonical_yaml  TEXT,                 -- full pattern definition as YAML
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TIMESTAMP
+CREATE TABLE doc_source (
+    doc_source_id           BIGINT     PRIMARY KEY DEFAULT nextval('seq_doc_source_id'),
+    name                    VARCHAR    NOT NULL,
+    source_type             VARCHAR    NOT NULL,
+    mcp_server              VARCHAR    NOT NULL,
+    identifier              VARCHAR    NOT NULL,
+    authority_score         DOUBLE,
+    refresh_ttl_days        INTEGER,
+    priority_tier           VARCHAR    DEFAULT 'cool',
+    pinned                  BOOLEAN    DEFAULT FALSE,
+    last_refresh_at         TIMESTAMP,
+    last_content_changed_at TIMESTAMP,
+    created_at              TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (source_type, identifier)
 );
 
-CREATE INDEX IF NOT EXISTS idx_patterns_domain ON patterns(domain);
-CREATE INDEX IF NOT EXISTS idx_patterns_category ON patterns(category);
+CREATE INDEX idx_doc_source_tier ON doc_source(priority_tier);
 
--- Pattern sources - which chapters informed this pattern
-CREATE TABLE IF NOT EXISTS pattern_sources (
-    pattern_id      VARCHAR NOT NULL REFERENCES patterns(pattern_id),
-    chapter_id      VARCHAR NOT NULL REFERENCES chapters(chapter_id),
-    authority       VARCHAR,              -- 'high', 'medium', 'low'
-    contribution    VARCHAR,              -- 'canonical', 'variation', 'extension'
-    notes           TEXT,
-    PRIMARY KEY (pattern_id, chapter_id)
+CREATE TABLE doc_snapshot (
+    snapshot_id    BIGINT      PRIMARY KEY DEFAULT nextval('seq_doc_snapshot_id'),
+    doc_source_id  BIGINT      NOT NULL REFERENCES doc_source(doc_source_id),
+    source_type    VARCHAR,
+    url            VARCHAR,
+    retrieved_at   TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
+    content_hash   VARCHAR,
+    content        TEXT,
+    embedding      FLOAT[384]
 );
 
--- Pattern variations - alternative approaches within a pattern
-CREATE TABLE IF NOT EXISTS pattern_variations (
-    variation_id    VARCHAR PRIMARY KEY,  -- pattern_id:variation_name
-    pattern_id      VARCHAR NOT NULL REFERENCES patterns(pattern_id),
-    name            VARCHAR NOT NULL,
-    description     TEXT,
-    when_to_use     TEXT,
-    when_not_to_use TEXT,
-    variation_yaml  TEXT,                 -- variation-specific YAML
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+CREATE INDEX idx_doc_snapshot_source ON doc_snapshot(doc_source_id);
+CREATE INDEX idx_doc_snapshot_hash   ON doc_snapshot(content_hash);
+
+CREATE TABLE doc_section (
+    doc_section_id BIGINT      PRIMARY KEY DEFAULT nextval('seq_doc_section_id'),
+    snapshot_id    BIGINT      NOT NULL REFERENCES doc_snapshot(snapshot_id),
+    parent_id      BIGINT      REFERENCES doc_section(doc_section_id),
+    heading_level  INTEGER,
+    heading_text   VARCHAR,
+    ordinal        INTEGER,
+    content        TEXT,
+    embedding      FLOAT[384]
 );
 
-CREATE INDEX IF NOT EXISTS idx_pattern_variations_pattern ON pattern_variations(pattern_id);
+CREATE INDEX idx_doc_section_snapshot ON doc_section(snapshot_id);
+CREATE INDEX idx_doc_section_parent   ON doc_section(parent_id);
 
--- Pattern extensions - additive capabilities
-CREATE TABLE IF NOT EXISTS pattern_extensions (
-    extension_id    VARCHAR PRIMARY KEY,
-    pattern_id      VARCHAR NOT NULL REFERENCES patterns(pattern_id),
-    name            VARCHAR NOT NULL,
-    description     TEXT,
-    when_required   TEXT,
-    extension_yaml  TEXT,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE concept_doc_link (
+    concept_id    BIGINT     NOT NULL REFERENCES concept(concept_id),
+    doc_source_id BIGINT     NOT NULL REFERENCES doc_source(doc_source_id),
+    notes         TEXT,
+    created_at    TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (concept_id, doc_source_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_pattern_extensions_pattern ON pattern_extensions(pattern_id);
-
 
 -- ============================================================================
--- SKILLS TRACKING
+-- PROCEDURES (extracted from book chapters and doc sections)
 -- ============================================================================
 
--- Skills - generated skill files
-CREATE TABLE IF NOT EXISTS skills (
-    skill_id        VARCHAR PRIMARY KEY,
-    name            VARCHAR NOT NULL,
-    filepath        VARCHAR,              -- where the SKILL.md lives
-    domain          VARCHAR,
-    description     TEXT,
-    source_chapters VARCHAR[],            -- chapter_ids used to generate
-    source_patterns VARCHAR[],            -- pattern_ids used
-    generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TIMESTAMP,
-    version         INTEGER DEFAULT 1
+CREATE TABLE procedure (
+    procedure_id       BIGINT     PRIMARY KEY DEFAULT nextval('seq_procedure_id'),
+    name               VARCHAR,
+    preconditions      TEXT,
+    steps              TEXT,
+    postconditions     TEXT,
+    failure_modes      TEXT,
+    source_type        VARCHAR,
+    source_id          BIGINT,
+    implements_pattern BIGINT,
+    created_at         TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
 );
 
--- ============================================================================
--- USEFUL VIEWS
--- ============================================================================
-
--- View: Chapters with book context
-CREATE OR REPLACE VIEW v_chapters_with_books AS
-SELECT 
-    ch.chapter_id,
-    ch.title AS chapter_title,
-    ch.sequence,
-    ch.href,
-    ch.token_count,
-    ch.summary,
-    ch.key_concepts,
-    ch.content_type,
-    ch.difficulty,
-    b.book_id,
-    b.title AS book_title,
-    b.authors,
-    b.publisher,
-    b.pub_date,
-    b.filepath
-FROM chapters ch
-JOIN books b ON ch.book_id = b.book_id;
-
--- View: Concept to chapters mapping with details
-CREATE OR REPLACE VIEW v_concept_chapters AS
-SELECT 
-    c.concept_id,
-    c.name AS concept_name,
-    c.domain,
-    ch.chapter_id,
-    ch.title AS chapter_title,
-    b.title AS book_title,
-    b.authors,
-    b.pub_date,
-    cc.treatment,
-    cc.relevance,
-    ch.token_count
-FROM concepts c
-JOIN chapter_concepts cc ON c.concept_id = cc.concept_id
-JOIN chapters ch ON cc.chapter_id = ch.chapter_id
-JOIN books b ON ch.book_id = b.book_id;
-
--- View: Concept prerequisites (one level)
-CREATE OR REPLACE VIEW v_concept_prerequisites AS
-SELECT 
-    c1.concept_id AS concept_id,
-    c1.name AS concept_name,
-    c2.concept_id AS prereq_id,
-    c2.name AS prereq_name,
-    cr.strength,
-    cr.notes
-FROM concepts c1
-JOIN concept_relationships cr ON c1.concept_id = cr.source_id
-JOIN concepts c2 ON cr.target_id = c2.concept_id
-WHERE cr.relationship = 'REQUIRES';
-
--- View: Related concepts
-CREATE OR REPLACE VIEW v_concept_related AS
-SELECT 
-    c1.concept_id AS concept_id,
-    c1.name AS concept_name,
-    c2.concept_id AS related_id,
-    c2.name AS related_name,
-    cr.relationship,
-    cr.strength
-FROM concepts c1
-JOIN concept_relationships cr ON c1.concept_id = cr.source_id
-JOIN concepts c2 ON cr.target_id = c2.concept_id;
-
--- View: Patterns with source info
-CREATE OR REPLACE VIEW v_patterns_with_sources AS
-SELECT 
-    p.pattern_id,
-    p.name AS pattern_name,
-    p.domain,
-    p.category,
-    p.description,
-    array_agg(DISTINCT b.title) AS source_books,
-    array_agg(DISTINCT ps.authority) AS authorities
-FROM patterns p
-LEFT JOIN pattern_sources ps ON p.pattern_id = ps.pattern_id
-LEFT JOIN chapters ch ON ps.chapter_id = ch.chapter_id
-LEFT JOIN books b ON ch.book_id = b.book_id
-GROUP BY p.pattern_id, p.name, p.domain, p.category, p.description;
-
--- View: Book coverage by domain
-CREATE OR REPLACE VIEW v_domain_coverage AS
-SELECT 
-    c.domain,
-    COUNT(DISTINCT c.concept_id) AS concept_count,
-    COUNT(DISTINCT cc.chapter_id) AS chapter_count,
-    COUNT(DISTINCT ch.book_id) AS book_count
-FROM concepts c
-LEFT JOIN chapter_concepts cc ON c.concept_id = cc.concept_id
-LEFT JOIN chapters ch ON cc.chapter_id = ch.chapter_id
-GROUP BY c.domain
-ORDER BY concept_count DESC;
+CREATE INDEX idx_procedure_source ON procedure(source_type, source_id);
 
 
 -- ============================================================================
--- COMMON QUERY PATTERNS (save as reference)
+-- SKILLS FACTORY OUTPUT
 -- ============================================================================
 
--- These are example queries that can be used as templates.
--- They are commented out to not execute during schema creation.
+CREATE TABLE skill_package (
+    package_id    BIGINT     PRIMARY KEY DEFAULT nextval('seq_skill_package_id'),
+    name          VARCHAR    NOT NULL,
+    domain        VARCHAR,
+    root_topic    VARCHAR,
+    source_query  TEXT,
+    created_at    TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (name)
+);
 
-/*
--- Find chapters for a concept, ranked by treatment depth
-SELECT 
-    book_title,
-    chapter_title,
-    treatment,
-    token_count,
-    summary
-FROM v_concept_chapters
-WHERE concept_id = 'dimensional_modeling'
-ORDER BY 
-    CASE treatment 
-        WHEN 'deep_dive' THEN 1 
-        WHEN 'explain' THEN 2 
-        WHEN 'mention' THEN 3 
-    END,
-    pub_date DESC;
+CREATE TABLE skill (
+    skill_id         BIGINT     PRIMARY KEY DEFAULT nextval('seq_skill_id'),
+    package_id       BIGINT     REFERENCES skill_package(package_id),
+    name             VARCHAR    NOT NULL,
+    description      TEXT,
+    scope_summary    TEXT,
+    content_markdown TEXT,
+    source_currency  VARCHAR,
+    strategy         VARCHAR,
+    generation_notes TEXT,
+    created_at       TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
 
--- Find prerequisites (recursive, up to 3 levels)
-WITH RECURSIVE prereq_chain AS (
-    SELECT 
-        target_id AS concept_id,
-        1 AS depth,
-        ARRAY[source_id] AS path
-    FROM concept_relationships
-    WHERE source_id = 'dimensional_modeling'
-      AND relationship = 'REQUIRES'
-    
-    UNION ALL
-    
-    SELECT 
-        cr.target_id,
-        pc.depth + 1,
-        array_append(pc.path, cr.source_id)
-    FROM concept_relationships cr
-    JOIN prereq_chain pc ON cr.source_id = pc.concept_id
-    WHERE cr.relationship = 'REQUIRES'
-      AND pc.depth < 3
-      AND NOT array_contains(pc.path, cr.target_id)
-)
-SELECT DISTINCT c.name, pc.depth
-FROM prereq_chain pc
-JOIN concepts c ON pc.concept_id = c.concept_id
-ORDER BY pc.depth, c.name;
+CREATE INDEX idx_skill_package ON skill(package_id);
 
--- Find different author perspectives on a topic
-SELECT 
-    authors[1] AS primary_author,
-    book_title,
-    chapter_title,
-    treatment,
-    pub_date,
-    summary
-FROM v_concept_chapters
-WHERE concept_id = 'data_warehouse_architecture'
-  AND treatment IN ('explain', 'deep_dive')
-ORDER BY pub_date DESC;
+CREATE TABLE skill_source (
+    skill_id     BIGINT   NOT NULL REFERENCES skill(skill_id),
+    source_type  VARCHAR  NOT NULL,
+    source_id    BIGINT   NOT NULL,
+    score        DOUBLE,
+    weight       DOUBLE   DEFAULT 0,
+    drop_reason  VARCHAR,
+    PRIMARY KEY (skill_id, source_type, source_id)
+);
 
--- Find concepts that co-occur in chapters (related topics)
-WITH my_chapters AS (
-    SELECT chapter_id FROM chapter_concepts WHERE concept_id = 'cdc'
-)
-SELECT 
-    c.name,
-    COUNT(*) AS co_occurrence_count
-FROM chapter_concepts cc
-JOIN concepts c ON cc.concept_id = c.concept_id
-WHERE cc.chapter_id IN (SELECT chapter_id FROM my_chapters)
-  AND cc.concept_id != 'cdc'
-GROUP BY c.name
-ORDER BY co_occurrence_count DESC
-LIMIT 10;
+CREATE TABLE skill_file (
+    file_id   BIGINT     PRIMARY KEY DEFAULT nextval('seq_skill_file_id'),
+    skill_id  BIGINT     NOT NULL REFERENCES skill(skill_id),
+    filename  VARCHAR    NOT NULL,
+    purpose   VARCHAR,
+    content   TEXT
+);
 
--- Learning path: what to read for a concept (ordered by prerequisites)
-WITH RECURSIVE learning_path AS (
-    SELECT 
-        'target_concept' AS concept_id,
-        0 AS level,
-        ARRAY['target_concept'] AS path
-    
-    UNION ALL
-    
-    SELECT 
-        cr.target_id,
-        lp.level + 1,
-        array_append(lp.path, cr.target_id)
-    FROM concept_relationships cr
-    JOIN learning_path lp ON cr.source_id = lp.concept_id
-    WHERE cr.relationship = 'REQUIRES'
-      AND lp.level < 5
-      AND NOT array_contains(lp.path, cr.target_id)
-)
-SELECT 
-    c.name,
-    lp.level AS learn_order,
-    (SELECT vcc.chapter_title || ' (' || vcc.book_title || ')'
-     FROM v_concept_chapters vcc
-     WHERE vcc.concept_id = lp.concept_id
-       AND vcc.treatment = 'deep_dive'
-     LIMIT 1) AS recommended_chapter
-FROM learning_path lp
-JOIN concepts c ON lp.concept_id = c.concept_id
-ORDER BY lp.level DESC;
+CREATE INDEX idx_skill_file_skill ON skill_file(skill_id);
 
--- Search across books and chapters (full text)
-SELECT 
-    b.title AS book_title,
-    ch.title AS chapter_title,
-    ch.summary
-FROM books b
-JOIN chapters ch ON b.book_id = ch.book_id
-WHERE b.title ILIKE '%data%warehouse%'
-   OR ch.title ILIKE '%dimensional%'
-   OR ch.summary ILIKE '%kimball%';
+CREATE TABLE skill_relation (
+    from_skill_id BIGINT   NOT NULL REFERENCES skill(skill_id),
+    to_skill_id   BIGINT   NOT NULL REFERENCES skill(skill_id),
+    relation_type VARCHAR  NOT NULL,
+    PRIMARY KEY (from_skill_id, to_skill_id, relation_type)
+);
 
--- Get pattern with all variations
-SELECT 
-    p.pattern_id,
-    p.name,
-    p.canonical_yaml,
-    pv.variation_id,
-    pv.name AS variation_name,
-    pv.when_to_use
-FROM patterns p
-LEFT JOIN pattern_variations pv ON p.pattern_id = pv.pattern_id
-WHERE p.pattern_id = 'healthcare.dimensional.fct_claim_line';
-*/
 
 -- ============================================================================
 -- END OF SCHEMA
