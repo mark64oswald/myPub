@@ -60,7 +60,7 @@ myPub extracts structure and knowledge from your ePub collection (~345 technical
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Claude Desktop / Code                       │
 ├─────────────────────────────────────────────────────────────────┤
@@ -82,12 +82,14 @@ myPub extracts structure and knowledge from your ePub collection (~345 technical
 ## Quick Start
 
 1. **Initialize the catalog database**
+
    ```bash
    cd ~/Developer/projects/myPub
    duckdb data/catalog.ddb < schemas/catalog.sql
    ```
 
 2. **Index your ePub collection**
+
    ```bash
    python scripts/index_books.py --source ~/Documents/ebooks --limit 10
    ```
@@ -97,13 +99,14 @@ myPub extracts structure and knowledge from your ePub collection (~345 technical
    - Or reference via project settings
 
 4. **Start querying**
-   ```
+
+   ```text
    You: "Explain Change Data Capture and show me which books cover it"
    ```
 
 ## Directory Structure
 
-```
+```text
 myPub/
 ├── README.md                 # This file
 ├── docs/                     # Documentation
@@ -137,16 +140,21 @@ myPub/
 ## Core Concepts
 
 ### Native-First Retrieval
+
 Instead of chunking books into vectors, we preserve author structure and load full chapters into Claude's context. Most chapters (4K-17K tokens) fit easily.
 
 ### Concept Graph
+
 Concepts are stored with relationships (REQUIRES, RELATED_TO, EXTENDS, CONTRASTS_WITH) enabling:
+
 - Prerequisite discovery
 - Learning path generation
 - Related topic exploration
 
 ### Pattern Library
+
 Reusable patterns extracted from books, with:
+
 - Canonical implementations
 - Documented variations
 - Decision frameworks for selection
@@ -154,7 +162,7 @@ Reusable patterns extracted from books, with:
 ## Key Commands
 
 | Command | Description |
-|---------|-------------|
+| ------- | ----------- |
 | `/kb-search <topic>` | Find chapters and concepts |
 | `/kb-compare <concept>` | Compare author perspectives |
 | `/kb-prereqs <concept>` | Show learning prerequisites |
@@ -169,24 +177,27 @@ Reusable patterns extracted from books, with:
 This project has default paths that you'll need to update for your environment:
 
 | Setting | Default Value | Where to Change |
-|---------|---------------|-----------------|
+| ------- | ------------- | --------------- |
 | ePub library location | `~/Documents/ebooks` | `scripts/index_books.py` → `DEFAULT_SOURCE` |
 | Catalog database | `~/Developer/projects/myPub/data/catalog.ddb` | All scripts → `DEFAULT_CATALOG` |
 
 **Files with configurable paths:**
 
 1. **`scripts/index_books.py`** (lines 20-21)
+
    ```python
    DEFAULT_SOURCE = os.path.expanduser("~/Documents/ebooks")
    DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
    ```
 
 2. **`scripts/extract_concepts.py`** (line 18)
+
    ```python
    DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
    ```
 
 3. **`scripts/generate_skill.py`** (lines 19-20)
+
    ```python
    DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
    DEFAULT_OUTPUT = os.path.expanduser("~/Developer/projects/myPub/skills/generated")
@@ -195,6 +206,7 @@ This project has default paths that you'll need to update for your environment:
 4. **`CLAUDE.md`** — Update the paths in the "Key Locations" table for Claude Code
 
 **Note:** You can also override paths via command-line arguments without editing files:
+
 ```bash
 python scripts/index_books.py --source /your/ebooks/path --catalog /your/catalog/path.ddb
 ```
@@ -202,6 +214,7 @@ python scripts/index_books.py --source /your/ebooks/path --catalog /your/catalog
 ### Claude Desktop / Claude Code Setup
 
 **MCP Server for ebook access** — Add to your MCP config:
+
 ```json
 {
   "ebook-mcp": {
@@ -212,6 +225,7 @@ python scripts/index_books.py --source /your/ebooks/path --catalog /your/catalog
 ```
 
 **Optional: DuckDB MCP for catalog queries:**
+
 ```json
 {
   "mypub-catalog": {
