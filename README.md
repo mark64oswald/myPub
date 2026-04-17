@@ -10,7 +10,7 @@ catalog, introduces live doc sources (Context7, DeepWiki, GitHub MCP) alongside
 books, and adds a Skills Factory that generates whole Claude Skills packages.
 
 - **Architecture doc:** [docs/mypub-v2-architecture.md](docs/mypub-v2-architecture.md) — full system design, data model, ranking, refresh strategy
-- **Execution plan:** [docs/EXECUTION-PLAN.md](docs/EXECUTION-PLAN.md) — phased roadmap
+- **Execution plan:** [docs/mypub-v2-execution-plan.md](docs/mypub-v2-execution-plan.md) — phased roadmap
 
 v1 on `main` is stable and unaffected. The v1 catalog is preserved at
 `data/catalog_v1_backup.ddb` on the branch; `data/catalog.ddb` was

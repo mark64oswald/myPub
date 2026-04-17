@@ -41,6 +41,7 @@ CREATE SEQUENCE seq_procedure_id                 START 1;
 CREATE SEQUENCE seq_skill_package_id             START 1;
 CREATE SEQUENCE seq_skill_id                     START 1;
 CREATE SEQUENCE seq_skill_file_id                START 1;
+CREATE SEQUENCE seq_discovery_log_id             START 1;
 
 
 -- ============================================================================
@@ -328,6 +329,30 @@ CREATE TABLE skill_relation (
     relation_type VARCHAR  NOT NULL,
     PRIMARY KEY (from_skill_id, to_skill_id, relation_type)
 );
+
+
+-- ============================================================================
+-- AUTO-DISCOVERY (§5.4 — Phase 4.5b landing zone)
+-- ============================================================================
+
+-- Records every probe attempt against Context7 / DeepWiki / GitHub when a
+-- query term fails to resolve to an existing concept. Used to tune the
+-- confidence gate and to audit which auto-ingestions have happened.
+CREATE TABLE discovery_log (
+    log_id          BIGINT     PRIMARY KEY DEFAULT nextval('seq_discovery_log_id'),
+    query_term      VARCHAR    NOT NULL,
+    probe_source    VARCHAR,                       -- 'context7' | 'deepwiki' | 'github'
+    probe_result    VARCHAR,                       -- 'match' | 'ambiguous' | 'not_found'
+    match_count     INTEGER,
+    top_match_name  VARCHAR,
+    top_match_score DOUBLE,
+    action_taken    VARCHAR,                       -- 'ingested' | 'asked_user' | 'discarded'
+    doc_source_id   BIGINT     REFERENCES doc_source(doc_source_id),
+    created_at      TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_discovery_log_term    ON discovery_log(query_term);
+CREATE INDEX idx_discovery_log_created ON discovery_log(created_at);
 
 
 -- ============================================================================

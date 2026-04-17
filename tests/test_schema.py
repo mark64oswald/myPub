@@ -40,6 +40,7 @@ EXPECTED_TABLES = {
     "skill_source",
     "skill_file",
     "skill_relation",
+    "discovery_log",
 }
 
 EXPECTED_COLUMNS = {
@@ -84,6 +85,9 @@ EXPECTED_COLUMNS = {
                      "drop_reason"},
     "skill_file": {"file_id", "skill_id", "filename", "purpose", "content"},
     "skill_relation": {"from_skill_id", "to_skill_id", "relation_type"},
+    "discovery_log": {"log_id", "query_term", "probe_source", "probe_result",
+                      "match_count", "top_match_name", "top_match_score",
+                      "action_taken", "doc_source_id", "created_at"},
 }
 
 EMBEDDING_COLUMNS = [

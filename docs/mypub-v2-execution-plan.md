@@ -258,6 +258,19 @@ Update README.md:
 
 🔀 Commit: `docs: update README for Phase 1 substrate upgrade`
 
+### ⏸️ Phase 1 Usage Checkpoint
+
+**Before starting Phase 2, spend 3–5 sessions using the substrate.**
+
+Try real queries across all three modalities. Keep notes:
+- Does VSS find things FTS missed? (It should — that's the point.)
+- Does DuckPGQ traversal produce useful prerequisite chains?
+- Are there topics where all three modalities agree vs. disagree?
+- Which queries feel "right" and which feel off?
+
+These notes feed directly into extraction prompt design in Phase 2.
+If the substrate feels broken, fix it before layering extraction on top.
+
 ---
 
 ## Phase 2: Automated Extraction + Entity Resolution (week 3–5)
@@ -619,32 +632,113 @@ come together — verify that both appear in results.
 
 🔀 Commit: `feat(phase4): two-mode ranking engine with weight profiles`
 
+### Prompt 4.5b — Auto-discovery module
+
+```
+Build mcp-servers/kb-mcp/discovery.py — the auto-discovery module from the
+architecture doc §5.4.
+
+Implement:
+1. ConceptGapDetector — after hybrid retrieval, identify query terms with no
+   matches across FTS, VSS, or resolution. Return a list of candidate unknowns.
+2. SourceProber — for each candidate, probe in priority order:
+   - Context7 resolve-library-id (covers doc sites AND indexed OSS)
+   - DeepWiki read_wiki_structure (any public GitHub repo)
+   - GitHub MCP search (last resort)
+3. ConfidenceGate — only proceed if the probe returns a clear match:
+   - Single high-confidence result → auto-register with conservative authority
+   - Multiple ambiguous results → return disambiguation prompt for the user
+   - No results → return "not found" cleanly
+4. InlineIngester — for confident matches, run the full snapshot ingestion
+   pipeline (§6.2) synchronously, then re-run hybrid retrieval with the
+   new content included.
+
+CRITICAL: The confidence gate should NEVER silently ingest ambiguous content.
+When in doubt, ask the user. Log every discovery event to discovery_log:
+probe_source, probe_result, match_count, action_taken.
+
+Auto-discovered sources get conservative authority_score:
+- Context7: 0.60 (vs 0.90 for explicit)
+- DeepWiki: 0.50 (vs 0.75 for explicit)
+- GitHub raw: 0.40 (vs 0.65 for explicit)
+
+Test sequence:
+1. Query "how does FastMCP handle tool registration?" — FastMCP should already
+   be registered (explicit). Verify no auto-discovery triggers.
+2. Query "how does Zippy handle CDC?" — assuming no Zippy source exists, verify:
+   - Gap detection identifies "Zippy" as unknown
+   - Probe finds it (or simulates finding it with a known repo)
+   - Confidence gate passes (clear match)
+   - Inline ingestion runs
+   - Re-retrieval combines Zippy docs with book CDC content
+   - User sees: "I just indexed Zippy's docs. Searching again..."
+3. Query "how does spark handle X?" — verify disambiguation when multiple
+   spark-related repos match: user is asked, not auto-ingested.
+4. Query "how does xyznonexistent123 work?" — verify clean "not found" response.
+```
+
+**Validate:**
+- Confident matches auto-ingest correctly
+- Ambiguous matches prompt user for disambiguation
+- Not-found cases degrade gracefully to book-only results
+- discovery_log records every probe event
+- Auto-discovered sources have conservative authority scores
+- Re-retrieval after discovery includes the new content
+
+🔀 Commit: `feat(phase4): auto-discovery with confidence gate and inline ingestion`
+
 ### Prompt 4.6 — Phase 4 eval set
 
 ```
 Create tests/eval/retrieval_eval.py that:
-1. Loads test queries from tests/eval/retrieval_queries.json — 20 queries
-   spanning topics with and without doc sources
+1. Loads test queries from tests/eval/retrieval_queries.json — 25 queries
+   spanning topics with and without doc sources, including:
+   - 5 queries where books are outdated and docs should win
+   - 5 queries about technologies not yet in the KB (test auto-discovery)
+   - 5 queries with ambiguous terms (test disambiguation)
+   - 10 queries about well-known topics (baseline quality)
 2. For each query, runs hybrid retrieval + ranking in interactive mode
 3. Checks:
    - Does the top result come from the most current source?
    - When books and docs disagree, is the conflict flagged?
    - For queries with no doc source, does the system degrade gracefully?
-4. Reports a retrieval quality score
+   - For auto-discovery queries, did discovery fire and produce useful results?
+   - For ambiguous queries, did the system ask rather than guess?
+4. Reports a retrieval quality score and a discovery accuracy score
 
-Build the test query set manually — include at least 5 queries where you know
-books are outdated and docs should win.
-
-Run the eval. Establish baseline. Adjust ranking weights if needed using the
-autoresearch keep/revert loop.
+Run the eval. Establish baseline. Adjust ranking weights and discovery
+confidence thresholds if needed using the autoresearch keep/revert loop.
 ```
 
 **Validate:**
 - Eval runs successfully
-- Baseline metrics recorded
-- At least one weight adjustment iteration completed
+- Baseline metrics recorded for both retrieval quality and discovery accuracy
+- At least one weight/threshold adjustment iteration completed
 
 🔀 Commit: `feat(phase4): retrieval eval set with ranking weight baseline`
+
+### ⏸️ Phase 4 Usage Checkpoint — CRITICAL
+
+**Before starting Phase 4b or Phase 5, use the system for 1–2 weeks of real Q&A work.**
+
+This is the most important checkpoint. You now have:
+- Book content with semantic + graph retrieval
+- Live doc content from three sources with section-level granularity
+- Auto-discovery for technologies not in your KB
+- Two-mode ranking with conflict surfacing
+
+Use it daily. Ask real questions about your actual work. Keep notes:
+- Does the ranking feel right? Which weight profile needs adjustment?
+- Are the doc sections the right granularity, or too coarse/fine?
+- How often does auto-discovery fire? Is it useful or noisy?
+- When conflicts surface between books and docs, are they real conflicts?
+- Are there topics where the system falls short?
+
+These notes become the tuning input for Phase 4b (refresh priorities are
+driven by actual query patterns) and the foundation for Phase 5 (Skills
+Factory quality depends entirely on the retrieval + ranking being solid).
+
+**Do not build the Skills Factory on a retrieval layer you haven't lived with.**
 
 ---
 

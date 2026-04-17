@@ -257,6 +257,29 @@ Combines ranked results from books and doc snapshots. Behavior differs by mode:
 - **Interactive:** presents multiple perspectives with explicit scores and conflict flags.
 - **Generation:** applies the selected strategy (§8.3) and produces consolidated content with silent provenance.
 
+#### Auto-Discovery *(new)*
+When the hybrid retriever encounters a query term that doesn't resolve to any existing concept or doc source, auto-discovery probes the live doc source stack to find and ingest relevant content inline. This is how the knowledge base grows organically from actual use — you don't have to know in advance which technologies you'll ask about.
+
+**Mechanism:**
+
+1. **Concept gap detection.** After hybrid retrieval, identify query terms with no FTS match, no VSS match above threshold, and no resolution match. These are candidate unknown terms.
+2. **Live source probe.** For each candidate, try the doc source stack in priority order:
+   - Context7 `resolve-library-id` — covers both documentation sites (Databricks, AWS, PostgreSQL) and indexed OSS repos. Context7's library index spans thousands of technologies, so this catches vendor docs and popular OSS alike.
+   - DeepWiki `read_wiki_structure` — covers any public GitHub repo, even those Context7 hasn't indexed. For OSS with thin or absent Context7 coverage.
+   - GitHub MCP file search — last resort for repos neither service has processed.
+3. **Confidence gate.** Only proceed if the probe returns a clear, unambiguous match. If multiple candidates match (e.g., "spark" matches Apache Spark, spark-nlp, and three other repos), the system does **not** guess — it asks the user: *"I found several possible sources for 'spark' — did you mean Apache Spark (data processing), spark-nlp (NLP library), or something else?"* The default for ambiguity is to ask, not to ingest. This keeps the knowledge base clean.
+4. **Auto-register and ingest.** For a confident match:
+   - Create `doc_source` with conservative defaults: `authority_score` = 0.60 (Context7) / 0.50 (DeepWiki) / 0.40 (GitHub raw) — lower than explicitly registered sources until the content proves its value.
+   - Run the full snapshot ingestion pipeline (§6.2): fetch → persist → sectionize → embed → index → extract with resolution → alignment.
+   - Notify the user: *"I just indexed Zippy's documentation. Let me search again with this new content..."*
+5. **Re-run retrieval.** With the freshly-ingested content now in the corpus, re-run hybrid retrieval. The new doc sections participate in ranking alongside book chapters, weighted by their conservative authority score.
+
+**What doesn't get ingested:** If the confidence gate fails (ambiguous match), or the probe returns nothing, or the probed content is too thin to extract meaningful concepts from (<100 words of actual content after sectionizing), the system tells the user what happened and moves on with book-only results. The knowledge base stays clean — no junk entries from speculative ingestion.
+
+**Latency.** First-time discovery adds 10–30 seconds (dominated by extraction). The user sees a status message explaining what's happening. Every subsequent query about the same technology is instant. Auto-discovered sources participate in proactive refresh (§6.6) from that point forward, so they stay current.
+
+**Growth trajectory.** Over weeks of use, the knowledge base grows to cover every technology you actually work with, without you ever having to configure it. Explicitly registered sources (your top 10–20, seeded during setup) provide high-authority anchors; auto-discovered sources fill in around them at lower authority, earning higher scores as you query them and the system validates their content.
+
 ### 5.5 Applications
 
 #### Claude Code *(new — replaces v1 Claude Desktop setup)*
@@ -319,10 +342,11 @@ The flow for KB assistant queries — surfaces conflicts, lets Claude reason wit
 
 1. **Accept query + current context** — user question plus any prior conversation context.
 2. **Hybrid retrieval** — parallel fan-out to FTS, VSS, DuckPGQ across the unified corpus of chapters and snapshots. A VSS hit on a recent Context7 snapshot is weighted the same, in principle, as a VSS hit on a chapter — the ranking stage handles source-type weighting.
-3. **Opportunistic refresh** — for concept hits with doc sources whose latest snapshot is beyond TTL, trigger an async refresh (§6.2). Use the currently-cached snapshot for this query; the refresh benefits the next one.
-4. **Score candidates** — ranking engine runs in interactive mode (§8.1).
-5. **Merge with conflict surfacing** — return a structured result object with `primary`, `corroborations`, and `conflicts` fields.
-6. **Return context package** — ranked, cited, annotated context ready for Claude to synthesize into a nuanced response.
+3. **Auto-discovery check** — if the query contains terms that produced no matches across any modality, trigger the auto-discovery probe (§5.4). If a confident match is found, ingest inline and re-run retrieval. If ambiguous, ask the user to disambiguate. If nothing found, proceed with book-only results. The user sees a status message during discovery: *"I don't have Zippy in my knowledge base yet — let me pull its docs and index them..."*
+4. **Opportunistic refresh** — for concept hits with doc sources whose latest snapshot is beyond TTL, trigger an async refresh (§6.2). Use the currently-cached snapshot for this query; the refresh benefits the next one.
+5. **Score candidates** — ranking engine runs in interactive mode (§8.1).
+6. **Merge with conflict surfacing** — return a structured result object with `primary`, `corroborations`, and `conflicts` fields.
+7. **Return context package** — ranked, cited, annotated context ready for Claude to synthesize into a nuanced response.
 
 ### 6.4 Skills Factory Pipeline (Generation Mode)
 
@@ -550,6 +574,20 @@ CREATE TABLE concept_query_log (
 -- Concept gains rolling frequency counters (nightly-updated from the log)
 -- ALTER TABLE concept ADD COLUMN query_count     BIGINT DEFAULT 0;
 -- ALTER TABLE concept ADD COLUMN last_queried_at TIMESTAMP;
+
+-- NEW in v2: auto-discovery event tracking (supports confidence gate tuning)
+CREATE TABLE discovery_log (
+    log_id          BIGINT PRIMARY KEY,
+    query_term      VARCHAR,       -- the unresolved term that triggered discovery
+    probe_source    VARCHAR,       -- 'context7', 'deepwiki', 'github'
+    probe_result    VARCHAR,       -- 'match', 'ambiguous', 'not_found'
+    match_count     INTEGER,       -- number of candidates returned
+    top_match_name  VARCHAR,       -- best candidate name (if any)
+    top_match_score DOUBLE,        -- confidence score from the probe
+    action_taken    VARCHAR,       -- 'ingested', 'asked_user', 'discarded'
+    doc_source_id   BIGINT,        -- FK to doc_source if ingested, NULL otherwise
+    created_at      TIMESTAMP
+);
 
 -- NEW in v2: Skills Factory
 CREATE TABLE skill_package (
@@ -815,6 +853,7 @@ mypub/
 │   │   ├── retrievers.py       # Hybrid retrieval logic
 │   │   ├── ranking.py          # Two-mode ranking engine
 │   │   ├── resolution.py       # Entity resolution (called by extractors)
+│   │   ├── discovery.py        # Auto-discovery: probe + confidence gate + inline ingest
 │   │   ├── sectionizer.py      # Markdown/DeepWiki/Context7 → doc_section tree
 │   │   ├── tiering.py          # Priority tier assignment from query signals
 │   │   └── skills_factory.py   # Skills Factory pipeline
@@ -960,6 +999,7 @@ Because all the heavy LLM work runs inside Claude Code on your Max subscription,
 | Procedure extraction | — | ✓ (books + live docs) |
 | Currency via live docs | — | ✓ (Context7 + DeepWiki + GitHub MCP) |
 | OSS library coverage | Book-limited | Broad (any public GitHub repo) |
+| Auto-discovery of new sources | — | ✓ (inline probe + ingest on first query) |
 | Proactive doc refresh | — | ✓ (tiered LaunchAgent, Hot/Warm/Cool) |
 | Multi-criteria ranking | — | ✓ (two-mode) |
 | Conflict surfacing (interactive) | — | ✓ |
@@ -1039,6 +1079,10 @@ Evaluation set curation. Weight profile tuning against evaluation. Schema refine
 
 **LaunchAgent reliability.** macOS is reasonably good about running scheduled LaunchAgents but not perfect — laptop closed, machine asleep, permissions revoked after OS updates. Refresh failures should log loudly and show up in `/kb-refresh-status`. Consider a missed-run catchup: if the last successful refresh is >36 hours old, run the Hot tier on next invocation regardless of schedule.
 
+**Auto-discovery confidence tuning.** The confidence gate — "only ingest if the probe returns a clear match" — needs careful calibration. Context7's `resolve-library-id` returns multiple candidates ranked by relevance; the threshold for "clear match" (e.g., top result score >0.8, second result score <0.5) will need tuning against real queries. Track discovery events (probed, ingested, asked user, discarded) in a log table to build an eval set for the confidence gate. The bias should always be toward asking the user rather than guessing wrong.
+
+**Auto-discovery scope management.** Over months of use, auto-discovered sources accumulate. Some will be one-off queries that never get touched again. Build a cleanup mechanism: sources with zero queries in 90 days and no concept links used by other sources can be proposed for removal via a `/kb-cleanup` command. Don't auto-delete — let the user decide.
+
 **HNSW persistence.** Still experimental in DuckDB. If unstable, fall back to in-memory indexes rebuilt on MCP server startup. For 345 books this is minutes, acceptable for development; revisit if cold start becomes annoying.
 
 **Embedding model choice.** `sentence-transformers/all-MiniLM-L6-v2` is a reasonable default (fast, 384-dim, decent quality). Higher-quality embeddings improve semantic retrieval but at storage cost.
@@ -1110,6 +1154,7 @@ The architectural bets are:
 - **Symmetric section-level granularity.** A `doc_section` is the docs-side equivalent of a book chapter — coherent text with its own embedding, FTS entry, and typed concept references. Retrieval and ranking don't need to know whether evidence came from a book or from a Zippy README section.
 - **Entity resolution is the load-bearing integration mechanism** — candidates from both books and docs resolve to shared concept nodes via embedding similarity, keeping the graph cohesive and enabling synthesis where new OSS libraries slot into decades of accumulated conceptual framing.
 - **Context7 + DeepWiki + GitHub as a layered doc-source stack** closes the currency gap with broad OSS coverage — vendor docs, indexed OSS, AI-generated wiki docs for any public repo, and raw file fallback. All local or free-hosted, no cloud deployment required.
+- **Auto-discovery** lets the knowledge base grow organically from use. Query an unknown technology and the system probes, ingests, and integrates it inline — with a confidence gate that asks the user to disambiguate rather than ingesting uncertain content. Over time, the KB converges on exactly the technologies you actually work with.
 - **Proactive tiered refresh** keeps frequently-used doc content pre-warmed overnight so interactive queries don't pay the extraction latency. Hot sources refresh daily, Warm weekly, Cool monthly — automatically, based on actual query patterns, with user override.
 - **Two-mode ranking** — conflicts surfaced interactively, resolved silently for generation — keeps the KB assistant nuanced and the Skills Factory clean.
 - **Cloud deployment is a future option, not a current requirement.**
