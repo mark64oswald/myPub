@@ -154,9 +154,14 @@ def test_identity_primary_keys(conn):
         assert dtype.upper() == "BIGINT", f"{table}.{col} is {dtype}, expected BIGINT"
 
 
-def test_tables_start_empty(conn):
-    """Clean-slate migration: every v2 table begins empty."""
-    for table in EXPECTED_TABLES:
+def test_not_yet_populated_tables_are_empty(conn):
+    """Tables populated by later phases should still be empty in Phase 1."""
+    # Phase 1 populates author/book/book_author/chapter/chapter_embedding.
+    # Everything else lands in Phase 2 (concepts), 3 (docs), or 5 (skills).
+    phase1_populated = {
+        "author", "book", "book_author", "chapter", "chapter_embedding",
+    }
+    for table in EXPECTED_TABLES - phase1_populated:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
         assert count == 0, f"{table} is not empty (count={count})"
 

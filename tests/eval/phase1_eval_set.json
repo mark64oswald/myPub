@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "description": "Phase 1 integration eval: tests that FTS, VSS, and graph traversal each find relevant chapters for a given topic, and that together they cover more ground than any one alone.",
+  "topics": [
+    {
+      "topic": "star schema",
+      "fts_query": "star schema",
+      "vss_query": "what is a star schema and when should I use it",
+      "graph_seed_author": "Ralph Kimball",
+      "min_hits_per_modality": 3,
+      "note": "Canonical dimensional-modeling concept. Kimball's books should dominate."
+    },
+    {
+      "topic": "change data capture",
+      "fts_query": "change data capture",
+      "vss_query": "how to implement change data capture",
+      "graph_seed_author": "Adam Bellemare",
+      "min_hits_per_modality": 3,
+      "note": "Topic spans multiple books (Iceberg, Event-Driven, Data Contracts) — good diversity test."
+    },
+    {
+      "topic": "kafka streams",
+      "fts_query": "kafka streams",
+      "vss_query": "building stateful stream processing applications with kafka streams",
+      "graph_seed_author": "Mitch Seymour",
+      "min_hits_per_modality": 3,
+      "note": "Technology-specific topic. VSS query is tightened to match intent — a general 'event processing with kafka' wording drifts to unrelated intro chapters of other Kafka books."
+    }
+  ]
+}
