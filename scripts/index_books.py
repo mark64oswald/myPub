@@ -218,11 +218,8 @@ def _insert_book(conn: duckdb.DuckDBPyConnection, filepath: Path, meta: dict) ->
 def _delete_existing_book(conn: duckdb.DuckDBPyConnection, filepath: Path) -> None:
     """Remove any previously indexed rows for the given source path.
 
-    chapter has a self-referential FK on parent_chapter_id. DuckDB 1.5 doesn't
-    support ON DELETE CASCADE/SET NULL, and its per-row FK checker blocks both
-    a bulk DELETE and an UPDATE-to-NULL. Workaround: iteratively delete the
-    current set of leaf chapters (rows no-one references as a parent) until
-    the whole book is gone.
+    chapter.parent_chapter_id is a logical self-reference without an FK
+    (see schema notes), so a bulk DELETE works without ordering games.
     """
     row = conn.execute(
         "SELECT book_id FROM book WHERE source_path = ?", [str(filepath)]
@@ -230,32 +227,14 @@ def _delete_existing_book(conn: duckdb.DuckDBPyConnection, filepath: Path) -> No
     if not row:
         return
     book_id = row[0]
-
-    while True:
-        before = conn.execute(
-            "SELECT COUNT(*) FROM chapter WHERE book_id = ?", [book_id]
-        ).fetchone()[0]
-        if before == 0:
-            break
-        conn.execute(
-            """
-            DELETE FROM chapter
-             WHERE book_id = ?
-               AND chapter_id NOT IN (
-                   SELECT parent_chapter_id FROM chapter
-                    WHERE book_id = ? AND parent_chapter_id IS NOT NULL
-               )
-            """,
-            [book_id, book_id],
-        )
-        after = conn.execute(
-            "SELECT COUNT(*) FROM chapter WHERE book_id = ?", [book_id]
-        ).fetchone()[0]
-        if after == before:
-            raise RuntimeError(
-                f"Chapter deletion stuck at {after} rows for book_id={book_id}"
-            )
-
+    # Delete anything that FKs into chapter first; currently only
+    # chapter_embedding does. Ordered so children land before parents.
+    conn.execute(
+        "DELETE FROM chapter_embedding WHERE chapter_id IN "
+        "(SELECT chapter_id FROM chapter WHERE book_id = ?)",
+        [book_id],
+    )
+    conn.execute("DELETE FROM chapter WHERE book_id = ?", [book_id])
     conn.execute("DELETE FROM book_author WHERE book_id = ?", [book_id])
     conn.execute("DELETE FROM book WHERE book_id = ?", [book_id])
 

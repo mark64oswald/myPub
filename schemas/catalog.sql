@@ -9,7 +9,15 @@
 --   * Singular table names (book, chapter, concept, …).
 --   * BIGINT primary keys backed by dedicated SEQUENCE objects
 --     (DuckDB 1.5 does not support GENERATED ... AS IDENTITY).
---   * Embeddings are FLOAT[384] (sentence-transformers/all-MiniLM-L6-v2).
+--   * Embeddings live in side tables (chapter_embedding, concept_embedding,
+--     doc_snapshot_embedding, doc_section_embedding) keyed 1:1 by the
+--     entity's PK. This departs from arch doc §7.1 which inlines the
+--     embedding column; the reason is a DuckDB 1.5.0 bug — UPDATE on a
+--     FLOAT[N] column fails with a spurious FK violation if the row is
+--     referenced by any inbound FK. Side tables sidestep it (we INSERT
+--     rather than UPDATE) and are arguably cleaner: embeddings are
+--     derived data, separable from source metadata, and the model
+--     backing them can change without touching the primary tables.
 --   * Polymorphic provenance uses (source_type, source_id) pairs; these
 --     cannot be enforced as DuckDB FKs and are validated in application code.
 -- ============================================================================
@@ -72,17 +80,26 @@ CREATE TABLE chapter (
     chapter_id        BIGINT     PRIMARY KEY DEFAULT nextval('seq_chapter_id'),
     book_id           BIGINT     NOT NULL REFERENCES book(book_id),
     chapter_num       INTEGER,
-    parent_chapter_id BIGINT     REFERENCES chapter(chapter_id),
+    parent_chapter_id BIGINT,  -- logical self-ref; FK omitted (DuckDB 1.5 per-row
+                               -- checker mis-blocks UPDATE/DELETE even when the
+                               -- new value is NULL). Application enforces.
     title             VARCHAR,
     href              VARCHAR,
     content           TEXT,
     token_count       INTEGER,
-    embedding         FLOAT[384],
     indexed_at        TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_chapter_book   ON chapter(book_id);
 CREATE INDEX idx_chapter_parent ON chapter(parent_chapter_id);
+
+-- Chapter embeddings (one-to-one with chapter, populated by prompt 1.3).
+CREATE TABLE chapter_embedding (
+    chapter_id BIGINT     PRIMARY KEY REFERENCES chapter(chapter_id),
+    embedding  FLOAT[384] NOT NULL,
+    model      VARCHAR    NOT NULL DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
+    created_at TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
 
 
 -- ============================================================================
@@ -95,7 +112,6 @@ CREATE TABLE concept (
     concept_type     VARCHAR,
     description      TEXT,
     domain           VARCHAR,
-    embedding        FLOAT[384],
     pending_review   BOOLEAN    DEFAULT FALSE,
     query_count      BIGINT     DEFAULT 0,
     last_queried_at  TIMESTAMP,
@@ -106,6 +122,14 @@ CREATE TABLE concept (
 
 CREATE INDEX idx_concept_domain ON concept(domain);
 CREATE INDEX idx_concept_type   ON concept(concept_type);
+
+-- Concept embeddings (one-to-one with concept).
+CREATE TABLE concept_embedding (
+    concept_id BIGINT     PRIMARY KEY REFERENCES concept(concept_id),
+    embedding  FLOAT[384] NOT NULL,
+    model      VARCHAR    NOT NULL DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
+    created_at TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE concept_alias (
     alias_id    BIGINT   PRIMARY KEY DEFAULT nextval('seq_concept_alias_id'),
@@ -186,26 +210,39 @@ CREATE TABLE doc_snapshot (
     url            VARCHAR,
     retrieved_at   TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
     content_hash   VARCHAR,
-    content        TEXT,
-    embedding      FLOAT[384]
+    content        TEXT
 );
 
 CREATE INDEX idx_doc_snapshot_source ON doc_snapshot(doc_source_id);
 CREATE INDEX idx_doc_snapshot_hash   ON doc_snapshot(content_hash);
 
+CREATE TABLE doc_snapshot_embedding (
+    snapshot_id BIGINT     PRIMARY KEY REFERENCES doc_snapshot(snapshot_id),
+    embedding   FLOAT[384] NOT NULL,
+    model       VARCHAR    NOT NULL DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
+    created_at  TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE doc_section (
     doc_section_id BIGINT      PRIMARY KEY DEFAULT nextval('seq_doc_section_id'),
     snapshot_id    BIGINT      NOT NULL REFERENCES doc_snapshot(snapshot_id),
-    parent_id      BIGINT      REFERENCES doc_section(doc_section_id),
+    parent_id      BIGINT,  -- logical self-ref; FK omitted (same DuckDB 1.5
+                            -- limitation as chapter.parent_chapter_id).
     heading_level  INTEGER,
     heading_text   VARCHAR,
     ordinal        INTEGER,
-    content        TEXT,
-    embedding      FLOAT[384]
+    content        TEXT
 );
 
 CREATE INDEX idx_doc_section_snapshot ON doc_section(snapshot_id);
 CREATE INDEX idx_doc_section_parent   ON doc_section(parent_id);
+
+CREATE TABLE doc_section_embedding (
+    doc_section_id BIGINT     PRIMARY KEY REFERENCES doc_section(doc_section_id),
+    embedding      FLOAT[384] NOT NULL,
+    model          VARCHAR    NOT NULL DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
+    created_at     TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE concept_doc_link (
     concept_id    BIGINT     NOT NULL REFERENCES concept(concept_id),
