@@ -5,15 +5,55 @@ A Claude-native knowledge base system that transforms a collection of technical 
 ## v2 Development
 
 Active v2 work lives on the `v2-substrate` branch. v2 layers semantic (HNSW/VSS),
-full-text (BM25/FTS), and graph (DuckPGQ) retrieval on top of the existing DuckDB
+full-text (BM25/FTS), and graph (DuckPGQ) retrieval on top of a cleaned-up DuckDB
 catalog, introduces live doc sources (Context7, DeepWiki, GitHub MCP) alongside
 books, and adds a Skills Factory that generates whole Claude Skills packages.
 
 - **Architecture doc:** [docs/mypub-v2-architecture.md](docs/mypub-v2-architecture.md) — full system design, data model, ranking, refresh strategy
 - **Execution plan:** [docs/EXECUTION-PLAN.md](docs/EXECUTION-PLAN.md) — phased roadmap
 
-v1 on `main` is stable and unaffected. The existing `data/catalog.ddb` is not
-modified by branch checkout — it will be evolved in-place during Phase 1.
+v1 on `main` is stable and unaffected. The v1 catalog is preserved at
+`data/catalog_v1_backup.ddb` on the branch; `data/catalog.ddb` was
+rebuilt from scratch during Phase 1.
+
+### Phase 1 status: substrate complete
+
+Phase 1 (substrate upgrade) is done on `v2-substrate`. Results:
+
+- **Schema** — singular-named v2 tables with BIGINT surrogate PKs (author, book,
+  book_author, chapter, concept, concept_relation, concept_alias,
+  concept_resolution_queue, concept_query_log, concept_doc_link, doc_source,
+  doc_snapshot, doc_section, procedure, skill_package, skill, skill_source,
+  skill_file, skill_relation) plus side tables for each FLOAT[384] embedding.
+- **Corpus** — 541 books / 113,165 chapters / 112,968 with content indexed
+  from `~/Documents/eBooks`.
+- **FTS (BM25)** — Porter-stemmed index on `chapter.content`; keyword search
+  returns the right textbook sources ("dimensional modeling" → Kimball).
+- **VSS (HNSW, cosine)** — 384-dim `sentence-transformers/all-MiniLM-L6-v2`
+  embeddings on every chapter with content; semantic search returns topically
+  relevant chapters across multiple books.
+- **DuckPGQ property graph** — `mypub` graph with author/book/chapter vertex
+  tables and wrote/book_contains/concept_relates_to/… edge labels. Concept
+  and doc edges are stubbed for Phase 2.
+- **Tests** — 40 passing: 28 schema, 12 integration (FTS × VSS × graph on
+  3 seed topics with overlap/divergence assertions).
+
+Known DuckDB-version-specific workarounds (encoded in schema comments and
+scripts):
+
+- Pinned to **duckdb == 1.5.0**: DuckPGQ community extension is absent on 1.5.2
+  and broken on 1.5.1.
+- Embeddings live in side tables (`chapter_embedding`, etc.) because DuckDB 1.5
+  fails with a spurious FK violation on `UPDATE … SET <FLOAT[N] column>` for any
+  row with inbound FK references.
+- Self-referential FKs (`chapter.parent_chapter_id`, `doc_section.parent_id`)
+  are declared as plain `BIGINT` columns with application-enforced integrity;
+  the same bug mis-blocks UPDATE/DELETE on parent rows.
+- `SET hnsw_enable_experimental_persistence = true` is required before any
+  HNSW index on a file-backed database.
+- DuckPGQ edge-table `LABEL`s must be globally unique across the graph and
+  lowercase (Book/Edge collide with reserved tokens), and its parser
+  extension can't handle `--` comments before `DROP/CREATE PROPERTY GRAPH`.
 
 ### Dev environment setup
 
@@ -28,8 +68,42 @@ python3 -m venv .venv
 ```
 
 Dependencies are declared in [`pyproject.toml`](pyproject.toml): `duckdb`,
-`sentence-transformers`, `fastmcp`, `markdown-it-py`, `pydantic`, `httpx`, and
-`pytest` (dev extra).
+`sentence-transformers`, `fastmcp`, `markdown-it-py`, `pydantic`, `httpx`,
+`ebooklib`, `beautifulsoup4`, `tiktoken`, and `pytest` (dev extra).
+
+### Rebuilding the substrate from scratch
+
+The scripts are idempotent and resumable. A full cold start:
+
+```bash
+# 1. Create the v2 schema (writes a backup first).
+.venv/bin/python3 scripts/migrate_v2_schema.py
+
+# 2. Install and smoke-test extensions.
+.venv/bin/python3 scripts/install_extensions.py
+
+# 3. Index ePubs (~6 min for 541 books).
+.venv/bin/python3 scripts/index_books.py
+
+# 4. Generate chapter embeddings (~55 min on Apple-silicon MPS).
+.venv/bin/python3 scripts/generate_embeddings.py
+
+# 5. Build FTS and VSS indexes.
+.venv/bin/python3 scripts/build_fts_index.py
+.venv/bin/python3 scripts/build_vss_index.py
+
+# 6. Declare the property graph (must run on every new connection).
+.venv/bin/python3 scripts/build_property_graph.py
+```
+
+### Running the tests
+
+```bash
+.venv/bin/python3 -m pytest tests/ -v
+```
+
+The integration tests embed the test queries live, so the first run downloads
+the `all-MiniLM-L6-v2` weights (~90 MB) into the HuggingFace cache.
 
 ### v2 layout
 
@@ -39,13 +113,13 @@ Dependencies are declared in [`pyproject.toml`](pyproject.toml): `duckdb`,
   skills/skills-factory/     # Claude Code skill: how to run the Skills Factory
   commands/                  # /kb-* slash commands
 mcp-servers/kb-mcp/          # FastMCP server: hybrid retrieval + Skills Factory
-scripts/                     # Indexing, extraction, refresh utilities
-schemas/                     # DuckDB DDL + migrations
+scripts/                     # Indexing, extensions, embeddings, FTS, VSS, graph
+schemas/                     # catalog.sql (target DDL) + property_graph.sql
 patterns/                    # YAML pattern library
-tests/                       # pytest suite
+tests/                       # pytest suite + eval/ seed datasets
 logs/                        # Local run logs (gitignored)
 launchd/                     # macOS LaunchAgent plists for scheduled refresh
-data/generated-packages/     # Skills Factory output
+data/                        # catalog.ddb (gitignored) + generated-packages/
 ```
 
 ## Overview
