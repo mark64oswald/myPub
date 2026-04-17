@@ -2,6 +2,52 @@
 
 A Claude-native knowledge base system that transforms a collection of technical ePub books into an intelligent, queryable resource for learning and building.
 
+## v2 Development
+
+Active v2 work lives on the `v2-substrate` branch. v2 layers semantic (HNSW/VSS),
+full-text (BM25/FTS), and graph (DuckPGQ) retrieval on top of the existing DuckDB
+catalog, introduces live doc sources (Context7, DeepWiki, GitHub MCP) alongside
+books, and adds a Skills Factory that generates whole Claude Skills packages.
+
+- **Architecture doc:** [`mypub-v2-architecture.md`](mypub-v2-architecture.md) — full system design, data model, ranking, refresh strategy
+- **Execution plan:** [`mypub-v2-execution-plan.md`](mypub-v2-execution-plan.md) — phased roadmap
+
+v1 on `main` is stable and unaffected. The existing `data/catalog.ddb` is not
+modified by branch checkout — it will be evolved in-place during Phase 1.
+
+### Dev environment setup
+
+```bash
+git checkout v2-substrate
+python3 -m venv .venv
+.venv/bin/python3 -m pip install --upgrade pip
+.venv/bin/python3 -m pip install -e ".[dev]"
+
+# Smoke test
+.venv/bin/python3 -c "import duckdb; print(duckdb.__version__)"
+```
+
+Dependencies are declared in [`pyproject.toml`](pyproject.toml): `duckdb`,
+`sentence-transformers`, `fastmcp`, `markdown-it-py`, `pydantic`, `httpx`, and
+`pytest` (dev extra).
+
+### v2 layout
+
+```
+.claude/
+  skills/kb-usage/           # Claude Code skill: how to use the KB
+  skills/skills-factory/     # Claude Code skill: how to run the Skills Factory
+  commands/                  # /kb-* slash commands
+mcp-servers/kb-mcp/          # FastMCP server: hybrid retrieval + Skills Factory
+scripts/                     # Indexing, extraction, refresh utilities
+schemas/                     # DuckDB DDL + migrations
+patterns/                    # YAML pattern library
+tests/                       # pytest suite
+logs/                        # Local run logs (gitignored)
+launchd/                     # macOS LaunchAgent plists for scheduled refresh
+data/generated-packages/     # Skills Factory output
+```
+
 ## Overview
 
 myPub extracts structure and knowledge from your ePub collection (~345 technical books) and makes it accessible through:
