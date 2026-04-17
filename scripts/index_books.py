@@ -1,356 +1,432 @@
 #!/usr/bin/env python3
 """
-index_books.py - Index ePub books into the myPub catalog
+index_books.py — Index ePub books into the v2 catalog.
 
-This script reads ePub files from the source directory and populates
-the DuckDB catalog database with book and chapter metadata.
+Extracts each book's metadata, TOC, and full chapter text, and writes to
+the v2 schema defined in schemas/catalog.sql:
+
+    author ← book_author → book → chapter
+
+Chapter text is stored in `chapter.content` so downstream steps (embedding
+generation in prompt 1.3, FTS in 1.4) can run directly against the catalog
+without re-reading the epubs.
 
 Usage:
-    python scripts/index_books.py --source ~/Documents/ebooks --limit 10
-    python scripts/index_books.py --source ~/Documents/ebooks --book "specific-book.epub"
-    python scripts/index_books.py --source ~/Documents/ebooks  # Index all
-
-Requirements:
-    pip install duckdb ebooklib beautifulsoup4 tiktoken
+    .venv/bin/python3 scripts/index_books.py                       # all books
+    .venv/bin/python3 scripts/index_books.py --limit 10            # first 10
+    .venv/bin/python3 scripts/index_books.py --book "name.epub"    # one book
+    .venv/bin/python3 scripts/index_books.py --source /path/to/dir
 """
 
+from __future__ import annotations
+
 import argparse
+import logging
 import os
-import re
 import sys
-from datetime import datetime
+import time
+from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
 
-try:
-    import duckdb
-    import ebooklib
-    from ebooklib import epub
-    from bs4 import BeautifulSoup
-    import tiktoken
-except ImportError as e:
-    print(f"Missing required package: {e}")
-    print("Install with: pip install duckdb ebooklib beautifulsoup4 tiktoken")
-    sys.exit(1)
+import duckdb
+import ebooklib
+import tiktoken
+from bs4 import BeautifulSoup
+from ebooklib import epub
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_SOURCE = Path(os.environ.get(
+    "MYPUB_EBOOK_DIR",
+    Path.home() / "Documents" / "eBooks",
+))
+DEFAULT_CATALOG = PROJECT_ROOT / "data" / "catalog.ddb"
+LOG = logging.getLogger("index_books")
 
-# Configuration
-DEFAULT_SOURCE = os.path.expanduser("~/Documents/ebooks")
-DEFAULT_CATALOG = os.path.expanduser("~/Developer/projects/myPub/data/catalog.ddb")
-
-
-def slugify(text: str) -> str:
-    """Convert text to a URL-friendly slug."""
-    text = text.lower().strip()
-    text = re.sub(r'[^\w\s-]', '', text)
-    text = re.sub(r'[-\s]+', '-', text)
-    return text[:100]  # Limit length
+_ENCODER = tiktoken.get_encoding("cl100k_base")
 
 
-def count_tokens(text: str, model: str = "cl100k_base") -> int:
-    """Count tokens in text using tiktoken."""
-    try:
-        encoder = tiktoken.get_encoding(model)
-        return len(encoder.encode(text))
-    except Exception:
-        # Fallback: rough estimate
-        return len(text) // 4
+# ----------------------------------------------------------------------------
+# Content extraction
+# ----------------------------------------------------------------------------
+
+def _count_tokens(text: str) -> int:
+    """Return the token count using the cl100k_base encoding."""
+    return len(_ENCODER.encode(text, disallowed_special=()))
 
 
-def extract_text_from_html(html_content: bytes) -> str:
-    """Extract plain text from HTML content."""
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # Remove script and style elements
-    for element in soup(['script', 'style', 'nav', 'header', 'footer']):
-        element.decompose()
-    
-    return soup.get_text(separator='\n', strip=True)
+def _extract_text(html_bytes: bytes) -> str:
+    """Render an ePub HTML blob down to whitespace-normalized plain text."""
+    soup = BeautifulSoup(html_bytes, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    return soup.get_text(separator="\n", strip=True)
 
 
+def _href_path(href: Optional[str]) -> Optional[str]:
+    """Strip any fragment (#section) from an ePub href."""
+    if not href:
+        return None
+    return href.split("#", 1)[0]
 
-def get_book_metadata(book: epub.EpubBook, filepath: str) -> dict:
-    """Extract metadata from an ePub book."""
-    
-    # Get title
-    title = book.get_metadata('DC', 'title')
-    title = title[0][0] if title else Path(filepath).stem
-    
-    # Get authors
-    creators = book.get_metadata('DC', 'creator')
-    authors = [c[0] for c in creators] if creators else []
-    
-    # Get publisher
-    publisher = book.get_metadata('DC', 'publisher')
-    publisher = publisher[0][0] if publisher else None
-    
-    # Get publication date
-    date = book.get_metadata('DC', 'date')
-    pub_date = None
-    if date:
+
+def _content_cache_for_book(book: epub.EpubBook) -> dict[str, str]:
+    """Return a dict mapping href path → extracted plain text for the book.
+
+    Multiple TOC entries can point at the same href; caching avoids re-parsing
+    the same HTML blob for each reference.
+    """
+    cache: dict[str, str] = {}
+    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        href = _href_path(item.get_name())
+        if not href or href in cache:
+            continue
         try:
-            date_str = date[0][0]
-            # Handle various date formats
-            for fmt in ['%Y-%m-%d', '%Y-%m', '%Y']:
-                try:
-                    pub_date = datetime.strptime(date_str[:len(fmt.replace('%', '').replace('-', ''))+ fmt.count('-')], fmt).date()
-                    break
-                except ValueError:
-                    continue
-        except Exception:
-            pass
-    
-    # Get description
-    description = book.get_metadata('DC', 'description')
-    description = description[0][0] if description else None
-    
-    # Get subjects
-    subjects = book.get_metadata('DC', 'subject')
-    subjects = [s[0] for s in subjects] if subjects else []
-    
-    # Generate book_id from filename
-    book_id = slugify(Path(filepath).stem)
-    
+            cache[href] = _extract_text(item.get_content())
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+            LOG.warning("content extraction failed for %s: %s", href, exc)
+            cache[href] = ""
+    return cache
+
+
+# ----------------------------------------------------------------------------
+# Metadata
+# ----------------------------------------------------------------------------
+
+def _parse_pub_date(raw: str) -> Optional[date]:
+    """Parse a DC date string into a date, trying common epub formats."""
+    for fmt, width in (("%Y-%m-%d", 10), ("%Y-%m", 7), ("%Y", 4)):
+        try:
+            return datetime.strptime(raw[:width], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _book_metadata(book: epub.EpubBook, filepath: Path) -> dict:
+    """Pull the metadata we care about out of an ePub."""
+    title_md = book.get_metadata("DC", "title")
+    title = title_md[0][0] if title_md else filepath.stem
+
+    creators = book.get_metadata("DC", "creator")
+    authors = [c[0] for c in creators] if creators else []
+
+    publisher_md = book.get_metadata("DC", "publisher")
+    publisher = publisher_md[0][0] if publisher_md else None
+
+    pub_date: Optional[date] = None
+    date_md = book.get_metadata("DC", "date")
+    if date_md:
+        pub_date = _parse_pub_date(date_md[0][0])
+
+    desc_md = book.get_metadata("DC", "description")
+    description = desc_md[0][0] if desc_md else None
+
+    subject_md = book.get_metadata("DC", "subject")
+    subjects = [s[0] for s in subject_md] if subject_md else []
+
     return {
-        'book_id': book_id,
-        'title': title,
-        'authors': authors,
-        'publisher': publisher,
-        'pub_date': pub_date,
-        'filepath': filepath,
-        'description': description,
-        'subjects': subjects
+        "title": title,
+        "authors": authors,
+        "publisher": publisher,
+        "publication_date": pub_date,
+        "description": description,
+        "subjects": subjects,
     }
 
 
-def get_chapters(book: epub.EpubBook, book_id: str) -> list[dict]:
-    """Extract chapter information from an ePub book."""
-    chapters = []
-    
-    # Get table of contents
-    toc = book.toc
-    
-    def process_toc_item(item, sequence: int, parent_id: str = None) -> int:
-        """Process a TOC item (could be a link or a section with children)."""
-        nonlocal chapters
-        
-        if isinstance(item, tuple):
-            # Section with children: (Section, [children])
-            section, children = item
-            section_id = f"{book_id}:{sequence}"
-            
-            chapters.append({
-                'chapter_id': section_id,
-                'book_id': book_id,
-                'title': section.title if hasattr(section, 'title') else str(section),
-                'sequence': sequence,
-                'href': section.href if hasattr(section, 'href') else None,
-                'parent_id': parent_id,
-                'token_count': None,  # Will be calculated if content available
-            })
-            sequence += 1
-            
-            for child in children:
-                sequence = process_toc_item(child, sequence, section_id)
-                
-        elif isinstance(item, epub.Link):
-            # Direct link to content
-            chapter_id = f"{book_id}:{sequence}"
-            
-            # Try to get content and count tokens
-            token_count = None
-            try:
-                content_item = book.get_item_with_href(item.href.split('#')[0])
-                if content_item:
-                    text = extract_text_from_html(content_item.get_content())
-                    token_count = count_tokens(text)
-            except Exception:
-                pass
-            
-            chapters.append({
-                'chapter_id': chapter_id,
-                'book_id': book_id,
-                'title': item.title,
-                'sequence': sequence,
-                'href': item.href,
-                'parent_id': parent_id,
-                'token_count': token_count,
-            })
-            sequence += 1
-            
-        return sequence
-    
-    sequence = 1
-    for item in toc:
-        sequence = process_toc_item(item, sequence)
-    
-    return chapters
+# ----------------------------------------------------------------------------
+# TOC flattening
+# ----------------------------------------------------------------------------
+
+def _flatten_toc(book: epub.EpubBook) -> list[dict]:
+    """Flatten the TOC into an ordered list of chapters with parent refs.
+
+    Each element: {sequence, depth, parent_seq, title, href}
+    """
+    flat: list[dict] = []
+    counter = [0]  # mutable counter for closure
+
+    def walk(items, depth: int, parent_seq: Optional[int]) -> None:
+        for item in items:
+            counter[0] += 1
+            seq = counter[0]
+            if isinstance(item, tuple):
+                section, children = item
+                title = getattr(section, "title", str(section))
+                href = getattr(section, "href", None)
+                flat.append({
+                    "sequence": seq,
+                    "depth": depth,
+                    "parent_seq": parent_seq,
+                    "title": title,
+                    "href": href,
+                })
+                walk(children, depth + 1, seq)
+            elif isinstance(item, epub.Link):
+                flat.append({
+                    "sequence": seq,
+                    "depth": depth,
+                    "parent_seq": parent_seq,
+                    "title": item.title,
+                    "href": item.href,
+                })
+            # Unknown TOC element types are silently skipped.
+
+    walk(book.toc, depth=0, parent_seq=None)
+    return flat
 
 
+# ----------------------------------------------------------------------------
+# DB writers
+# ----------------------------------------------------------------------------
 
-def index_book(conn: duckdb.DuckDBPyConnection, filepath: str, verbose: bool = False) -> bool:
-    """Index a single ePub book into the catalog."""
-    
+def _upsert_author(conn: duckdb.DuckDBPyConnection, name: str) -> int:
+    """Return author_id, creating the row if the name isn't already stored."""
+    row = conn.execute("SELECT author_id FROM author WHERE name = ?", [name]).fetchone()
+    if row:
+        return row[0]
+    new_id = conn.execute(
+        "INSERT INTO author (name) VALUES (?) RETURNING author_id",
+        [name],
+    ).fetchone()[0]
+    return new_id
+
+
+def _insert_book(conn: duckdb.DuckDBPyConnection, filepath: Path, meta: dict) -> int:
+    """Insert a book row and return its new book_id."""
+    row = conn.execute(
+        """
+        INSERT INTO book (title, publisher, publication_date, source_path,
+                          description, subjects, total_tokens, chapter_count,
+                          indexed_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        RETURNING book_id
+        """,
+        [
+            meta["title"],
+            meta["publisher"],
+            meta["publication_date"],
+            str(filepath),
+            meta["description"],
+            meta["subjects"],
+        ],
+    ).fetchone()
+    return row[0]
+
+
+def _delete_existing_book(conn: duckdb.DuckDBPyConnection, filepath: Path) -> None:
+    """Remove any previously indexed rows for the given source path.
+
+    chapter has a self-referential FK on parent_chapter_id. DuckDB 1.5 doesn't
+    support ON DELETE CASCADE/SET NULL, and its per-row FK checker blocks both
+    a bulk DELETE and an UPDATE-to-NULL. Workaround: iteratively delete the
+    current set of leaf chapters (rows no-one references as a parent) until
+    the whole book is gone.
+    """
+    row = conn.execute(
+        "SELECT book_id FROM book WHERE source_path = ?", [str(filepath)]
+    ).fetchone()
+    if not row:
+        return
+    book_id = row[0]
+
+    while True:
+        before = conn.execute(
+            "SELECT COUNT(*) FROM chapter WHERE book_id = ?", [book_id]
+        ).fetchone()[0]
+        if before == 0:
+            break
+        conn.execute(
+            """
+            DELETE FROM chapter
+             WHERE book_id = ?
+               AND chapter_id NOT IN (
+                   SELECT parent_chapter_id FROM chapter
+                    WHERE book_id = ? AND parent_chapter_id IS NOT NULL
+               )
+            """,
+            [book_id, book_id],
+        )
+        after = conn.execute(
+            "SELECT COUNT(*) FROM chapter WHERE book_id = ?", [book_id]
+        ).fetchone()[0]
+        if after == before:
+            raise RuntimeError(
+                f"Chapter deletion stuck at {after} rows for book_id={book_id}"
+            )
+
+    conn.execute("DELETE FROM book_author WHERE book_id = ?", [book_id])
+    conn.execute("DELETE FROM book WHERE book_id = ?", [book_id])
+
+
+def _insert_chapters(
+    conn: duckdb.DuckDBPyConnection,
+    book_id: int,
+    toc: list[dict],
+    content_cache: dict[str, str],
+) -> tuple[int, int]:
+    """Insert chapter rows and return (chapter_count, total_tokens).
+
+    Parent-chapter resolution uses the sequence field: rows are inserted in
+    TOC order, and we track sequence → chapter_id as we go.
+    """
+    seq_to_id: dict[int, int] = {}
+    total_tokens = 0
+
+    for entry in toc:
+        href_path = _href_path(entry["href"])
+        content = content_cache.get(href_path, "") if href_path else ""
+        tokens = _count_tokens(content) if content else 0
+        total_tokens += tokens
+
+        parent_id = seq_to_id.get(entry["parent_seq"]) if entry["parent_seq"] else None
+
+        new_id = conn.execute(
+            """
+            INSERT INTO chapter (book_id, chapter_num, parent_chapter_id,
+                                 title, href, content, token_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            RETURNING chapter_id
+            """,
+            [
+                book_id,
+                entry["sequence"],
+                parent_id,
+                entry["title"],
+                entry["href"],
+                content or None,
+                tokens or None,
+            ],
+        ).fetchone()[0]
+        seq_to_id[entry["sequence"]] = new_id
+
+    return len(toc), total_tokens
+
+
+def _link_authors(
+    conn: duckdb.DuckDBPyConnection, book_id: int, author_names: list[str]
+) -> None:
+    """Create book_author rows for each distinct author in order."""
+    seen: set[str] = set()
+    position = 0
+    for name in author_names:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        author_id = _upsert_author(conn, name)
+        conn.execute(
+            "INSERT INTO book_author (book_id, author_id, position) VALUES (?, ?, ?)",
+            [book_id, author_id, position],
+        )
+        position += 1
+
+
+def _finalize_book(
+    conn: duckdb.DuckDBPyConnection,
+    book_id: int,
+    chapter_count: int,
+    total_tokens: int,
+) -> None:
+    """Write chapter_count and total_tokens back onto the book row."""
+    conn.execute(
+        "UPDATE book SET chapter_count = ?, total_tokens = ?, updated_at = CURRENT_TIMESTAMP "
+        "WHERE book_id = ?",
+        [chapter_count, total_tokens, book_id],
+    )
+
+
+# ----------------------------------------------------------------------------
+# Top-level per-book driver
+# ----------------------------------------------------------------------------
+
+def index_book(conn: duckdb.DuckDBPyConnection, filepath: Path) -> bool:
+    """Index one ePub file. Returns True on success."""
     try:
-        if verbose:
-            print(f"  Reading: {filepath}")
-        
-        book = epub.read_epub(filepath)
-        
-        # Extract metadata
-        metadata = get_book_metadata(book, filepath)
-        
-        if verbose:
-            print(f"  Title: {metadata['title']}")
-            print(f"  Authors: {', '.join(metadata['authors'])}")
-        
-        # Check if book already exists
-        existing = conn.execute(
-            "SELECT book_id FROM books WHERE book_id = ?", 
-            [metadata['book_id']]
-        ).fetchone()
-        
-        if existing:
-            if verbose:
-                print(f"  Already indexed, updating...")
-            conn.execute("DELETE FROM chapters WHERE book_id = ?", [metadata['book_id']])
-            conn.execute("DELETE FROM books WHERE book_id = ?", [metadata['book_id']])
-        
-        # Extract chapters
-        chapters = get_chapters(book, metadata['book_id'])
-        
-        if verbose:
-            print(f"  Chapters: {len(chapters)}")
-        
-        # Calculate total tokens
-        total_tokens = sum(c['token_count'] or 0 for c in chapters)
-        
-        # Insert book
-        conn.execute("""
-            INSERT INTO books (book_id, title, authors, publisher, pub_date, 
-                             filepath, description, subjects, total_tokens, 
-                             chapter_count, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, [
-            metadata['book_id'],
-            metadata['title'],
-            metadata['authors'],
-            metadata['publisher'],
-            metadata['pub_date'],
-            metadata['filepath'],
-            metadata['description'],
-            metadata['subjects'],
-            total_tokens,
-            len(chapters)
-        ])
-        
-        # Insert chapters
-        for chapter in chapters:
-            conn.execute("""
-                INSERT INTO chapters (chapter_id, book_id, title, sequence, 
-                                    href, parent_id, token_count, indexed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, [
-                chapter['chapter_id'],
-                chapter['book_id'],
-                chapter['title'],
-                chapter['sequence'],
-                chapter['href'],
-                chapter['parent_id'],
-                chapter['token_count']
-            ])
-        
-        if verbose:
-            print(f"  ✓ Indexed successfully ({total_tokens} tokens)")
-        
+        book = epub.read_epub(str(filepath))
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        LOG.error("cannot read %s: %s", filepath, exc)
+        return False
+
+    try:
+        meta = _book_metadata(book, filepath)
+        toc = _flatten_toc(book)
+        content_cache = _content_cache_for_book(book)
+
+        _delete_existing_book(conn, filepath)
+        book_id = _insert_book(conn, filepath, meta)
+        _link_authors(conn, book_id, meta["authors"])
+        chapter_count, total_tokens = _insert_chapters(conn, book_id, toc, content_cache)
+        _finalize_book(conn, book_id, chapter_count, total_tokens)
+
+        LOG.info(
+            "indexed %s (id=%d, %d chapters, %d tokens)",
+            filepath.name, book_id, chapter_count, total_tokens,
+        )
         return True
-        
-    except Exception as e:
-        print(f"  ✗ Error indexing {filepath}: {e}")
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        LOG.exception("indexing failed for %s: %s", filepath, exc)
         return False
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Index ePub books into the myPub catalog"
-    )
-    parser.add_argument(
-        '--source', '-s',
-        default=DEFAULT_SOURCE,
-        help=f"Source directory containing ePub files (default: {DEFAULT_SOURCE})"
-    )
-    parser.add_argument(
-        '--catalog', '-c',
-        default=DEFAULT_CATALOG,
-        help=f"Path to catalog database (default: {DEFAULT_CATALOG})"
-    )
-    parser.add_argument(
-        '--limit', '-l',
-        type=int,
-        default=None,
-        help="Limit number of books to index (for testing)"
-    )
-    parser.add_argument(
-        '--book', '-b',
-        default=None,
-        help="Index a specific book by filename"
-    )
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help="Show detailed progress"
-    )
-    
+# ----------------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------------
+
+def main() -> int:
+    """Parse CLI args and index the requested ePub files into the catalog."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--book", type=str, default=None, help="Index one book by filename")
+    parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
-    
-    # Ensure catalog directory exists
-    catalog_dir = Path(args.catalog).parent
-    catalog_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Connect to database
-    print(f"Connecting to catalog: {args.catalog}")
-    conn = duckdb.connect(args.catalog)
-    
-    # Initialize schema if needed
-    schema_file = Path(__file__).parent.parent / 'schemas' / 'catalog.sql'
-    if schema_file.exists():
-        print(f"Initializing schema from {schema_file}")
-        conn.execute(schema_file.read_text())
-    
-    # Find ePub files
-    source_path = Path(args.source)
-    if not source_path.exists():
-        print(f"Error: Source directory not found: {args.source}")
-        sys.exit(1)
-    
+
+    logging.basicConfig(
+        level=args.log_level,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    if not args.source.exists():
+        LOG.error("source directory not found: %s", args.source)
+        return 2
+
     if args.book:
-        epub_files = [source_path / args.book]
-        if not epub_files[0].exists():
-            print(f"Error: Book not found: {epub_files[0]}")
-            sys.exit(1)
+        files = [args.source / args.book]
+        if not files[0].exists():
+            LOG.error("book not found: %s", files[0])
+            return 2
     else:
-        epub_files = sorted(source_path.glob("*.epub"))
-    
+        files = sorted(args.source.glob("*.epub"))
+
     if args.limit:
-        epub_files = epub_files[:args.limit]
-    
-    print(f"Found {len(epub_files)} ePub files to index")
-    print("-" * 50)
-    
-    # Index each book
-    success_count = 0
-    for i, filepath in enumerate(epub_files, 1):
-        print(f"[{i}/{len(epub_files)}] {filepath.name}")
-        if index_book(conn, str(filepath), args.verbose):
-            success_count += 1
-    
-    # Commit and close
-    conn.commit()
-    conn.close()
-    
-    print("-" * 50)
-    print(f"Indexing complete: {success_count}/{len(epub_files)} books indexed")
-    print(f"Catalog saved to: {args.catalog}")
+        files = files[: args.limit]
+
+    if not files:
+        LOG.error("no epub files found")
+        return 2
+
+    args.catalog.parent.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(args.catalog))
+    try:
+        start = time.time()
+        ok = 0
+        for i, filepath in enumerate(files, 1):
+            LOG.info("[%d/%d] %s", i, len(files), filepath.name)
+            if index_book(conn, filepath):
+                ok += 1
+            if i % 25 == 0:
+                conn.commit()
+        conn.commit()
+        elapsed = time.time() - start
+        LOG.info("done: %d/%d books indexed in %.1fs", ok, len(files), elapsed)
+    finally:
+        conn.close()
+
+    return 0 if ok == len(files) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -14,6 +14,9 @@ dependencies = [
     "markdown-it-py>=3.0.0",
     "pydantic>=2.7.0",
     "httpx>=0.27.0",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12.0",
+    "tiktoken>=0.7.0",
 ]
 
 [project.optional-dependencies]
