@@ -159,13 +159,22 @@ def test_identity_primary_keys(conn):
 
 
 def test_not_yet_populated_tables_are_empty(conn):
-    """Tables populated by later phases should still be empty in Phase 1."""
-    # Phase 1 populates author/book/book_author/chapter/chapter_embedding.
-    # Everything else lands in Phase 2 (concepts), 3 (docs), or 5 (skills).
-    phase1_populated = {
+    """Tables populated only by later phases should still be empty."""
+    # What each phase populates:
+    #   Phase 1: author, book, book_author, chapter, chapter_embedding
+    #   Phase 2: concept, concept_embedding, concept_relation,
+    #            concept_alias, concept_resolution_queue, concept_query_log
+    #   Phase 3: procedure
+    #   Phase 4: doc_source, doc_snapshot, doc_section,
+    #            doc_snapshot_embedding, doc_section_embedding,
+    #            concept_doc_link, discovery_log
+    #   Phase 5: skill_package, skill, skill_source, skill_file, skill_relation
+    populated_by_phase_1_or_2 = {
         "author", "book", "book_author", "chapter", "chapter_embedding",
+        "concept", "concept_embedding", "concept_relation",
+        "concept_alias", "concept_resolution_queue", "concept_query_log",
     }
-    for table in EXPECTED_TABLES - phase1_populated:
+    for table in EXPECTED_TABLES - populated_by_phase_1_or_2:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
         assert count == 0, f"{table} is not empty (count={count})"
 
