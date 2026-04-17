@@ -38,10 +38,13 @@ ENV/
 *~
 .DS_Store
 
-# Logs
+# Logs — keep the .gitkeep stub and any phase-run markdown reports, but
+# ignore ephemeral *.log files. Phase deliverables (per execution plan)
+# like extraction_run_*.md land here and should be tracked.
 *.log
 logs/*
 !logs/.gitkeep
+!logs/*.md
 
 # Temporary files
 tmp/

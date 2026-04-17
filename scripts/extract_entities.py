@@ -159,7 +159,7 @@ def _resolve_chapter_id(
 
 
 # ----------------------------------------------------------------------------
-# LLM call
+# Prompt builders — exported so sub-agent drivers can share them
 # ----------------------------------------------------------------------------
 
 def _build_user_prompt(chapter: ChapterRecord) -> str:
@@ -176,6 +176,32 @@ def _build_user_prompt(chapter: ChapterRecord) -> str:
     )
 
 
+def build_full_prompt(chapter: ChapterRecord) -> str:
+    """Build a self-contained prompt combining SYSTEM_PROMPT + chapter payload.
+
+    Used when the caller invokes the LLM through a channel that takes a single
+    prompt string (e.g. Claude Code's Agent tool) rather than separate
+    system/user messages.
+    """
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"--- CHAPTER TO EXTRACT ---\n\n"
+        f"{_build_user_prompt(chapter)}\n\n"
+        f"Respond with JSON only. No prose, no markdown fences."
+    )
+
+
+def parse_llm_json(text: str) -> dict:
+    """Parse LLM output into a dict, stripping ```json fences if present."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip().rstrip("`").strip()
+    return json.loads(text)
+
+
 def _call_llm(client, user_prompt: str) -> dict:
     """One Haiku call returning parsed JSON. Raises on parse or validation error."""
     response = client.messages.create(
@@ -184,14 +210,7 @@ def _call_llm(client, user_prompt: str) -> dict:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
-    text = response.content[0].text.strip()
-    # Strip ```json fences defensively.
-    if text.startswith("```"):
-        text = text.split("```", 2)[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip().rstrip("`").strip()
-    return json.loads(text)
+    return parse_llm_json(response.content[0].text)
 
 
 def _validate_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
@@ -304,6 +323,58 @@ class ExtractionSummary:
     prior_relations_cleared: int
 
 
+def process_extraction_json(
+    conn: duckdb.DuckDBPyConnection,
+    resolver: EntityResolver,
+    chapter_id: int,
+    raw: dict,
+) -> ExtractionSummary:
+    """Resolve entities and persist relations given already-parsed LLM output.
+
+    Used by both the API-driven CLI path and by any LLM-agnostic caller
+    (including the Claude Code sub-agent flow) that has already obtained the
+    structured JSON some other way.
+    """
+    # Ensure the chapter exists; raises if not.
+    _load_chapter(conn, chapter_id)
+
+    entities, relations = _validate_extraction(raw)
+    LOG.info(
+        "validated %d entities, %d relations", len(entities), len(relations),
+    )
+
+    name_to_id: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for e in entities:
+        result = resolver.resolve(
+            e["name"],
+            candidate_context=e["description"],
+            concept_type=e["type"],
+            source_type="chapter",
+            source_id=chapter_id,
+        )
+        name_to_id[e["name"]] = result.concept_id
+        counts[result.resolution_type] = counts.get(result.resolution_type, 0) + 1
+
+    cleared = _clear_prior_extraction(conn, chapter_id)
+    written = 0
+    for r in relations:
+        from_id = name_to_id[r["from"]]
+        to_id = name_to_id[r["to"]]
+        if _write_relation(conn, from_id, to_id, r["type"], r["confidence"], chapter_id):
+            written += 1
+
+    conn.commit()
+    return ExtractionSummary(
+        chapter_id=chapter_id,
+        entities_extracted=len(entities),
+        entities_by_resolution=counts,
+        relations_extracted=len(relations),
+        relations_written=written,
+        prior_relations_cleared=cleared,
+    )
+
+
 def extract_chapter(
     conn: duckdb.DuckDBPyConnection,
     client,
@@ -312,7 +383,8 @@ def extract_chapter(
     *,
     dry_run: bool = False,
 ) -> ExtractionSummary:
-    """Extract and (optionally) persist entities + relations for one chapter."""
+    """Extract and (optionally) persist entities + relations for one chapter
+    using the Anthropic API client."""
     chapter = _load_chapter(conn, chapter_id)
     LOG.info("extracting: %s :: %s", chapter.book_title[:50], (chapter.title or "")[:50])
 
@@ -334,53 +406,52 @@ def extract_chapter(
             prior_relations_cleared=0,
         )
 
-    # Resolve entities → concept_id mapping.
-    name_to_id: dict[str, int] = {}
-    counts: dict[str, int] = {}
-    for e in entities:
-        result = resolver.resolve(
-            e["name"],
-            candidate_context=e["description"],
-            concept_type=e["type"],
-            source_type="chapter",
-            source_id=chapter_id,
-        )
-        name_to_id[e["name"]] = result.concept_id
-        counts[result.resolution_type] = counts.get(result.resolution_type, 0) + 1
-
-    # Clear prior relations and write fresh ones.
-    cleared = _clear_prior_extraction(conn, chapter_id)
-    written = 0
-    for r in relations:
-        from_id = name_to_id[r["from"]]
-        to_id = name_to_id[r["to"]]
-        if _write_relation(conn, from_id, to_id, r["type"], r["confidence"], chapter_id):
-            written += 1
-
-    conn.commit()
-    return ExtractionSummary(
-        chapter_id=chapter_id,
-        entities_extracted=len(entities),
-        entities_by_resolution=counts,
-        relations_extracted=len(relations),
-        relations_written=written,
-        prior_relations_cleared=cleared,
-    )
+    return process_extraction_json(conn, resolver, chapter_id, raw)
 
 
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
 
+def _print_summary(summary: ExtractionSummary) -> None:
+    """Human-readable run stats to stdout."""
+    print("\n=== extraction summary ===")
+    print(f"chapter_id:        {summary.chapter_id}")
+    print(f"entities:          {summary.entities_extracted}")
+    if summary.entities_by_resolution:
+        for rtype, n in sorted(summary.entities_by_resolution.items()):
+            print(f"  {rtype:<16} {n}")
+    print(f"relations written: {summary.relations_written} "
+          f"(of {summary.relations_extracted} extracted)")
+    if summary.prior_relations_cleared:
+        print(f"prior relations cleared: {summary.prior_relations_cleared}")
+
+
 def main() -> int:
-    """Parse args, extract one chapter, print a summary."""
+    """Parse args, extract one chapter, print a summary.
+
+    Modes:
+      --chapter-id N                → API extraction (needs ANTHROPIC_API_KEY)
+      --chapter-id N --print-prompt → print the full self-contained prompt to
+                                       stdout (no DB write, no LLM call) so
+                                       an external LLM driver (e.g. a Claude
+                                       Code sub-agent) can run the extraction
+      --chapter-id N --json-file P  → read pre-parsed LLM JSON from path P
+                                       and process it (resolve + write DB)
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--chapter-id", type=int)
     parser.add_argument("--book-id", type=int)
     parser.add_argument("--chapter-num", type=int)
     parser.add_argument("--dry-run", action="store_true",
-                        help="call the LLM and print JSON; skip DB writes")
+                        help="API mode: call the LLM and print JSON; skip DB writes")
+    parser.add_argument("--print-prompt", action="store_true",
+                        help="print the full sub-agent prompt for this chapter; "
+                             "no LLM call, no DB write")
+    parser.add_argument("--json-file", type=Path, default=None,
+                        help="process LLM output already stored at this path "
+                             "(JSON with entities/relations); no LLM call")
     parser.add_argument("--api-key", default=os.environ.get("ANTHROPIC_API_KEY"))
     args = parser.parse_args()
 
@@ -389,14 +460,6 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
-
-    if not args.api_key:
-        LOG.error("ANTHROPIC_API_KEY not set.")
-        return 2
-
-    # pylint: disable=import-outside-toplevel
-    import anthropic
-    client = anthropic.Anthropic(api_key=args.api_key)
 
     conn = duckdb.connect(str(args.catalog))
     try:
@@ -408,21 +471,37 @@ def main() -> int:
         else:
             chapter_id = args.chapter_id
 
-        resolver = EntityResolver(conn)  # loads embedder lazily
+        # Mode A: print-prompt (no LLM, no write)
+        if args.print_prompt:
+            chapter = _load_chapter(conn, chapter_id)
+            sys.stdout.write(build_full_prompt(chapter))
+            return 0
+
+        # Mode B: process pre-parsed JSON (no LLM, writes DB)
+        if args.json_file is not None:
+            raw_text = args.json_file.read_text()
+            try:
+                raw = parse_llm_json(raw_text)
+            except json.JSONDecodeError as exc:
+                LOG.error("JSON parse failed in %s: %s", args.json_file, exc)
+                return 3
+            resolver = EntityResolver(conn)
+            summary = process_extraction_json(conn, resolver, chapter_id, raw)
+            _print_summary(summary)
+            return 0
+
+        # Mode C: direct API call
+        if not args.api_key:
+            LOG.error("ANTHROPIC_API_KEY not set (and --json-file not given).")
+            return 2
+        # pylint: disable=import-outside-toplevel
+        import anthropic
+        client = anthropic.Anthropic(api_key=args.api_key)
+        resolver = EntityResolver(conn)
         summary = extract_chapter(
             conn, client, resolver, chapter_id, dry_run=args.dry_run,
         )
-
-        print("\n=== extraction summary ===")
-        print(f"chapter_id:        {summary.chapter_id}")
-        print(f"entities:          {summary.entities_extracted}")
-        if summary.entities_by_resolution:
-            for rtype, n in sorted(summary.entities_by_resolution.items()):
-                print(f"  {rtype:<16} {n}")
-        print(f"relations written: {summary.relations_written} "
-              f"(of {summary.relations_extracted} extracted)")
-        if summary.prior_relations_cleared:
-            print(f"prior relations cleared: {summary.prior_relations_cleared}")
+        _print_summary(summary)
     finally:
         conn.close()
     return 0
