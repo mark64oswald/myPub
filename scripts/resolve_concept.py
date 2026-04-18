@@ -363,7 +363,7 @@ def do_list(conn: duckdb.DuckDBPyConnection, limit: int) -> None:
         "SELECT COUNT(*) FROM concept_resolution_queue WHERE resolution_action = 'pending'"
     ).fetchone()[0]
     print(f"{len(rows)} of {total} pending items:")
-    for q_id, cand, nid, nname, sim, stype, sid in rows:
+    for q_id, cand, _nid, nname, sim, stype, sid in rows:
         sim_str = f"{sim:.3f}" if sim is not None else "  -  "
         src = f"{stype}:{sid}" if stype else "?"
         print(f"  q={q_id:<4} sim={sim_str}  {cand!r:<42} ↔ "
@@ -453,6 +453,17 @@ def main() -> int:
     )
 
     conn = duckdb.connect(str(args.catalog))
+    # concept_embedding may carry an HNSW index from Phase 1.5. DuckDB
+    # refuses to modify a table with an unknown-type index bound to it,
+    # so load VSS before any DELETE/UPDATE touches concept_embedding.
+    # LOAD is cheap on a per-connection basis; safe to call unconditionally.
+    try:
+        conn.execute("LOAD vss")
+    except duckdb.Error:
+        # VSS extension not installed on this catalog — that's fine for
+        # in-memory test fixtures. Skip silently; any DML against a live
+        # HNSW-indexed table would have failed anyway.
+        pass
     global _CONN_FOR_DESC  # pylint: disable=global-statement
     _CONN_FOR_DESC = conn
     try:
