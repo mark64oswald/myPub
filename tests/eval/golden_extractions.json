@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "description": "Phase 2.6 golden set for extraction + resolution quality eval. Each entry is a (chapter_id, concept_name) pair that has been manually verified to be a legitimate extraction — the chapter genuinely discusses the concept with a name a domain expert would recognize. Resolution pairs mark known-same and known-different concept pairings used to calibrate the EntityResolver thresholds.\n\nThis is the SEED set (curated from the first 160 chapters of real extraction). Expand as more domains come online. Phase 2.6's autoresearch loop reads this file to compute precision/recall/F1 on prompt iterations.",
+  "extraction_pairs": [
+    {
+      "chapter_id": 106072,
+      "concept_name": "Star Schema",
+      "concept_type": "Concept",
+      "must_appear": true,
+      "note": "Kimball ch 3. Can't have a retail-sales dimensional chapter without star schema."
+    },
+    {
+      "chapter_id": 106072,
+      "concept_name": "Fact Table",
+      "concept_type": "Concept",
+      "must_appear": true,
+      "note": "Core dim-modeling primitive."
+    },
+    {
+      "chapter_id": 106072,
+      "concept_name": "Dimension Table",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 106072,
+      "concept_name": "Grain",
+      "concept_type": "Concept",
+      "must_appear": true,
+      "note": "Step 2 of the Four-Step Dimensional Design Process."
+    },
+    {
+      "chapter_id": 106072,
+      "concept_name": "Four-Step Dimensional Design Process",
+      "concept_type": "Technique",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 106072,
+      "concept_name": "Surrogate Key",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 106072,
+      "concept_name": "Additive Facts",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 106072,
+      "concept_name": "Degenerate Dimension",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+
+    {
+      "chapter_id": 38732,
+      "concept_name": "ACID",
+      "concept_type": "Concept",
+      "must_appear": true,
+      "note": "DDIA ch 7 — 'What Exactly Is a Transaction?'"
+    },
+    {
+      "chapter_id": 38732,
+      "concept_name": "Atomicity",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 38732,
+      "concept_name": "Consistency",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 38732,
+      "concept_name": "Durability",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 38732,
+      "concept_name": "Serializability",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 38732,
+      "concept_name": "Snapshot Isolation",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+
+    {
+      "chapter_id": 65515,
+      "concept_name": "Kubernetes",
+      "concept_type": "Framework",
+      "must_appear": true,
+      "note": "K8s Up & Running ch 7 — 'Service Discovery'."
+    },
+    {
+      "chapter_id": 65515,
+      "concept_name": "Service Discovery",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 65515,
+      "concept_name": "Cluster IP",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 65515,
+      "concept_name": "Endpoints Object",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 65515,
+      "concept_name": "Domain Name System (DNS)",
+      "concept_type": "Tool",
+      "must_appear": true
+    },
+
+    {
+      "chapter_id": 64401,
+      "concept_name": "Kafka",
+      "concept_type": "Tool",
+      "must_appear": true,
+      "note": "Kafka: Definitive Guide — 'Kafka Consumer Concepts'."
+    },
+    {
+      "chapter_id": 64401,
+      "concept_name": "Consumer Group",
+      "concept_type": "Concept",
+      "must_appear": true
+    },
+    {
+      "chapter_id": 64401,
+      "concept_name": "KafkaConsumer",
+      "concept_type": "Tool",
+      "must_appear": true
+    }
+  ],
+
+  "resolution_pairs": {
+    "same": [
+      {
+        "candidate": "CDC",
+        "existing": "Change Data Capture",
+        "note": "Abbreviation — alias match after seeding."
+      },
+      {
+        "candidate": "ETL",
+        "existing": "Extract Transform Load",
+        "note": "Classic abbreviation."
+      },
+      {
+        "candidate": "SKU",
+        "existing": "Stock Keeping Unit (SKU)",
+        "note": "Abbreviation that's already part of the canonical name."
+      },
+      {
+        "candidate": "Horizontal Scaling",
+        "existing": "X-axis Scaling",
+        "note": "Same concept, different naming convention (AKF cube vs generic)."
+      }
+    ],
+    "different": [
+      {
+        "a": "Star Schema",
+        "b": "Snowflake Schema",
+        "note": "Related dimensional patterns, genuinely distinct (normalized vs denormalized)."
+      },
+      {
+        "a": "Fact Table",
+        "b": "Dimension Table",
+        "note": "Two halves of the star; should never collapse."
+      },
+      {
+        "a": "KafkaProducer",
+        "b": "KafkaConsumer",
+        "note": "Complementary Kafka client classes."
+      },
+      {
+        "a": "IBM DB2 Universal Database",
+        "b": "Microsoft SQL Server",
+        "note": "Distinct commercial RDBMS products."
+      },
+      {
+        "a": "CAP Theorem",
+        "b": "Linearizability",
+        "note": "Related distributed-systems concepts, not duplicates."
+      },
+      {
+        "a": "Read Committed",
+        "b": "Snapshot Isolation",
+        "note": "Distinct isolation levels."
+      }
+    ]
+  }
+}

@@ -98,12 +98,66 @@ The scripts are idempotent and resumable. A full cold start:
 
 ### Running the tests
 
+Canonical entry point (runs the full suite against the project venv):
+
 ```bash
-.venv/bin/python3 -m pytest tests/ -v
+./scripts/test.sh
 ```
+
+Pytest flags pass through:
+
+```bash
+./scripts/test.sh -k resolve            # filter
+./scripts/test.sh tests/test_schema.py  # single file
+./scripts/test.sh -v                    # verbose
+```
+
+Test suite layout:
+
+- `tests/test_schema.py` — v2 schema shape + backfill invariants
+- `tests/test_resolution.py` — EntityResolver three-stage logic
+- `tests/test_resolve_concept.py` — review-queue actions (merge / alias /
+  keep-separate / rename), including HNSW-index-present paths
+- `tests/test_extract_entities.py` — validation + process_extraction_json
+- `tests/test_extract_batch.py` — prep / process / status, dedup / skip
+  / front-matter filter
+- `tests/test_index_books.py` — hashing, metadata fallback, end-to-end
+  indexing of a programmatically-built ePub
+- `tests/test_migrate_add_content_hashes.py` — content-hash migration
+  idempotency + the shrinking-WHERE pagination regression
+- `tests/test_duckdb_fk_bugs.py` — pinned regressions for the three
+  DuckDB 1.5.0 FK-handling bugs we work around
+- `tests/test_phase1_integration.py` — FTS × VSS × DuckPGQ retrieval
+- `tests/test_phase2_integration.py` — index → extract → resolve E2E
+- `tests/test_extraction_eval.py` — Phase 2.6 eval framework tests
 
 The integration tests embed the test queries live, so the first run downloads
 the `all-MiniLM-L6-v2` weights (~90 MB) into the HuggingFace cache.
+
+### Pre-commit hook (opt-in)
+
+To run the test suite automatically before every commit:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+Disable later with `git config --unset core.hooksPath`. Use
+`git commit --no-verify` to bypass for a single commit.
+
+### Evaluating extraction quality
+
+Phase 2.6 eval against the golden set at
+`tests/eval/golden_extractions.json`:
+
+```bash
+.venv/bin/python3 scripts/extraction_eval.py
+.venv/bin/python3 scripts/extraction_eval.py --baseline logs/extraction_eval_baseline.md
+```
+
+Reports precision / recall / F1 on the extraction golden set and
+same-vs-different accuracy on the resolution golden pairs. Use as the
+quality gate when iterating on extraction prompts.
 
 ### v2 layout
 

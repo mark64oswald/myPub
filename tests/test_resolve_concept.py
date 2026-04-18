@@ -322,3 +322,135 @@ def test_show_reports_resolution_action(conn, capsys):
     assert f"queue_id:              {qid}" in out
     assert "resolution_action:     pending" in out
     assert "candidate_name:        'Provisional'" in out
+
+
+# ----------------------------------------------------------------------------
+# HNSW-present path — uses conftest.realistic_conn so the DML against
+# concept_embedding actually hits the HNSW index. This is the path that
+# silently broke in production and went uncaught by the plain-schema
+# tests above. Regression against today's bug.
+# ----------------------------------------------------------------------------
+
+def _seed_pair_against_realistic(conn, embedder, target_name: str, prov_name: str):
+    """Insert a target + provisional pair on top of the realistic fixture.
+
+    Returns (target_id, provisional_id, queue_id). The realistic fixture
+    pre-seeds two scratch concepts plus HNSW indexes; these additions
+    don't conflict with that.
+    """
+    t_id = conn.execute(
+        "INSERT INTO concept (name, concept_type, description, pending_review) "
+        "VALUES (?, 'Concept', ?, FALSE) RETURNING concept_id",
+        [target_name, f"desc of {target_name}"],
+    ).fetchone()[0]
+    p_id = conn.execute(
+        "INSERT INTO concept (name, concept_type, description, pending_review) "
+        "VALUES (?, 'Concept', ?, TRUE) RETURNING concept_id",
+        [prov_name, f"desc of {prov_name}"],
+    ).fetchone()[0]
+    # Real embeddings so distances aren't all zero.
+    vec_t = embedder.encode([target_name], convert_to_numpy=True)[0].astype("float32").tolist()
+    vec_p = embedder.encode([prov_name], convert_to_numpy=True)[0].astype("float32").tolist()
+    conn.execute(
+        "INSERT INTO concept_embedding (concept_id, embedding) VALUES (?, ?)",
+        [t_id, vec_t],
+    )
+    conn.execute(
+        "INSERT INTO concept_embedding (concept_id, embedding) VALUES (?, ?)",
+        [p_id, vec_p],
+    )
+    qid = conn.execute(
+        """
+        INSERT INTO concept_resolution_queue
+            (candidate_name, candidate_context, source_type, source_id,
+             nearest_concept_id, provisional_concept_id,
+             similarity_score, resolution_action)
+        VALUES (?, 'test context', 'chapter', 1, ?, ?, 0.80, 'pending')
+        RETURNING queue_id
+        """,
+        [prov_name, t_id, p_id],
+    ).fetchone()[0]
+    return t_id, p_id, qid
+
+
+def test_merge_works_when_concept_embedding_has_hnsw_index(realistic_conn, embedder):
+    """This is the regression test for today's bug — merge deletes a
+    concept_embedding row that's covered by an HNSW index. Before the
+    `LOAD vss` fix in resolve_concept.main, this raised:
+       'Cannot bind index concept_embedding, unknown index type HNSW'
+    even though VSS was installed on the catalog. Now the CLI loads vss
+    on connection, so the DELETE succeeds. This test pins that fix."""
+    t_id, p_id, qid = _seed_pair_against_realistic(
+        realistic_conn, embedder, "X-axis Scaling", "Horizontal Scaling"
+    )
+    rc.do_merge(realistic_conn, qid, register_alias=True)
+    # Provisional is gone, target kept, alias registered.
+    assert realistic_conn.execute(
+        "SELECT COUNT(*) FROM concept WHERE concept_id = ?", [p_id]
+    ).fetchone()[0] == 0
+    assert realistic_conn.execute(
+        "SELECT COUNT(*) FROM concept_embedding WHERE concept_id = ?", [p_id]
+    ).fetchone()[0] == 0
+    assert realistic_conn.execute(
+        "SELECT alias FROM concept_alias WHERE concept_id = ?", [t_id]
+    ).fetchone()[0] == "Horizontal Scaling"
+    assert realistic_conn.execute(
+        "SELECT resolution_action FROM concept_resolution_queue WHERE queue_id = ?",
+        [qid],
+    ).fetchone()[0] == "alias"
+
+
+def test_rename_works_when_concept_embedding_has_hnsw_index(realistic_conn, embedder):
+    """rename goes through the park-and-reinsert workaround for the
+    UNIQUE-column UPDATE bug. Verify it doesn't regress when the
+    concept_embedding table carries an HNSW index."""
+    _t_id, p_id, qid = _seed_pair_against_realistic(
+        realistic_conn, embedder, "Change Data Capture", "CDC stream"
+    )
+    rc.do_rename(realistic_conn, qid, "Change Stream", merge_into=None)
+    row = realistic_conn.execute(
+        "SELECT name, pending_review FROM concept WHERE concept_id = ?", [p_id]
+    ).fetchone()
+    assert row == ("Change Stream", False)
+    # Embedding is still present (reinserted by the workaround).
+    assert realistic_conn.execute(
+        "SELECT COUNT(*) FROM concept_embedding WHERE concept_id = ?", [p_id]
+    ).fetchone()[0] == 1
+
+
+def test_keep_separate_works_when_concept_embedding_has_hnsw_index(
+    realistic_conn, embedder,
+):
+    """keep-separate only UPDATEs concept.pending_review — a plain scalar
+    column, not FK-touching and not UNIQUE. Should work with or without
+    the HNSW index present. Pinned here anyway so we'd catch a regression
+    if DuckDB broadens the bug to touch scalars."""
+    _, p_id, qid = _seed_pair_against_realistic(
+        realistic_conn, embedder, "Serializability", "Weak Isolation"
+    )
+    rc.do_keep_separate(realistic_conn, qid)
+    assert realistic_conn.execute(
+        "SELECT pending_review FROM concept WHERE concept_id = ?", [p_id]
+    ).fetchone()[0] is False
+
+
+def test_alias_shorthand_works_when_hnsw_indexed(realistic_conn, embedder):
+    """The `alias` command is `merge --register-alias` by another name;
+    exercise it against the HNSW-indexed fixture to confirm both paths
+    work end-to-end."""
+    t_id, p_id, qid = _seed_pair_against_realistic(
+        realistic_conn, embedder, "Logstash", "Heka"
+    )
+    rc.do_merge(realistic_conn, qid, register_alias=True)
+    assert realistic_conn.execute(
+        "SELECT alias FROM concept_alias WHERE concept_id = ? "
+        "ORDER BY alias_id DESC LIMIT 1",
+        [t_id],
+    ).fetchone()[0] == "Heka"
+    assert realistic_conn.execute(
+        "SELECT resolution_action FROM concept_resolution_queue WHERE queue_id = ?",
+        [qid],
+    ).fetchone()[0] == "alias"
+    assert realistic_conn.execute(
+        "SELECT COUNT(*) FROM concept WHERE concept_id = ?", [p_id]
+    ).fetchone()[0] == 0

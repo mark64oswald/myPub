@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — run the test suite before every commit.
+#
+# Enabled by running `./scripts/install-git-hooks.sh`. Without that step,
+# this file is inert (git never looks at .githooks/ by default).
+#
+# Override for a single commit with `git commit --no-verify` if you
+# deliberately want to land an unfinished change.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-commit: running pytest…"
+./scripts/test.sh
