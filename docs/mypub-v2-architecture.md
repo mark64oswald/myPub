@@ -300,16 +300,52 @@ YAML-based reusable patterns with canonical implementations and variations. In v
 
 ### 6.1 Book Ingestion and Extraction
 
-Run per-book when the corpus changes:
+Invoked from Claude Code: `/kb-index [path]`. Scans the ePub collection (or a specific path), detects new, updated, and unchanged books, and only processes what's needed.
 
-1. **Parse ePub** — extract metadata, ToC, chapter XHTML into the catalog.
-2. **Generate embeddings** for chapters and sections; write to VSS-indexed columns.
-3. **Build FTS index** over chapter text.
-4. **Run entity/concept extractor** on each chapter with the domain schema. Each candidate entity passes through Entity Resolution (§5.2) — matched candidates attach to existing concepts; unmatched candidates become new nodes or go to the review queue. Write entities and relations with `source_type='chapter'`.
-5. **Run procedure extractor** on each chapter; concept references resolve via the same mechanism. Write extracted procedures with `source_type='chapter'`.
-6. **Link to doc sources** — for each concept (new or existing), identify applicable live doc sources (Context7 for vendor/indexed OSS, DeepWiki for any repo-backed concept, GitHub raw for long tail) and record linkages in `concept_doc_link`. Multiple sources per concept are expected.
+**Detection phase — for each ePub file in the target path:**
 
-Invoked from Claude Code: `/kb-index <path>`.
+1. **Compute file content_hash** (SHA-256 of the ePub file).
+2. **Look up by source_path** in the `book` table.
+3. **Not found → new book.** Full pipeline (below).
+4. **Found, hash matches → unchanged.** Skip entirely. This is the fast path for the vast majority of your corpus.
+5. **Found, hash differs → updated book.** Typically an early release with new chapters, a revised edition, or a MEAP with content changes. Re-process with chapter-level diffing (below).
+
+**Full pipeline for new books:**
+
+1. **Parse ePub** — extract metadata, ToC, chapter XHTML into the catalog. Write `book.content_hash` and `book.last_indexed_at`.
+2. **Compute chapter hashes** — store `chapter.content_hash` per chapter.
+3. **Generate embeddings** for chapters; write to VSS-indexed columns.
+4. **Build FTS index** over chapter text.
+5. **Run entity/concept extractor** on each chapter via sub-agents. Each candidate entity passes through Entity Resolution (§5.2) — matched candidates attach to existing concepts; unmatched candidates become new nodes or go to the review queue. Write entities and relations with `source_type='chapter'`.
+6. **Run procedure extractor** on each chapter via sub-agents; concept references resolve via the same mechanism. Write extracted procedures with `source_type='chapter'`.
+7. **Link to doc sources** — for each concept (new or existing), identify applicable live doc sources (Context7 for vendor/indexed OSS, DeepWiki for any repo-backed concept, GitHub raw for long tail) and record linkages in `concept_doc_link`. Multiple sources per concept are expected.
+
+**Incremental pipeline for updated books:**
+
+1. **Re-parse ePub** — extract updated ToC and chapter XHTML. Compute `chapter.content_hash` for each chapter.
+2. **Diff chapters** against stored hashes. Three outcomes per chapter:
+   - **Unchanged** (hash matches) — skip. Existing embeddings, entities, procedures, and graph edges remain valid.
+   - **New** (chapter number or title not previously present) — run the full chapter pipeline: embed → FTS → entity extraction → procedure extraction.
+   - **Changed** (same chapter, different hash) — re-process:
+     a. Re-generate the embedding for the updated content.
+     b. Update the FTS index entry.
+     c. **Delete stale extraction edges** — remove `concept_relation` and `procedure` rows where `source_type='chapter'` and `source_id=<this chapter>`. Don't delete the concepts themselves — other chapters or doc sources may also reference them.
+     d. Re-run entity extraction via sub-agent. Entity Resolution re-links to existing concepts.
+     e. Re-run procedure extraction via sub-agent.
+   - **Deleted** (existed before, gone in updated ePub) — rare, but possible when early releases reorganize. Mark the chapter as superseded. Remove its extraction edges. Don't delete referenced concepts.
+3. **Update `book.content_hash`** and `book.last_indexed_at`.
+4. **Log summary**: N chapters unchanged, N new, N changed, N deleted.
+
+**Example — early release update:**
+You have *"Databricks Cookbook, Early Release"* indexed in March with 8 chapters. In June, you download an update with 12 chapters and revisions to chapters 3 and 7.
+
+- Chapters 1, 2, 4, 5, 6, 8: hash unchanged → **skip** (zero work)
+- Chapters 3, 7: hash changed → **re-extract** (~4 minutes)
+- Chapters 9, 10, 11, 12: new → **full pipeline** (~8 minutes)
+- Total: ~12 minutes, vs. ~25 minutes for a full re-index of all 12 chapters
+
+**Edition replacement:**
+When you replace a 1st edition with a 2nd edition (different ePub file, different ISBN), the system sees it as a new book since the `source_path` differs. Both editions coexist in the catalog. To retire the old edition, use `/kb-retire-book <path>` — this marks the book as superseded and drops its weight in ranking without deleting its graph contributions. Concepts introduced by the retired edition remain in the graph if other sources also reference them.
 
 ### 6.2 Snapshot Ingestion and Extraction
 
@@ -463,7 +499,10 @@ CREATE TABLE book (
     author_id        BIGINT,
     publisher        VARCHAR,
     publication_date DATE,
-    source_path      VARCHAR
+    source_path      VARCHAR,
+    content_hash     VARCHAR,       -- NEW: SHA-256 of ePub file, for change detection
+    last_indexed_at  TIMESTAMP,     -- NEW: when this book was last fully processed
+    status           VARCHAR DEFAULT 'active'  -- NEW: 'active' | 'superseded' (for retired editions)
 );
 
 CREATE TABLE chapter (
@@ -472,7 +511,8 @@ CREATE TABLE chapter (
     chapter_num  INTEGER,
     title        VARCHAR,
     content      TEXT,
-    embedding    FLOAT[384]   -- NEW: for VSS
+    content_hash VARCHAR,          -- NEW: hash of chapter content, for incremental re-indexing
+    embedding    FLOAT[384]        -- NEW: for VSS
 );
 
 CREATE TABLE concept (
@@ -842,6 +882,7 @@ mypub/
 │       ├── kb-prereqs.md
 │       ├── kb-generate-skills.md
 │       ├── kb-index.md
+│       ├── kb-retire-book.md
 │       ├── kb-refresh-docs.md
 │       ├── kb-review-concepts.md
 │       ├── kb-focus.md
@@ -903,7 +944,8 @@ with a Skills Factory for generating Claude Skills packages.
 - `/kb-compare <concept>` — compare author perspectives
 - `/kb-prereqs <concept>` — show learning prerequisites
 - `/kb-generate-skills <domain>` — run the Skills Factory
-- `/kb-index <book-path>` — add new book to the corpus
+- `/kb-index <book-path>` — add new book or re-index updated books (incremental)
+- `/kb-retire-book <path>` — mark a book as superseded (e.g., replaced by new edition)
 - `/kb-refresh-docs [domain]` — refresh live doc snapshots and re-extract changed ones
 - `/kb-review-concepts` — review borderline entity-resolution matches
 - `/kb-focus <domain>` — elevate a domain's doc sources to Hot tier
@@ -990,7 +1032,7 @@ Because all the heavy LLM work runs inside Claude Code on your Max subscription,
 
 | Capability | v1 | v2 |
 |---|---|---|
-| ePub indexing | ✓ | ✓ |
+| ePub indexing | ✓ | ✓ (incremental, content-hash-based) |
 | Chapter-level retrieval | ✓ | ✓ (enhanced) |
 | Section-level retrieval from docs | — | ✓ (symmetric with book chapters) |
 | Concept graph | Manual | Automated extraction (books + live docs) |

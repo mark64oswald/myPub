@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
 import sys
@@ -53,6 +54,20 @@ _ENCODER = tiktoken.get_encoding("cl100k_base")
 def _count_tokens(text: str) -> int:
     """Return the token count using the cl100k_base encoding."""
     return len(_ENCODER.encode(text, disallowed_special=()))
+
+
+def _sha256_file(path: Path) -> str:
+    """Stream-hash a file and return its hex SHA-256 digest."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sha256_text(text: str) -> str:
+    """Return the hex SHA-256 digest of a UTF-8 string."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _extract_text(html_bytes: bytes) -> str:
@@ -195,12 +210,16 @@ def _upsert_author(conn: duckdb.DuckDBPyConnection, name: str) -> int:
 
 def _insert_book(conn: duckdb.DuckDBPyConnection, filepath: Path, meta: dict) -> int:
     """Insert a book row and return its new book_id."""
+    file_hash = _sha256_file(filepath)
     row = conn.execute(
         """
         INSERT INTO book (title, publisher, publication_date, source_path,
                           description, subjects, total_tokens, chapter_count,
+                          content_hash, last_indexed_at, status,
                           indexed_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL,
+                ?, CURRENT_TIMESTAMP, 'active',
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         RETURNING book_id
         """,
         [
@@ -210,6 +229,7 @@ def _insert_book(conn: duckdb.DuckDBPyConnection, filepath: Path, meta: dict) ->
             str(filepath),
             meta["description"],
             meta["subjects"],
+            file_hash,
         ],
     ).fetchone()
     return row[0]
@@ -261,11 +281,14 @@ def _insert_chapters(
 
         parent_id = seq_to_id.get(entry["parent_seq"]) if entry["parent_seq"] else None
 
+        content_for_db = content or None
+        content_hash = _sha256_text(content) if content else None
         new_id = conn.execute(
             """
             INSERT INTO chapter (book_id, chapter_num, parent_chapter_id,
-                                 title, href, content, token_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                 title, href, content, content_hash,
+                                 token_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING chapter_id
             """,
             [
@@ -274,7 +297,8 @@ def _insert_chapters(
                 parent_id,
                 entry["title"],
                 entry["href"],
-                content or None,
+                content_for_db,
+                content_hash,
                 tokens or None,
             ],
         ).fetchone()[0]

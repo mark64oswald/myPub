@@ -46,9 +46,11 @@ EXPECTED_TABLES = {
 EXPECTED_COLUMNS = {
     "book": {"book_id", "title", "publisher", "publication_date", "source_path",
              "description", "subjects", "total_tokens", "chapter_count",
+             "content_hash", "last_indexed_at", "status",
              "indexed_at", "updated_at"},
     "chapter": {"chapter_id", "book_id", "chapter_num", "parent_chapter_id",
-                "title", "href", "content", "token_count", "indexed_at"},
+                "title", "href", "content", "content_hash", "token_count",
+                "indexed_at"},
     "chapter_embedding": {"chapter_id", "embedding", "model", "created_at"},
     "concept": {"concept_id", "name", "concept_type", "description", "domain",
                 "pending_review", "query_count", "last_queried_at",
@@ -177,6 +179,58 @@ def test_not_yet_populated_tables_are_empty(conn):
     for table in EXPECTED_TABLES - populated_by_phase_1_or_2:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
         assert count == 0, f"{table} is not empty (count={count})"
+
+
+def test_book_content_hashes_populated(conn):
+    """Every indexed book has a non-null content_hash (sha256 hex = 64 chars)
+    and a last_indexed_at timestamp. Status defaults to 'active'."""
+    book_count = conn.execute("SELECT COUNT(*) FROM book").fetchone()[0]
+    if book_count == 0:
+        pytest.skip("no books indexed in this catalog")
+    stats = conn.execute(
+        """
+        SELECT COUNT(*) FILTER (WHERE content_hash IS NOT NULL),
+               COUNT(*) FILTER (WHERE last_indexed_at IS NOT NULL),
+               COUNT(*) FILTER (WHERE status = 'active'),
+               COUNT(*) FILTER (WHERE LENGTH(content_hash) = 64),
+               COUNT(*)
+          FROM book
+        """
+    ).fetchone()
+    hashed, indexed, active, right_width, total = stats
+    assert hashed == total, f"{total - hashed} books missing content_hash"
+    assert indexed == total, f"{total - indexed} books missing last_indexed_at"
+    assert active == total, f"{total - active} books missing status='active'"
+    assert right_width == total, (
+        f"{total - right_width} books have content_hash not 64 hex chars long"
+    )
+
+
+def test_chapter_content_hashes_populated(conn):
+    """Every chapter with content has a 64-char content_hash; chapters with
+    NULL content also have NULL hash."""
+    chapter_count = conn.execute("SELECT COUNT(*) FROM chapter").fetchone()[0]
+    if chapter_count == 0:
+        pytest.skip("no chapters indexed in this catalog")
+    with_content_no_hash = conn.execute(
+        "SELECT COUNT(*) FROM chapter "
+        "WHERE content IS NOT NULL AND content_hash IS NULL"
+    ).fetchone()[0]
+    assert with_content_no_hash == 0, (
+        f"{with_content_no_hash} chapters have content but no content_hash"
+    )
+    without_content_with_hash = conn.execute(
+        "SELECT COUNT(*) FROM chapter "
+        "WHERE content IS NULL AND content_hash IS NOT NULL"
+    ).fetchone()[0]
+    assert without_content_with_hash == 0, (
+        f"{without_content_with_hash} chapters have a hash but no content"
+    )
+    wrong_width = conn.execute(
+        "SELECT COUNT(*) FROM chapter "
+        "WHERE content_hash IS NOT NULL AND LENGTH(content_hash) != 64"
+    ).fetchone()[0]
+    assert wrong_width == 0, f"{wrong_width} chapters have malformed content_hash"
 
 
 def test_author_name_unique(conn):

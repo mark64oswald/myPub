@@ -64,6 +64,9 @@ CREATE TABLE book (
     subjects         VARCHAR[],
     total_tokens     INTEGER,
     chapter_count    INTEGER,
+    content_hash     VARCHAR,                      -- SHA-256 of the ePub file, for /kb-index change detection
+    last_indexed_at  TIMESTAMP,                    -- when this book was last fully processed
+    status           VARCHAR    DEFAULT 'active',  -- 'active' | 'superseded' (retired editions)
     indexed_at       TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
     updated_at       TIMESTAMP,
     UNIQUE (source_path)
@@ -87,6 +90,7 @@ CREATE TABLE chapter (
     title             VARCHAR,
     href              VARCHAR,
     content           TEXT,
+    content_hash      VARCHAR,  -- SHA-256 of content, for chapter-level diffing during re-index
     token_count       INTEGER,
     indexed_at        TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
 );

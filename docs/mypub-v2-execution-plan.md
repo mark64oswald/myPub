@@ -92,11 +92,18 @@ Write a migration script at scripts/migrate_v2_schema.py that:
 1. Makes a backup copy of data/catalog.ddb → data/catalog_v1_backup.ddb
 2. Adds all new v2 tables that don't exist yet (doc_source, doc_snapshot,
    doc_section, concept_alias, concept_resolution_queue, concept_query_log,
-   procedure, skill_package, skill, skill_source, skill_file, skill_relation)
-3. ALTERs existing tables to add new columns (embedding on chapter, embedding
-   on concept, query_count and last_queried_at on concept)
-4. Does NOT drop or modify existing data
-5. Prints a before/after summary of tables and row counts
+   discovery_log, procedure, skill_package, skill, skill_source, skill_file,
+   skill_relation)
+3. ALTERs existing tables to add new columns:
+   - book: content_hash, last_indexed_at, status (for incremental re-indexing)
+   - chapter: content_hash, embedding
+   - concept: embedding, query_count, last_queried_at
+4. Backfill book.content_hash by computing SHA-256 of each ePub file at
+   book.source_path (if the file exists). Backfill chapter.content_hash by
+   hashing chapter.content. This establishes the baseline so future /kb-index
+   runs can detect changes.
+5. Does NOT drop or modify existing data
+6. Prints a before/after summary of tables and row counts
 
 Use Context7 to verify DuckDB ALTER TABLE syntax for adding columns.
 
@@ -104,7 +111,8 @@ Run the migration. Verify all new tables exist.
 Write the target DDL to schemas/catalog.sql for reference.
 
 Tests: write tests/test_schema.py that verifies every expected table and column
-exists in the migrated database.
+exists in the migrated database. Include a test that content_hash is populated
+for existing books and chapters.
 ```
 
 **Validate:**
@@ -535,6 +543,50 @@ zero procedures.
 - Zero API token charges
 
 🔀 Commit: `feat(phase3): procedure extraction with full corpus run`
+
+### Prompt 3.2 — Incremental re-indexing for updated books
+
+```
+Update the /kb-index command and scripts/index_books.py to support incremental
+re-indexing per the architecture doc §6.1.
+
+The flow:
+1. For each ePub in the target path, compute file content_hash
+2. Compare to stored book.content_hash
+3. Skip unchanged books (the common case)
+4. For changed books, diff at the chapter level using chapter.content_hash:
+   - Unchanged chapters → skip
+   - New chapters → full pipeline (embed, FTS, entity extraction, procedures)
+   - Changed chapters → delete stale extraction edges, re-extract
+   - Deleted chapters → mark as superseded, remove extraction edges
+5. Update book.content_hash and book.last_indexed_at
+6. Log summary: N books scanned, N unchanged, N updated (with chapter breakdown)
+
+Also build /kb-retire-book command that sets book.status = 'superseded' and
+drops the book's weight in ranking queries without deleting its graph contributions.
+
+Test incremental re-indexing:
+1. Pick a book already in the catalog
+2. Make a copy of the ePub, modify one chapter's content (add a paragraph)
+3. Run /kb-index on the modified copy
+4. Verify: only the modified chapter was re-extracted; unchanged chapters
+   were skipped; total processing time is much less than full-book indexing
+5. Verify: entities from the modified chapter reflect the new content
+
+Test /kb-retire-book:
+1. Retire the test book
+2. Verify: book.status = 'superseded'
+3. Verify: concepts from the book still exist in the graph
+4. Verify: ranking results deprioritize content from the retired book
+```
+
+**Validate:**
+- Incremental detection correctly identifies changed vs. unchanged chapters
+- Only changed/new chapters trigger extraction (sub-agent calls)
+- Stale edges from changed chapters are removed and replaced
+- Retired books are deprioritized in ranking
+
+🔀 Commit: `feat(phase3): incremental re-indexing with content-hash detection`
 
 ---
 
