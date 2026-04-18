@@ -93,17 +93,31 @@ Write a migration script at scripts/migrate_v2_schema.py that:
 2. Adds all new v2 tables that don't exist yet (doc_source, doc_snapshot,
    doc_section, concept_alias, concept_resolution_queue, concept_query_log,
    discovery_log, procedure, skill_package, skill, skill_source, skill_file,
-   skill_relation)
+   skill_relation), plus side-table embedding stores (chapter_embedding,
+   concept_embedding, doc_snapshot_embedding, doc_section_embedding —
+   FLOAT[384] vectors live in side tables rather than inline columns, see
+   implementation note below).
 3. ALTERs existing tables to add new columns:
    - book: content_hash, last_indexed_at, status (for incremental re-indexing)
-   - chapter: content_hash, embedding
-   - concept: embedding, query_count, last_queried_at
+   - chapter: content_hash
+   - concept: query_count, last_queried_at, pending_review
 4. Backfill book.content_hash by computing SHA-256 of each ePub file at
    book.source_path (if the file exists). Backfill chapter.content_hash by
    hashing chapter.content. This establishes the baseline so future /kb-index
    runs can detect changes.
 5. Does NOT drop or modify existing data
 6. Prints a before/after summary of tables and row counts
+
+**Implementation note — side-table embeddings.** DuckDB 1.5 has a bug where
+UPDATE on any FLOAT[N] column fails with a spurious FK-violation error if the
+target row is referenced by any inbound FK. Because we need to populate
+embeddings via UPDATE (after content is written), embeddings live in 1:1
+side tables keyed by the entity's PK — chapter_embedding, concept_embedding,
+etc. Side-table INSERTs don't trigger the bug. This is a deviation from the
+arch doc §7.1 which shows embeddings as inline columns; the schema comment
+in schemas/catalog.sql documents the reason. Also drop self-referential FKs
+on chapter.parent_chapter_id and doc_section.parent_id for the same reason
+(enforced in application code instead).
 
 Use Context7 to verify DuckDB ALTER TABLE syntax for adding columns.
 

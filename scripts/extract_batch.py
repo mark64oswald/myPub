@@ -166,6 +166,19 @@ def _select_chapters(
         "ch.content IS NOT NULL",
         "ch.content_hash IS NOT NULL",
         f"LENGTH(ch.content) >= {int(min_content_chars)}",
+        # Skip front-matter TOC entries that don't carry real concepts.
+        # The LLM correctly no-ops on these, but each wasted sub-agent call
+        # costs ~3 s and a bit of Max quota. Filter at selection.
+        "LOWER(TRIM(ch.title)) NOT IN ("
+        "  'copyright', 'contents', 'table of contents', 'foreword', 'preface',"
+        "  'acknowledgments', 'acknowledgements', 'dedication', 'colophon',"
+        "  'index', 'index (1/2)', 'index (2/2)',"
+        "  'about this book', 'about the author', 'about the authors',"
+        "  'about the cover', 'about the cover illustration',"
+        "  'disclaimer', 'legal notice', 'notice', 'errata',"
+        "  'contact us', 'o''reilly online learning', 'using the examples',"
+        "  'conventions used in this book'"
+        ")",
     ]
     params: list = []
     if chapter_ids:
