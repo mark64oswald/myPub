@@ -173,6 +173,7 @@ class EntityResolver:
                 self._enqueue_resolution(
                     candidate_name,
                     candidate_context,
+                    provisional_concept_id=new_id,
                     nearest_concept_id=neighbor_id,
                     similarity=similarity,
                     source_type=source_type,
@@ -308,6 +309,7 @@ class EntityResolver:
         candidate_name: str,
         candidate_context: str,
         *,
+        provisional_concept_id: int,
         nearest_concept_id: int,
         similarity: float,
         source_type: Optional[str],
@@ -319,10 +321,10 @@ class EntityResolver:
             INSERT INTO concept_resolution_queue (
                 candidate_name, candidate_context,
                 source_type, source_id,
-                nearest_concept_id, similarity_score,
-                resolution_action
+                nearest_concept_id, provisional_concept_id,
+                similarity_score, resolution_action
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
             RETURNING queue_id
             """,
             [
@@ -331,6 +333,7 @@ class EntityResolver:
                 source_type,
                 source_id,
                 nearest_concept_id,
+                provisional_concept_id,
                 similarity,
             ],
         ).fetchone()

@@ -62,6 +62,7 @@ EXPECTED_COLUMNS = {
     "concept_resolution_queue": {"queue_id", "candidate_name",
                                  "candidate_context", "source_type",
                                  "source_id", "nearest_concept_id",
+                                 "provisional_concept_id",
                                  "similarity_score", "resolution_action",
                                  "reviewed_at", "created_at"},
     "concept_relation": {"from_concept_id", "to_concept_id", "relation_type",

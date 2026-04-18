@@ -222,13 +222,15 @@ def test_borderline_creates_pending_concept_and_enqueues(conn, embedder):
     ).fetchone()
     assert row[0] is True
 
-    # Queue has the entry.
+    # Queue has the entry, with provisional_concept_id pointing at the
+    # concept the resolver just created.
     queued = conn.execute(
-        "SELECT candidate_name, nearest_concept_id, resolution_action "
+        "SELECT candidate_name, nearest_concept_id, provisional_concept_id, "
+        "       resolution_action "
         "FROM concept_resolution_queue"
     ).fetchall()
     assert len(queued) == 1
-    assert queued[0] == ("Snowflake Schema", parent, "pending")
+    assert queued[0] == ("Snowflake Schema", parent, result.concept_id, "pending")
 
 
 def test_source_provenance_on_borderline(conn, embedder):

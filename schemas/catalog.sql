@@ -147,16 +147,20 @@ CREATE TABLE concept_alias (
 CREATE INDEX idx_concept_alias_alias ON concept_alias(alias);
 
 CREATE TABLE concept_resolution_queue (
-    queue_id           BIGINT     PRIMARY KEY DEFAULT nextval('seq_concept_resolution_queue_id'),
-    candidate_name     VARCHAR    NOT NULL,
-    candidate_context  TEXT,
-    source_type        VARCHAR,
-    source_id          BIGINT,
-    nearest_concept_id BIGINT     REFERENCES concept(concept_id),
-    similarity_score   DOUBLE,
-    resolution_action  VARCHAR    DEFAULT 'pending',
-    reviewed_at        TIMESTAMP,
-    created_at         TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+    queue_id                BIGINT     PRIMARY KEY DEFAULT nextval('seq_concept_resolution_queue_id'),
+    candidate_name          VARCHAR    NOT NULL,
+    candidate_context       TEXT,
+    source_type             VARCHAR,
+    source_id               BIGINT,
+    nearest_concept_id      BIGINT     REFERENCES concept(concept_id),
+    provisional_concept_id  BIGINT,    -- the pending_review=TRUE concept the
+                                       -- resolver provisionally created; the
+                                       -- review workflow updates/deletes this
+                                       -- row based on the chosen action
+    similarity_score        DOUBLE,
+    resolution_action       VARCHAR    DEFAULT 'pending',
+    reviewed_at             TIMESTAMP,
+    created_at              TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_concept_resq_action ON concept_resolution_queue(resolution_action);
