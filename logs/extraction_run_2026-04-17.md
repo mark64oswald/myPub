@@ -118,3 +118,105 @@ Options to discuss:
 - (c) Iterate on a different dimension: scale the *eval set* (Phase 2.6)
   and the *review queue workflow* (Phase 2.5) first, which don't require
   more extraction.
+
+---
+
+# Phase 2.3 — 2026-04-18 session continuation
+
+## Additional scope
+
+30 chapters across 3 new books, selected by deduplicating on `href_base`
+(one chapter per unique content file) and taking the top 10 by content
+length per book.
+
+- Learning SQL (book_id 348): 10 chapters
+- Node.js Design Patterns (book_id 389): 10 chapters
+- Machine Learning Production Systems (book_id 361): 10 chapters
+
+Dispatched via 6 sub-agent tasks of 5 chapters each, using the new
+`scripts/extract_batch.py` coordinator. Wall clock for all 6 agents
+(first 3 in parallel, then last 3 in parallel): ~9 min. Python
+post-processing (resolver + writes): ~30 seconds.
+
+## Cumulative results (5 + 30 = 35 chapters across 7 books)
+
+```
+concepts           731  (+614 from first run)
+relations          617  (+506)
+review queue       85   (+71, all 'pending')
+```
+
+### Entity type distribution
+
+| type      | count | share  |
+|-----------|-----:|-------:|
+| Concept   |  322 |  44.0% |
+| Tool      |  126 |  17.2% |
+| Technique |  112 |  15.3% |
+| Pattern   |   76 |  10.4% |
+| Framework |   57 |   7.8% |
+| Algorithm |   38 |   5.2% |
+
+All six entity types now well-represented — the broader book diversity
+pulled out plenty of Framework and Algorithm hits (TensorFlow, Pandas,
+Raft, etc.) that the first sample missed.
+
+### Relation type distribution
+
+| type            | count |
+|-----------------|-----:|
+| IMPLEMENTS      |   216 |
+| REQUIRES        |   128 |
+| CONTRASTS_WITH  |   112 |
+| CITES           |    98 |
+| EXTENDS         |    63 |
+
+### Resolution breakdown for this session's 30-chapter run
+
+| resolution     | count |
+|----------------|-----:|
+| new            |  543 |
+| exact          |   84 |
+| borderline     |   71 |
+| embedding_high |   10 |
+
+84 exact-matches + 10 embedding-highs = 94 cross-chapter concept links,
+i.e. the resolver correctly recognized ~13% of extraction candidates as
+already-existing concepts. That ratio will climb as the corpus grows.
+
+## Quality on 15-row spot-check
+
+- **Strong**: 9/15 (60%) — e.g., "Inner Join IMPLEMENTS Join",
+  "mysql command-line tool REQUIRES MySQL", "Derived Table REQUIRES
+  Subquery", "Full-Pass Transformation CONTRASTS_WITH Instance-Level
+  Transformation".
+- **Weak/imprecise**: 4/15 (27%) — e.g., "Clustering CONTRASTS_WITH
+  Partitioning" (related, not contrasting), "Apache Beam CONTRASTS_WITH
+  Pandas" (different domains, weak contrast), "Streaming Data CITES
+  Spark Streaming" (direction unclear).
+- **Wrong**: 2/15 (13%) — "Adapter IMPLEMENTS LoRA" (reversed — LoRA is
+  an adapter technique), "Query Optimizer IMPLEMENTS Execution Plan"
+  (optimizer *produces* the plan, not implements it).
+
+Still under the 30% wrong re-tune threshold. ML/patterns content pulls
+more reversed relations than data-engineering content — worth noting
+when we build the Phase 2.6 golden set that ML chapters may need
+tighter prompt guidance on relation direction.
+
+## Batch driver validated
+
+`scripts/extract_batch.py` worked cleanly end-to-end:
+  prep    → wrote 30 prompts + manifest in one call
+  process → ingested all 30 result JSONs in ~30 s
+  status  → reports extraction coverage per book
+
+Ready for Phase 2.4 full-corpus use, which spans multiple sessions.
+
+## Updated status
+
+```
+chapters w/ content  112,968
+chapters extracted        35  (0.03%)
+```
+
+Next: Phase 2.4 starts in a future session.
