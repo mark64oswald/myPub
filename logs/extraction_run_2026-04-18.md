@@ -140,3 +140,153 @@ Likely target: 500–1,000 blocks. At wave-of-10 throughput that's ~30–60
 min of agent time, plus 2–5 min Python post-processing. If rate limits
 hold, a single session could probably do 1,000 blocks; better to pause
 and reassess at 500 to confirm behavior stays clean.
+
+---
+
+# Phase 2.4 — Session 2 (2026-04-18, session-p24-02)
+
+1,000 content blocks via the same prep → sub-agent → process pipeline.
+
+## Scope
+
+1,000 unique content blocks at `LENGTH(content) >= 2000`, dedup'd by
+`content_hash`, skipping any hash already extracted in earlier sessions,
+ordered alphabetically by book title. Produced 100 batches of 10
+chapters each.
+
+## Dispatch
+
+Target throughput was waves of 10 concurrent sub-agents. Rate-limit
+interruption split the run into three phases:
+
+| phase   | waves (10 agents ea.)              | chapters     | notes                      |
+|---------|------------------------------------|--------------|----------------------------|
+| initial | waves 1–5 + partial wave 6         | ~577 written | rate-limit hit mid wave 6  |
+| resume  | waves 7–11 (after 11am reset)      | +210         | straight-through           |
+| tail    | waves 12–14 + a 3-chapter finisher | +213         | covers batches 80–100      |
+
+Two quirks worth naming:
+
+- **Phantom success:** one wave-4 agent and one rebatch-43 agent
+  reported `processed: 10, written: 10` (or `3/3`) but did not actually
+  write the result files. Verified by file-count after each wave. The
+  missing result paths got re-dispatched and written cleanly. Lesson:
+  trust file count, not sub-agent self-report.
+- **VSS load missing on process path:** the sub-agent driver's
+  `process` step hit `_duckdb.Error: ... unknown index type 'HNSW'` on
+  the first INSERT into `concept_embedding`, the same extension-scope
+  bug commit ba4857a fixed in `resolve_concept`. Patched
+  `scripts/extract_batch.py` to `LOAD vss` immediately after connect;
+  re-ran `process` cleanly.
+
+Wave wall-clock: slowest agent 60–450s depending on chapter density.
+Total agent wall time for the full session was dominated by the
+rate-limit gap; useful agent-time was ~40 min.
+
+## Results — this session only
+
+```
+entities extracted  12,164
+relations written    8,274
+resolution counts:
+  exact            6,011   (cross-book concept reuse)
+  new              5,269
+  borderline         813   (added to review queue)
+  embedding_high      71
+```
+
+60% of extraction candidates (6,011 / ~11,351 resolved entities)
+matched an existing concept by exact name. That's a sharp jump from
+session 1's 38% — the corpus is now broad enough that each new chapter
+mostly sees concepts it's seen before.
+
+## Cumulative corpus state
+
+```
+chapters extracted    992   (prev  126)   +866
+concepts             7,278  (prev 1,195)  +6,083
+relations            9,395  (prev 1,121)  +8,274
+review queue (pend)    939  (prev   131)  +808
+```
+
+### Entity types
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   |  2,936 | 40.3% |
+| Tool      |  1,541 | 21.2% |
+| Technique |  1,104 | 15.2% |
+| Pattern   |    687 |  9.4% |
+| Framework |    528 |  7.3% |
+| Algorithm |    482 |  6.6% |
+
+Distribution looks healthy. Tool/Framework share climbed as we pulled
+in a lot of cloud-certification and AI-engineering books in the
+alphabetical traversal (AWS, APIs, AI Agents).
+
+### Relation types
+
+| type           | count |
+|----------------|-----:|
+| REQUIRES       | 2,715 |
+| IMPLEMENTS     | 2,656 |
+| CITES          | 1,499 |
+| CONTRASTS_WITH | 1,274 |
+| EXTENDS        | 1,251 |
+
+All 5 types well-represented; REQUIRES overtook IMPLEMENTS at the
+corpus scale, which tracks — once a chapter has named its specific
+tools and patterns, the cross-chapter structure is prerequisite
+chains.
+
+## Books covered so far (top 10)
+
+| chapters | book |
+|---------:|------|
+| 193 | A Common-Sense Guide to DSA in JavaScript |
+| 183 | A Common-Sense Guide to DSA in Python, Vol. 1 |
+| 139 | A Common-Sense Guide to DSA in Python, Vol. 2 |
+|  60 | AI Agents and Applications |
+|  30 | API Design Patterns |
+|  23 | Advanced Programming in the UNIX Environment |
+|  20 | AI and Machine Learning for Coders |
+|  20 | AI and ML for Coders in PyTorch |
+|  20 | AI Systems Performance Engineering |
+|  19 | AWS Certified Cloud Practitioner Study Guide |
+
+Duplicate DSA titles (JavaScript/Python v1/v2) correctly passed the
+content-hash dedup as distinct books — they share structure but the
+prose is different per language edition.
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,348 total
+  already extracted (direct or sibling):    992 (cumulative)
+                                             +35 (earlier sample work)
+  remaining:                                9,221
+```
+
+So ~9,200 blocks to go. At session-2's observed throughput (~1,000
+blocks per ~40 min of useful agent time + one rate-limit gap), full
+corpus is probably 8–10 more sessions.
+
+## Observations
+
+- Verify written files after each wave — two agents falsely reported
+  success this session. File count is authoritative.
+- VSS must be loaded anywhere we INSERT/UPDATE/DELETE on
+  `concept_embedding`. `extract_batch.py` now does this; other future
+  writers should mirror the pattern.
+- Cross-book exact matches (6,011) are the most important number: it
+  means the resolver is knitting the graph together instead of each
+  book creating its own island of concepts.
+- Review queue at 939 pending. Running `/kb-review-concepts` after
+  each session would keep it from getting unwieldy; most items resolve
+  in seconds (alias registration).
+
+## Next session
+
+Target ~1,000 blocks again. Same pipeline. Keep the post-wave
+file-count check (catch phantom-success early). Expect the exact-match
+ratio to keep climbing as the graph densifies.

@@ -509,6 +509,9 @@ def main() -> int:
         args.chapter_ids = _parse_id_list(args.chapter_ids)
 
     conn = duckdb.connect(str(args.catalog))
+    # VSS must be loaded before INSERT/DELETE on concept_embedding because the
+    # HNSW index is not auto-loaded with the extension on a fresh connection.
+    conn.execute("LOAD vss")
     try:
         if args.command == "prep":
             return do_prep(conn, args)
