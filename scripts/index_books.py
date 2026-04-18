@@ -118,10 +118,33 @@ def _parse_pub_date(raw: str) -> Optional[date]:
     return None
 
 
+def _clean_filename_title(filepath: Path) -> str:
+    """Derive a reasonable title from the ePub filename.
+
+    Drops a trailing ISBN-like token (10 or 13 digits, optionally with an
+    'X' check char) and the hyphen before it, so
+    "Foo Bar-9781234567890.epub" → "Foo Bar".
+    """
+    stem = filepath.stem
+    # Trailing "-<digits>[X]" pattern captures 10/13-char ISBNs.
+    import re  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+    stem = re.sub(r"-\d{9,13}[Xx]?$", "", stem).strip()
+    return stem or filepath.stem
+
+
 def _book_metadata(book: epub.EpubBook, filepath: Path) -> dict:
-    """Pull the metadata we care about out of an ePub."""
+    """Pull the metadata we care about out of an ePub.
+
+    Falls back to the filename (minus ISBN suffix) when DC:title is
+    missing, empty, or the sentinel "(blank)" that some tooling emits
+    for books with no title metadata.
+    """
     title_md = book.get_metadata("DC", "title")
-    title = title_md[0][0] if title_md else filepath.stem
+    raw_title = title_md[0][0].strip() if title_md and title_md[0] and title_md[0][0] else ""
+    if not raw_title or raw_title.lower() == "(blank)":
+        title = _clean_filename_title(filepath)
+    else:
+        title = raw_title
 
     creators = book.get_metadata("DC", "creator")
     authors = [c[0] for c in creators] if creators else []

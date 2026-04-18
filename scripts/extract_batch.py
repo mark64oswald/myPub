@@ -79,6 +79,8 @@ LOG = logging.getLogger("extract_batch")
 
 @dataclass
 class ChapterEntry:
+    """One chapter-level entry in the extraction manifest."""
+
     chapter_id: int
     book_id: int
     book_title: str
@@ -89,6 +91,8 @@ class ChapterEntry:
 
 @dataclass
 class Manifest:
+    """Session-level manifest: the chapters to extract and their batch groupings."""
+
     output_dir: str
     created_at: str
     per_batch: int
@@ -96,6 +100,7 @@ class Manifest:
     batches: list[list[int]]  # each batch is a list of chapter_ids
 
     def to_dict(self) -> dict:
+        """Serialize to a JSON-friendly dict."""
         return {
             "output_dir": self.output_dir,
             "created_at": self.created_at,
@@ -106,6 +111,7 @@ class Manifest:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Manifest":
+        """Rehydrate from the JSON-friendly dict produced by to_dict()."""
         return cls(
             output_dir=d["output_dir"],
             created_at=d["created_at"],
@@ -125,6 +131,8 @@ def _select_chapters(
     book_ids: Optional[list[int]],
     chapter_ids: Optional[list[int]],
     skip_extracted: bool,
+    dedup_by_hash: bool,
+    order_by: str,
     limit: Optional[int],
     min_content_chars: int,
 ) -> list[tuple[int, int, str, Optional[str]]]:
@@ -132,29 +140,92 @@ def _select_chapters(
 
     Targets = chapters with content, matching --books or --chapter-ids if
     provided (else all), optionally excluding chapters that already have
-    at least one concept_relation row.
+    extraction.
+
+    Dedup modes:
+      dedup_by_hash=False  one row per chapter — useful when --chapter-ids
+                           is given and the caller wants exact targets.
+      dedup_by_hash=True   one row per unique content_hash per book (the
+                           lowest chapter_id is the representative). TOC
+                           entries for sub-sections of the same underlying
+                           HTML file share a content_hash, so without
+                           dedup we'd extract the same content 8–9× on
+                           this corpus (112,968 chapter rows map to 12,981
+                           unique hashes — an 8.7× ratio).
+
+    With dedup_by_hash=True, skip_extracted=True skips any hash for which
+    *any* sibling chapter already has a concept_relation row, not just the
+    candidate representative. This matches the intent: once a content
+    block has been extracted, re-extracting the same content from a
+    sibling TOC entry adds no information.
     """
-    where = ["ch.content IS NOT NULL", f"LENGTH(ch.content) >= {int(min_content_chars)}"]
+    if order_by not in {"book_id", "title"}:
+        raise ValueError(f"order_by must be 'book_id' or 'title', got {order_by!r}")
+
+    base_where = [
+        "ch.content IS NOT NULL",
+        "ch.content_hash IS NOT NULL",
+        f"LENGTH(ch.content) >= {int(min_content_chars)}",
+    ]
     params: list = []
     if chapter_ids:
         placeholders = ",".join("?" * len(chapter_ids))
-        where.append(f"ch.chapter_id IN ({placeholders})")
+        base_where.append(f"ch.chapter_id IN ({placeholders})")
         params.extend(chapter_ids)
     if book_ids:
         placeholders = ",".join("?" * len(book_ids))
-        where.append(f"ch.book_id IN ({placeholders})")
+        base_where.append(f"ch.book_id IN ({placeholders})")
         params.extend(book_ids)
+
+    order_sql = (
+        "ORDER BY b.title, ch.book_id, ch.chapter_num, ch.chapter_id"
+        if order_by == "title"
+        else "ORDER BY ch.book_id, ch.chapter_num, ch.chapter_id"
+    )
+
+    if not dedup_by_hash:
+        where = list(base_where)
+        if skip_extracted:
+            where.append(
+                "NOT EXISTS (SELECT 1 FROM concept_relation cr "
+                "WHERE cr.source_type='chapter' AND cr.source_id = ch.chapter_id)"
+            )
+        where_sql = " AND ".join(where)
+        sql = (
+            "SELECT ch.chapter_id, ch.book_id, b.title, ch.title "
+            "  FROM chapter ch JOIN book b ON ch.book_id = b.book_id "
+            f" WHERE {where_sql} "
+            f" {order_sql}"
+        )
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return conn.execute(sql, params).fetchall()
+
+    # dedup_by_hash=True: pick one representative chapter_id per (book_id,
+    # content_hash). skip_extracted excludes hashes whose ANY sibling has
+    # been extracted already.
+    where = list(base_where)
     if skip_extracted:
         where.append(
-            "NOT EXISTS (SELECT 1 FROM concept_relation cr "
-            "WHERE cr.source_type='chapter' AND cr.source_id = ch.chapter_id)"
+            "NOT EXISTS ("
+            "  SELECT 1 FROM chapter sib "
+            "  JOIN concept_relation cr "
+            "    ON cr.source_type='chapter' AND cr.source_id = sib.chapter_id "
+            "  WHERE sib.content_hash = ch.content_hash"
+            ")"
         )
     where_sql = " AND ".join(where)
     sql = (
-        "SELECT ch.chapter_id, ch.book_id, b.title, ch.title "
-        "  FROM chapter ch JOIN book b ON ch.book_id = b.book_id "
-        f" WHERE {where_sql} "
-        " ORDER BY ch.book_id, ch.chapter_num, ch.chapter_id"
+        "WITH rep AS ("
+        "  SELECT MIN(ch.chapter_id) AS chapter_id, ch.book_id, ch.content_hash "
+        "    FROM chapter ch "
+        f"   WHERE {where_sql} "
+        "    GROUP BY ch.book_id, ch.content_hash "
+        ") "
+        "SELECT rep.chapter_id, rep.book_id, b.title, ch.title "
+        "  FROM rep JOIN chapter ch USING (chapter_id) "
+        "  JOIN book b ON rep.book_id = b.book_id "
+        f" {order_sql}"
     )
     if limit:
         sql += f" LIMIT {int(limit)}"
@@ -178,6 +249,8 @@ def do_prep(conn: duckdb.DuckDBPyConnection, args: argparse.Namespace) -> int:
         book_ids=args.books,
         chapter_ids=args.chapter_ids,
         skip_extracted=args.skip_extracted,
+        dedup_by_hash=args.dedup_by_hash,
+        order_by=args.order_by,
         limit=args.limit,
         min_content_chars=args.min_content_chars,
     )
@@ -242,6 +315,8 @@ def do_prep(conn: duckdb.DuckDBPyConnection, args: argparse.Namespace) -> int:
 
 @dataclass
 class BatchProcessSummary:
+    """Aggregate results of one `process` invocation over a manifest."""
+
     processed: int
     skipped_missing: int
     entities_total: int
@@ -335,10 +410,11 @@ def do_status(conn: duckdb.DuckDBPyConnection, args: argparse.Namespace) -> int:
 
     total_ch = sum(r[2] for r in rows)
     total_done = sum(r[3] for r in rows)
-    print(f"=== extraction status ===")
+    pct = (100 * total_done / total_ch) if total_ch else 0.0
+    print("=== extraction status ===")
     print(f"books in scope:      {len(rows)}")
     print(f"chapters w/ content: {total_ch}")
-    print(f"chapters extracted:  {total_done}  ({100 * total_done / total_ch if total_ch else 0:.1f}%)")
+    print(f"chapters extracted:  {total_done}  ({pct:.1f}%)")
     if args.verbose:
         print()
         print(f"{'book_id':>7}  {'done/total':>12}  title")
@@ -382,6 +458,16 @@ def main() -> int:
                         help="reprocess chapters even if already extracted")
     p_prep.add_argument("--min-content-chars", type=int, default=500,
                         help="skip chapters with content shorter than this (default 500)")
+    p_prep.add_argument("--dedup-by-hash", action="store_true", default=True,
+                        help="pick one chapter per (book_id, content_hash); "
+                             "skip hashes where any sibling is already extracted "
+                             "(default on)")
+    p_prep.add_argument("--no-dedup", dest="dedup_by_hash", action="store_false",
+                        help="emit one row per chapter_id (useful with "
+                             "--chapter-ids for exact targeting)")
+    p_prep.add_argument("--order-by", choices=("book_id", "title"), default="title",
+                        help="book ordering: 'title' for alphabetical full-corpus "
+                             "runs (default), 'book_id' for insertion order")
 
     p_proc = sub.add_parser("process",
                             help="process result JSON files into the catalog")
