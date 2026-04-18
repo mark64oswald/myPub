@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>myPub v2 Architecture Diagrams</title>
+<style>
+:root {
+  --bg: #fafaf8; --fg: #2c2c2a; --muted: #73726c; --border: #d3d1c7;
+  --surface: #f1efe8; --accent: #534AB7; --blue: #185FA5; --teal: #0F6E56;
+  --coral: #993C1D; --amber: #854F0B; --pink: #993556;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a18; --fg: #e2e0d6; --muted: #9c9a92; --border: #444441;
+    --surface: #2c2c2a; --accent: #AFA9EC; --blue: #85B7EB; --teal: #5DCAA5;
+    --coral: #F0997B; --amber: #FAC775; --pink: #ED93B1;
+  }
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.7;
+  max-width: 780px; margin: 0 auto; padding: 40px 24px 80px;
+}
+h1 { font-size: 28px; font-weight: 500; margin-bottom: 8px; }
+h2 { font-size: 20px; font-weight: 500; margin: 48px 0 16px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+h3 { font-size: 16px; font-weight: 500; margin: 24px 0 8px; }
+p { margin: 12px 0; color: var(--fg); font-size: 15px; }
+.subtitle { color: var(--muted); font-size: 15px; margin-bottom: 32px; }
+.diagram-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 20px; margin: 20px 0 32px; overflow-x: auto;
+}
+.diagram-card svg { display: block; max-width: 100%; height: auto; }
+ul { padding-left: 20px; margin: 8px 0; }
+li { margin: 4px 0; font-size: 15px; }
+strong { font-weight: 500; }
+code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: "SF Mono", "Fira Code", monospace; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.legend span { display: flex; align-items: center; gap: 4px; }
+.legend .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+th { font-weight: 500; color: var(--muted); font-size: 13px; }
+.toc { background: var(--surface); border-radius: 12px; padding: 20px 24px; margin: 24px 0; }
+.toc a { color: var(--accent); text-decoration: none; font-size: 14px; }
+.toc a:hover { text-decoration: underline; }
+.toc ol { padding-left: 20px; }
+.toc li { margin: 6px 0; }
+
+/* SVG theme classes */
+svg .t { font-family: -apple-system, sans-serif; font-size: 14px; fill: var(--fg); }
+svg .ts { font-family: -apple-system, sans-serif; font-size: 12px; fill: var(--muted); }
+svg .th { font-family: -apple-system, sans-serif; font-size: 14px; fill: var(--fg); font-weight: 500; }
+svg .arr { stroke: var(--muted); stroke-width: 1.5; }
+svg .leader { stroke: var(--muted); stroke-width: 0.5; stroke-dasharray: 4 3; }
+svg .box { fill: var(--surface); stroke: var(--border); }
+
+/* Color ramp classes for SVG */
+svg .c-gray rect, svg .c-gray circle { fill: #F1EFE8; stroke: #5F5E5A; }
+svg .c-gray text.th { fill: #444441; } svg .c-gray text.ts { fill: #5F5E5A; }
+svg .c-purple rect { fill: #EEEDFE; stroke: #534AB7; }
+svg .c-purple text.th { fill: #3C3489; } svg .c-purple text.ts { fill: #534AB7; }
+svg .c-teal rect { fill: #E1F5EE; stroke: #0F6E56; }
+svg .c-teal text.th { fill: #085041; } svg .c-teal text.ts { fill: #0F6E56; }
+svg .c-coral rect { fill: #FAECE7; stroke: #993C1D; }
+svg .c-coral text.th { fill: #712B13; } svg .c-coral text.ts { fill: #993C1D; }
+svg .c-blue rect { fill: #E6F1FB; stroke: #185FA5; }
+svg .c-blue text.th { fill: #0C447C; } svg .c-blue text.ts { fill: #185FA5; }
+svg .c-amber rect { fill: #FAEEDA; stroke: #854F0B; }
+svg .c-amber text.th { fill: #633806; } svg .c-amber text.ts { fill: #854F0B; }
+svg .c-pink rect { fill: #FBEAF0; stroke: #993556; }
+svg .c-pink text.th { fill: #72243E; } svg .c-pink text.ts { fill: #993556; }
+
+@media (prefers-color-scheme: dark) {
+  svg .c-gray rect, svg .c-gray circle { fill: #2C2C2A; stroke: #B4B2A9; }
+  svg .c-gray text.th { fill: #D3D1C7; } svg .c-gray text.ts { fill: #B4B2A9; }
+  svg .c-purple rect { fill: #26215C; stroke: #AFA9EC; }
+  svg .c-purple text.th { fill: #CECBF6; } svg .c-purple text.ts { fill: #AFA9EC; }
+  svg .c-teal rect { fill: #04342C; stroke: #5DCAA5; }
+  svg .c-teal text.th { fill: #9FE1CB; } svg .c-teal text.ts { fill: #5DCAA5; }
+  svg .c-coral rect { fill: #4A1B0C; stroke: #F0997B; }
+  svg .c-coral text.th { fill: #F5C4B3; } svg .c-coral text.ts { fill: #F0997B; }
+  svg .c-blue rect { fill: #042C53; stroke: #85B7EB; }
+  svg .c-blue text.th { fill: #B5D4F4; } svg .c-blue text.ts { fill: #85B7EB; }
+  svg .c-amber rect { fill: #412402; stroke: #FAC775; }
+  svg .c-amber text.th { fill: #FAC775; } svg .c-amber text.ts { fill: #EF9F27; }
+  svg .c-pink rect { fill: #4B1528; stroke: #ED93B1; }
+  svg .c-pink text.th { fill: #F4C0D1; } svg .c-pink text.ts { fill: #ED93B1; }
+}
+</style>
+</head>
+<body>
+
+<h1>myPub v2: Architecture Diagrams</h1>
+<p class="subtitle">Visual companion to the myPub v2 architecture and execution plan documents</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+<li><a href="#arch">System architecture (5-layer)</a></li>
+<li><a href="#erd-kg">Data model — knowledge graph tables</a></li>
+<li><a href="#erd-skills">Data model — Skills Factory tables</a></li>
+<li><a href="#ingest">Ingestion pipeline (books + live docs)</a></li>
+<li><a href="#resolution">Entity resolution flow</a></li>
+<li><a href="#query">Interactive query flow</a></li>
+<li><a href="#factory">Skills Factory pipeline (generation mode)</a></li>
+<li><a href="#refresh">Proactive refresh and priority tiers</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="arch">1. System architecture</h2>
+<p>Five layers, all running locally. Claude Code orchestrates everything through Skills, commands, and MCP servers. The extraction pipeline uses sub-agents covered by the Max subscription — no incremental API cost.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 660" role="img">
+  <title>myPub v2 five-layer architecture</title><desc>Five layers from Claude Code at the top through retrieval, DuckDB, extraction, and sources.</desc>
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <text class="ts" x="16" y="22">Layer 5</text>
+  <g class="c-purple"><rect x="60" y="10" width="580" height="48" rx="10" stroke-width="0.5"/>
+    <text class="th" x="350" y="28" text-anchor="middle" dominant-baseline="central">Claude Code (agent harness)</text>
+    <text class="ts" x="350" y="44" text-anchor="middle" dominant-baseline="central">Skills, commands, sub-agents — Max subscription, $0 API cost</text></g>
+
+  <line x1="200" y1="58" x2="200" y2="76" class="arr" marker-end="url(#a1)"/>
+  <line x1="480" y1="58" x2="480" y2="76" class="arr" marker-end="url(#a1)"/>
+
+  <text class="ts" x="16" y="98">Layer 4</text>
+  <g class="c-teal"><rect x="60" y="78" width="580" height="80" rx="10" stroke-width="0.5"/>
+    <text class="th" x="350" y="94" text-anchor="middle" dominant-baseline="central">Retrieval and ranking</text></g>
+  <g class="c-teal"><rect x="76" y="106" width="120" height="38" rx="6" stroke-width="0.5"/>
+    <text class="th" x="136" y="120" text-anchor="middle" dominant-baseline="central">Hybrid retriever</text>
+    <text class="ts" x="136" y="134" text-anchor="middle" dominant-baseline="central">FTS+VSS+PGQ</text></g>
+  <g class="c-teal"><rect x="208" y="106" width="110" height="38" rx="6" stroke-width="0.5"/>
+    <text class="th" x="263" y="120" text-anchor="middle" dominant-baseline="central">Ranking engine</text>
+    <text class="ts" x="263" y="134" text-anchor="middle" dominant-baseline="central">Two-mode</text></g>
+  <g class="c-teal"><rect x="330" y="106" width="110" height="38" rx="6" stroke-width="0.5"/>
+    <text class="th" x="385" y="120" text-anchor="middle" dominant-baseline="central">Auto-discovery</text>
+    <text class="ts" x="385" y="134" text-anchor="middle" dominant-baseline="central">Probe+ingest</text></g>
+  <g class="c-teal"><rect x="452" y="106" width="110" height="38" rx="6" stroke-width="0.5"/>
+    <text class="th" x="507" y="120" text-anchor="middle" dominant-baseline="central">Source merge</text>
+    <text class="ts" x="507" y="134" text-anchor="middle" dominant-baseline="central">Conflict/align</text></g>
+
+  <line x1="350" y1="158" x2="350" y2="176" class="arr" marker-end="url(#a1)"/>
+
+  <text class="ts" x="16" y="198">Layer 3</text>
+  <g class="c-coral"><rect x="60" y="178" width="580" height="100" rx="10" stroke-width="0.5"/>
+    <text class="th" x="350" y="196" text-anchor="middle" dominant-baseline="central">DuckDB substrate (single local file)</text></g>
+  <g class="c-coral"><rect x="76" y="210" width="125" height="54" rx="6" stroke-width="0.5"/>
+    <text class="th" x="138" y="228" text-anchor="middle" dominant-baseline="central">Relational catalog</text>
+    <text class="ts" x="138" y="244" text-anchor="middle" dominant-baseline="central">books, concepts,</text>
+    <text class="ts" x="138" y="256" text-anchor="middle" dominant-baseline="central">skills, procedures</text></g>
+  <g class="c-coral"><rect x="213" y="210" width="100" height="54" rx="6" stroke-width="0.5"/>
+    <text class="th" x="263" y="228" text-anchor="middle" dominant-baseline="central">FTS (BM25)</text>
+    <text class="ts" x="263" y="246" text-anchor="middle" dominant-baseline="central">Keyword search</text></g>
+  <g class="c-coral"><rect x="325" y="210" width="100" height="54" rx="6" stroke-width="0.5"/>
+    <text class="th" x="375" y="228" text-anchor="middle" dominant-baseline="central">VSS (HNSW)</text>
+    <text class="ts" x="375" y="246" text-anchor="middle" dominant-baseline="central">Semantic search</text></g>
+  <g class="c-coral"><rect x="437" y="210" width="130" height="54" rx="6" stroke-width="0.5"/>
+    <text class="th" x="502" y="228" text-anchor="middle" dominant-baseline="central">DuckPGQ</text>
+    <text class="ts" x="502" y="246" text-anchor="middle" dominant-baseline="central">Graph (SQL/PGQ)</text></g>
+
+  <line x1="350" y1="278" x2="350" y2="296" class="arr" marker-end="url(#a1)"/>
+
+  <text class="ts" x="16" y="318">Layer 2</text>
+  <g class="c-amber"><rect x="60" y="298" width="580" height="72" rx="10" stroke-width="0.5"/>
+    <text class="th" x="350" y="316" text-anchor="middle" dominant-baseline="central">Extraction (sub-agents, subscription-covered)</text></g>
+  <g class="c-amber"><rect x="76" y="330" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="136" y="344" text-anchor="middle" dominant-baseline="central">Entity extractor</text></g>
+  <g class="c-amber"><rect x="208" y="330" width="130" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="273" y="344" text-anchor="middle" dominant-baseline="central">Procedure extractor</text></g>
+  <g class="c-amber"><rect x="350" y="330" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="410" y="344" text-anchor="middle" dominant-baseline="central">Entity resolution</text></g>
+  <g class="c-amber"><rect x="482" y="330" width="90" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="527" y="344" text-anchor="middle" dominant-baseline="central">Sectionizer</text></g>
+
+  <line x1="160" y1="370" x2="160" y2="388" class="arr" marker-end="url(#a1)"/>
+  <line x1="350" y1="370" x2="350" y2="388" class="arr" marker-end="url(#a1)"/>
+  <line x1="540" y1="370" x2="540" y2="388" class="arr" marker-end="url(#a1)"/>
+
+  <text class="ts" x="16" y="420">Layer 1</text>
+  <g class="c-gray"><rect x="60" y="390" width="580" height="250" rx="10" stroke-width="0.5"/>
+    <text class="th" x="350" y="408" text-anchor="middle" dominant-baseline="central">Sources</text></g>
+
+  <g class="c-gray"><rect x="76" y="426" width="170" height="50" rx="8" stroke-width="0.5"/>
+    <text class="th" x="161" y="444" text-anchor="middle" dominant-baseline="central">ePub collection</text>
+    <text class="ts" x="161" y="460" text-anchor="middle" dominant-baseline="central">~345 books (local)</text></g>
+
+  <g class="c-blue"><rect x="270" y="426" width="355" height="50" rx="8" stroke-width="0.5"/>
+    <text class="th" x="448" y="444" text-anchor="middle" dominant-baseline="central">Live documentation sources</text>
+    <text class="ts" x="448" y="460" text-anchor="middle" dominant-baseline="central">Vendor docs, OSS, any public GitHub repo</text></g>
+
+  <g class="c-blue"><rect x="280" y="496" width="105" height="120" rx="6" stroke-width="0.5"/>
+    <text class="th" x="332" y="516" text-anchor="middle" dominant-baseline="central">Context7</text>
+    <text class="ts" x="332" y="534" text-anchor="middle" dominant-baseline="central">Vendor docs,</text>
+    <text class="ts" x="332" y="548" text-anchor="middle" dominant-baseline="central">indexed OSS</text>
+    <text class="ts" x="332" y="570" text-anchor="middle" dominant-baseline="central">Primary source</text>
+    <text class="ts" x="332" y="598" text-anchor="middle" dominant-baseline="central">stdio, local</text></g>
+  <g class="c-blue"><rect x="399" y="496" width="105" height="120" rx="6" stroke-width="0.5"/>
+    <text class="th" x="452" y="516" text-anchor="middle" dominant-baseline="central">DeepWiki</text>
+    <text class="ts" x="452" y="534" text-anchor="middle" dominant-baseline="central">AI-generated</text>
+    <text class="ts" x="452" y="548" text-anchor="middle" dominant-baseline="central">from source</text>
+    <text class="ts" x="452" y="570" text-anchor="middle" dominant-baseline="central">Complementary</text>
+    <text class="ts" x="452" y="598" text-anchor="middle" dominant-baseline="central">HTTPS, hosted</text></g>
+  <g class="c-blue"><rect x="518" y="496" width="105" height="120" rx="6" stroke-width="0.5"/>
+    <text class="th" x="570" y="516" text-anchor="middle" dominant-baseline="central">GitHub</text>
+    <text class="ts" x="570" y="534" text-anchor="middle" dominant-baseline="central">Raw README,</text>
+    <text class="ts" x="570" y="548" text-anchor="middle" dominant-baseline="central">/docs/*.md</text>
+    <text class="ts" x="570" y="570" text-anchor="middle" dominant-baseline="central">Long-tail fallback</text>
+    <text class="ts" x="570" y="598" text-anchor="middle" dominant-baseline="central">stdio, local</text></g>
+</svg>
+</div>
+
+<div class="legend">
+  <span><span class="dot" style="background:#534AB7"></span> Agent harness</span>
+  <span><span class="dot" style="background:#0F6E56"></span> Retrieval</span>
+  <span><span class="dot" style="background:#993C1D"></span> Storage</span>
+  <span><span class="dot" style="background:#854F0B"></span> Extraction</span>
+  <span><span class="dot" style="background:#5F5E5A"></span> Sources (books)</span>
+  <span><span class="dot" style="background:#185FA5"></span> Sources (live docs)</span>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="erd-kg">2. Data model — knowledge graph</h2>
+<p>The core data model shows symmetry between books and live documentation. Both feed into the same concept graph through the polymorphic <code>source_type/source_id</code> pattern on <code>concept_relation</code> and <code>procedure</code>. The <code>concept_doc_link</code> bridge table connects concepts to their live documentation sources. Entity resolution via <code>concept_alias</code> keeps the graph cohesive.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 580" role="img">
+  <title>Knowledge graph ER diagram</title><desc>Book and chapter tables on the left, concept graph in the center, doc tables on the right.</desc>
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  <marker id="cr" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1L10 6L0 11" fill="none" stroke="context-stroke" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <!-- BOOK -->
+  <g class="c-gray"><rect x="20" y="30" width="150" height="16" rx="6" stroke-width="0.5"/><text class="th" x="95" y="38" text-anchor="middle" dominant-baseline="central" style="font-size:12px">book</text></g>
+  <rect x="20" y="46" width="150" height="84" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="28" y="62" dominant-baseline="central">book_id PK</text>
+  <text class="ts" x="28" y="78" dominant-baseline="central">title</text>
+  <text class="ts" x="28" y="94" dominant-baseline="central">content_hash</text>
+  <text class="ts" x="28" y="110" dominant-baseline="central">status</text>
+
+  <!-- CHAPTER -->
+  <g class="c-gray"><rect x="20" y="165" width="150" height="16" rx="6" stroke-width="0.5"/><text class="th" x="95" y="173" text-anchor="middle" dominant-baseline="central" style="font-size:12px">chapter</text></g>
+  <rect x="20" y="181" width="150" height="100" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="28" y="197" dominant-baseline="central">chapter_id PK</text>
+  <text class="ts" x="28" y="213" dominant-baseline="central">book_id FK</text>
+  <text class="ts" x="28" y="229" dominant-baseline="central">title</text>
+  <text class="ts" x="28" y="245" dominant-baseline="central">content_hash</text>
+  <text class="ts" x="28" y="261" dominant-baseline="central">embedding[]</text>
+  <line x1="95" y1="130" x2="95" y2="163" class="arr" marker-end="url(#cr)"/>
+
+  <!-- CONCEPT -->
+  <g class="c-purple"><rect x="230" y="30" width="150" height="16" rx="6" stroke-width="0.5"/><text class="th" x="305" y="38" text-anchor="middle" dominant-baseline="central" style="font-size:12px">concept</text></g>
+  <rect x="230" y="46" width="150" height="84" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="238" y="62" dominant-baseline="central">concept_id PK</text>
+  <text class="ts" x="238" y="78" dominant-baseline="central">name</text>
+  <text class="ts" x="238" y="94" dominant-baseline="central">concept_type</text>
+  <text class="ts" x="238" y="110" dominant-baseline="central">embedding[]</text>
+
+  <!-- CONCEPT_ALIAS -->
+  <g class="c-purple"><rect x="230" y="165" width="150" height="16" rx="6" stroke-width="0.5"/><text class="th" x="305" y="173" text-anchor="middle" dominant-baseline="central" style="font-size:12px">concept_alias</text></g>
+  <rect x="230" y="181" width="150" height="52" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="238" y="197" dominant-baseline="central">concept_id FK</text>
+  <text class="ts" x="238" y="213" dominant-baseline="central">alias</text>
+  <line x1="305" y1="130" x2="305" y2="163" class="arr" marker-end="url(#cr)"/>
+
+  <!-- CONCEPT_RELATION -->
+  <g class="c-amber"><rect x="195" y="300" width="210" height="16" rx="6" stroke-width="0.5"/><text class="th" x="300" y="308" text-anchor="middle" dominant-baseline="central" style="font-size:12px">concept_relation</text></g>
+  <rect x="195" y="316" width="210" height="100" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="203" y="332" dominant-baseline="central">from_concept_id FK</text>
+  <text class="ts" x="203" y="348" dominant-baseline="central">to_concept_id FK</text>
+  <text class="ts" x="203" y="364" dominant-baseline="central">relation_type</text>
+  <text class="ts" x="203" y="380" dominant-baseline="central">source_type</text>
+  <text class="ts" x="203" y="396" dominant-baseline="central">source_id</text>
+  <line x1="265" y1="130" x2="265" y2="298" class="arr" marker-end="url(#cr)"/>
+  <line x1="340" y1="130" x2="340" y2="298" class="arr" marker-end="url(#cr)"/>
+
+  <!-- chapter -> concept_relation (polymorphic) -->
+  <path d="M170 260 L183 260 L183 370 L193 370" fill="none" class="arr" marker-end="url(#a2)" stroke-dasharray="4 3"/>
+
+  <!-- PROCEDURE -->
+  <g class="c-amber"><rect x="20" y="345" width="150" height="16" rx="6" stroke-width="0.5"/><text class="th" x="95" y="353" text-anchor="middle" dominant-baseline="central" style="font-size:12px">procedure</text></g>
+  <rect x="20" y="361" width="150" height="84" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="28" y="377" dominant-baseline="central">procedure_id PK</text>
+  <text class="ts" x="28" y="393" dominant-baseline="central">name, steps</text>
+  <text class="ts" x="28" y="409" dominant-baseline="central">source_type</text>
+  <text class="ts" x="28" y="425" dominant-baseline="central">source_id</text>
+
+  <!-- DOC_SOURCE -->
+  <g class="c-blue"><rect x="480" y="30" width="170" height="16" rx="6" stroke-width="0.5"/><text class="th" x="565" y="38" text-anchor="middle" dominant-baseline="central" style="font-size:12px">doc_source</text></g>
+  <rect x="480" y="46" width="170" height="100" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="488" y="62" dominant-baseline="central">doc_source_id PK</text>
+  <text class="ts" x="488" y="78" dominant-baseline="central">name</text>
+  <text class="ts" x="488" y="94" dominant-baseline="central">source_type</text>
+  <text class="ts" x="488" y="110" dominant-baseline="central">authority_score</text>
+  <text class="ts" x="488" y="126" dominant-baseline="central">priority_tier</text>
+
+  <!-- DOC_SNAPSHOT -->
+  <g class="c-blue"><rect x="480" y="180" width="170" height="16" rx="6" stroke-width="0.5"/><text class="th" x="565" y="188" text-anchor="middle" dominant-baseline="central" style="font-size:12px">doc_snapshot</text></g>
+  <rect x="480" y="196" width="170" height="68" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="488" y="212" dominant-baseline="central">snapshot_id PK</text>
+  <text class="ts" x="488" y="228" dominant-baseline="central">doc_source_id FK</text>
+  <text class="ts" x="488" y="244" dominant-baseline="central">content_hash</text>
+  <line x1="565" y1="146" x2="565" y2="178" class="arr" marker-end="url(#cr)"/>
+
+  <!-- DOC_SECTION -->
+  <g class="c-blue"><rect x="480" y="300" width="170" height="16" rx="6" stroke-width="0.5"/><text class="th" x="565" y="308" text-anchor="middle" dominant-baseline="central" style="font-size:12px">doc_section</text></g>
+  <rect x="480" y="316" width="170" height="100" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="488" y="332" dominant-baseline="central">doc_section_id PK</text>
+  <text class="ts" x="488" y="348" dominant-baseline="central">snapshot_id FK</text>
+  <text class="ts" x="488" y="364" dominant-baseline="central">parent_id FK (self)</text>
+  <text class="ts" x="488" y="380" dominant-baseline="central">heading_text</text>
+  <text class="ts" x="488" y="396" dominant-baseline="central">embedding[]</text>
+  <line x1="565" y1="264" x2="565" y2="298" class="arr" marker-end="url(#cr)"/>
+
+  <!-- doc_section -> concept_relation (polymorphic) -->
+  <path d="M478 380 L420 380 L420 390 L407 390" fill="none" class="arr" marker-end="url(#a2)" stroke-dasharray="4 3"/>
+
+  <!-- CONCEPT_DOC_LINK -->
+  <g class="c-teal"><rect x="400" y="80" width="60" height="16" rx="6" stroke-width="0.5"/><text class="th" x="430" y="88" text-anchor="middle" dominant-baseline="central" style="font-size:10px">doc_link</text></g>
+  <rect x="400" y="96" width="60" height="30" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="408" y="116" dominant-baseline="central" style="font-size:10px">concept, src</text>
+  <line x1="380" y1="100" x2="398" y2="100" class="arr" stroke-width="0.5"/>
+  <line x1="478" y1="100" x2="462" y2="100" class="arr" stroke-width="0.5"/>
+
+  <!-- Legend -->
+  <text class="ts" x="20" y="475" dominant-baseline="central">Dashed arrows = polymorphic source reference (source_type + source_id)</text>
+  <line x1="20" y1="494" x2="50" y2="494" stroke-dasharray="4 3" class="arr" marker-end="url(#a2)"/>
+  <text class="ts" x="58" y="494" dominant-baseline="central">polymorphic FK</text>
+  <line x1="200" y1="494" x2="230" y2="494" class="arr" marker-end="url(#cr)"/>
+  <text class="ts" x="238" y="494" dominant-baseline="central">one-to-many</text>
+
+  <!-- Annotations -->
+  <g class="c-gray"><rect x="20" y="520" width="300" height="40" rx="8" stroke-width="0.3"/>
+  <text class="ts" x="170" y="536" text-anchor="middle" dominant-baseline="central">Both chapter and doc_section feed into</text>
+  <text class="ts" x="170" y="550" text-anchor="middle" dominant-baseline="central">the SAME concept_relation and procedure tables</text></g>
+</svg>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="erd-skills">3. Data model — Skills Factory</h2>
+<p>The output side of the system. A <code>skill_package</code> contains multiple skills, each with full provenance tracking through <code>skill_source</code>. Dropped sources are preserved with <code>weight=0</code> and a <code>drop_reason</code>, making every generated Skill auditable and regenerable.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 380" role="img">
+  <title>Skills Factory ER diagram</title><desc>skill_package contains skills, each linked to skill_source for provenance, skill_file for content, and skill_relation for cross-dependencies.</desc>
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  <marker id="c3" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1L10 6L0 11" fill="none" stroke="context-stroke" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <g class="c-purple"><rect x="20" y="30" width="160" height="16" rx="6" stroke-width="0.5"/><text class="th" x="100" y="38" text-anchor="middle" dominant-baseline="central" style="font-size:12px">skill_package</text></g>
+  <rect x="20" y="46" width="160" height="68" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="28" y="62" dominant-baseline="central">package_id PK</text>
+  <text class="ts" x="28" y="78" dominant-baseline="central">name, domain</text>
+  <text class="ts" x="28" y="94" dominant-baseline="central">source_query</text>
+
+  <g class="c-teal"><rect x="240" y="30" width="190" height="16" rx="6" stroke-width="0.5"/><text class="th" x="335" y="38" text-anchor="middle" dominant-baseline="central" style="font-size:12px">skill</text></g>
+  <rect x="240" y="46" width="190" height="132" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="248" y="62" dominant-baseline="central">skill_id PK</text>
+  <text class="ts" x="248" y="78" dominant-baseline="central">package_id FK</text>
+  <text class="ts" x="248" y="94" dominant-baseline="central">name</text>
+  <text class="ts" x="248" y="110" dominant-baseline="central">description (trigger)</text>
+  <text class="ts" x="248" y="126" dominant-baseline="central">content_markdown</text>
+  <text class="ts" x="248" y="142" dominant-baseline="central">strategy</text>
+  <text class="ts" x="248" y="158" dominant-baseline="central">source_currency</text>
+  <line x1="180" y1="80" x2="238" y2="80" class="arr" marker-end="url(#c3)"/>
+
+  <g class="c-coral"><rect x="240" y="220" width="190" height="16" rx="6" stroke-width="0.5"/><text class="th" x="335" y="228" text-anchor="middle" dominant-baseline="central" style="font-size:12px">skill_source (provenance)</text></g>
+  <rect x="240" y="236" width="190" height="116" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="248" y="252" dominant-baseline="central">skill_id FK</text>
+  <text class="ts" x="248" y="268" dominant-baseline="central">source_type</text>
+  <text class="ts" x="248" y="284" dominant-baseline="central">source_id</text>
+  <text class="ts" x="248" y="300" dominant-baseline="central">score</text>
+  <text class="ts" x="248" y="316" dominant-baseline="central">weight (0 = dropped)</text>
+  <text class="ts" x="248" y="332" dominant-baseline="central">drop_reason</text>
+  <line x1="335" y1="178" x2="335" y2="218" class="arr" marker-end="url(#c3)"/>
+
+  <g class="c-gray"><rect x="490" y="30" width="160" height="16" rx="6" stroke-width="0.5"/><text class="th" x="570" y="38" text-anchor="middle" dominant-baseline="central" style="font-size:12px">skill_file</text></g>
+  <rect x="490" y="46" width="160" height="68" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="498" y="62" dominant-baseline="central">file_id PK</text>
+  <text class="ts" x="498" y="78" dominant-baseline="central">skill_id FK</text>
+  <text class="ts" x="498" y="94" dominant-baseline="central">filename, purpose</text>
+  <line x1="430" y1="60" x2="488" y2="60" class="arr" marker-end="url(#c3)"/>
+
+  <g class="c-gray"><rect x="490" y="150" width="160" height="16" rx="6" stroke-width="0.5"/><text class="th" x="570" y="158" text-anchor="middle" dominant-baseline="central" style="font-size:12px">skill_relation</text></g>
+  <rect x="490" y="166" width="160" height="52" rx="0" fill="var(--surface)" stroke="var(--border)" stroke-width="0.5"/>
+  <text class="ts" x="498" y="182" dominant-baseline="central">from/to_skill_id FK</text>
+  <text class="ts" x="498" y="198" dominant-baseline="central">relation_type</text>
+  <line x1="430" y1="140" x2="488" y2="175" class="arr" marker-end="url(#c3)"/>
+
+  <path d="M438 290 L460 290 L460 344" fill="none" class="arr" stroke-dasharray="4 3"/>
+  <text class="ts" x="468" y="296" dominant-baseline="central">source_type points to:</text>
+  <text class="ts" x="468" y="312" dominant-baseline="central">chapter, procedure,</text>
+  <text class="ts" x="468" y="328" dominant-baseline="central">pattern, or doc_section</text>
+</svg>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="ingest">4. Ingestion pipeline</h2>
+<p>Books and live documentation enter through parallel paths that converge at the extraction and entity resolution steps. The same extractors, same resolution logic, and same graph tables are used for both — a chapter and a doc section are structurally equivalent from the graph's perspective.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 600" role="img">
+  <title>Ingestion pipeline flowchart</title><desc>Parallel paths for books and docs converging at extraction and entity resolution.</desc>
+  <defs><marker id="a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <g class="c-gray"><rect x="30" y="16" width="90" height="20" rx="6" stroke-width="0.5"/><text class="th" x="75" y="26" text-anchor="middle" dominant-baseline="central" style="font-size:11px">ePub path</text></g>
+  <g class="c-blue"><rect x="470" y="16" width="110" height="20" rx="6" stroke-width="0.5"/><text class="th" x="525" y="26" text-anchor="middle" dominant-baseline="central" style="font-size:11px">Live docs path</text></g>
+
+  <g class="c-gray"><rect x="20" y="50" width="200" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="120" y="64" text-anchor="middle" dominant-baseline="central">Parse ePub</text>
+    <text class="ts" x="120" y="80" text-anchor="middle" dominant-baseline="central">metadata, chapters</text></g>
+  <line x1="120" y1="90" x2="120" y2="108" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-gray"><rect x="20" y="110" width="200" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="120" y="124" text-anchor="middle" dominant-baseline="central">Content hash check</text>
+    <text class="ts" x="120" y="140" text-anchor="middle" dominant-baseline="central">skip unchanged chapters</text></g>
+  <line x1="120" y1="150" x2="120" y2="230" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-blue"><rect x="400" y="50" width="230" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="515" y="64" text-anchor="middle" dominant-baseline="central">Fetch snapshot</text>
+    <text class="ts" x="515" y="80" text-anchor="middle" dominant-baseline="central">Context7 / DeepWiki / GitHub</text></g>
+  <line x1="515" y1="90" x2="515" y2="108" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-blue"><rect x="400" y="110" width="230" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="515" y="124" text-anchor="middle" dominant-baseline="central">Content hash check</text>
+    <text class="ts" x="515" y="140" text-anchor="middle" dominant-baseline="central">skip if unchanged (~90%)</text></g>
+  <line x1="515" y1="150" x2="515" y2="168" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-blue"><rect x="400" y="170" width="230" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="515" y="184" text-anchor="middle" dominant-baseline="central">Parse into sections</text>
+    <text class="ts" x="515" y="200" text-anchor="middle" dominant-baseline="central">heading tree → doc_section rows</text></g>
+  <line x1="515" y1="210" x2="515" y2="230" class="arr" marker-end="url(#a4)"/>
+
+  <!-- Shared steps -->
+  <g class="c-teal"><rect x="100" y="232" width="480" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="250" text-anchor="middle" dominant-baseline="central">Generate embeddings (local Python, no LLM)</text></g>
+  <line x1="340" y1="268" x2="340" y2="286" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-teal"><rect x="100" y="288" width="480" height="32" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="304" text-anchor="middle" dominant-baseline="central">Add to FTS index</text></g>
+  <line x1="340" y1="320" x2="340" y2="338" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-amber"><rect x="100" y="340" width="480" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="358" text-anchor="middle" dominant-baseline="central">Entity extraction (sub-agents, Max subscription)</text></g>
+  <line x1="340" y1="376" x2="340" y2="394" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-purple"><rect x="100" y="396" width="480" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="412" text-anchor="middle" dominant-baseline="central">Entity resolution</text>
+    <text class="ts" x="340" y="428" text-anchor="middle" dominant-baseline="central">exact name → alias → embedding similarity → merge or create</text></g>
+  <line x1="340" y1="440" x2="340" y2="458" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-amber"><rect x="100" y="460" width="480" height="32" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="476" text-anchor="middle" dominant-baseline="central">Procedure extraction (sub-agents)</text></g>
+  <line x1="340" y1="492" x2="340" y2="510" class="arr" marker-end="url(#a4)"/>
+
+  <g class="c-purple"><rect x="165" y="512" width="350" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="526" text-anchor="middle" dominant-baseline="central">Unified concept graph</text>
+    <text class="ts" x="340" y="542" text-anchor="middle" dominant-baseline="central">same nodes, same edges, same DuckDB</text></g>
+
+  <text class="ts" x="20" y="580" dominant-baseline="central">Gray = book-only  ·  Blue = doc-only  ·  Teal/amber/purple = shared pipeline</text>
+</svg>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="resolution">5. Entity resolution flow</h2>
+<p>The load-bearing integration mechanism. Every candidate concept from extraction — whether sourced from a book chapter or a live doc section — passes through this three-stage matching before being written to the graph. This is what keeps "Change Data Capture" from a Kleppmann chapter and "CDC" from a Zippy README converging on the same concept node.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 480" role="img">
+  <title>Entity resolution three-stage matching flow</title><desc>Candidate concept enters, passes through exact name match, alias match, and embedding similarity, with three possible outcomes: matched to existing, borderline review queue, or new concept created.</desc>
+  <defs><marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <g class="c-gray"><rect x="200" y="16" width="280" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="30" text-anchor="middle" dominant-baseline="central">Candidate concept from extractor</text>
+    <text class="ts" x="340" y="46" text-anchor="middle" dominant-baseline="central">e.g. "change data capture" from Zippy</text></g>
+  <line x1="340" y1="56" x2="340" y2="76" class="arr" marker-end="url(#a5)"/>
+
+  <!-- Stage 1 -->
+  <g class="c-teal"><rect x="200" y="78" width="280" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="92" text-anchor="middle" dominant-baseline="central">Stage 1: Exact name match</text>
+    <text class="ts" x="340" y="108" text-anchor="middle" dominant-baseline="central">case-insensitive on concept.name</text></g>
+
+  <line x1="480" y1="98" x2="540" y2="98" class="arr" marker-end="url(#a5)"/>
+  <text class="ts" x="498" y="90" dominant-baseline="central">match</text>
+  <g class="c-purple"><rect x="542" y="82" width="120" height="32" rx="8" stroke-width="0.5"/>
+    <text class="th" x="602" y="98" text-anchor="middle" dominant-baseline="central">Resolve to existing</text></g>
+
+  <line x1="340" y1="118" x2="340" y2="140" class="arr" marker-end="url(#a5)"/>
+  <text class="ts" x="348" y="132" dominant-baseline="central">no match</text>
+
+  <!-- Stage 2 -->
+  <g class="c-teal"><rect x="200" y="142" width="280" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="156" text-anchor="middle" dominant-baseline="central">Stage 2: Alias match</text>
+    <text class="ts" x="340" y="172" text-anchor="middle" dominant-baseline="central">lookup in concept_alias table</text></g>
+
+  <line x1="480" y1="162" x2="540" y2="162" class="arr" marker-end="url(#a5)"/>
+  <text class="ts" x="498" y="154" dominant-baseline="central">match</text>
+  <g class="c-purple"><rect x="542" y="146" width="120" height="32" rx="8" stroke-width="0.5"/>
+    <text class="th" x="602" y="162" text-anchor="middle" dominant-baseline="central">Resolve to existing</text></g>
+
+  <line x1="340" y1="182" x2="340" y2="204" class="arr" marker-end="url(#a5)"/>
+  <text class="ts" x="348" y="196" dominant-baseline="central">no match</text>
+
+  <!-- Stage 3 -->
+  <g class="c-teal"><rect x="200" y="206" width="280" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="220" text-anchor="middle" dominant-baseline="central">Stage 3: Embedding similarity</text>
+    <text class="ts" x="340" y="236" text-anchor="middle" dominant-baseline="central">cosine similarity to nearest concept</text></g>
+
+  <!-- Three outcomes -->
+  <line x1="260" y1="246" x2="260" y2="290" class="arr" marker-end="url(#a5)"/>
+  <line x1="340" y1="246" x2="340" y2="290" class="arr" marker-end="url(#a5)"/>
+  <line x1="420" y1="246" x2="420" y2="290" class="arr" marker-end="url(#a5)"/>
+
+  <text class="ts" x="240" y="270" text-anchor="middle" dominant-baseline="central">≥ 0.90</text>
+  <text class="ts" x="340" y="270" text-anchor="middle" dominant-baseline="central">0.75–0.89</text>
+  <text class="ts" x="420" y="270" text-anchor="middle" dominant-baseline="central">< 0.75</text>
+
+  <g class="c-purple"><rect x="175" y="292" width="170" height="52" rx="8" stroke-width="0.5"/>
+    <text class="th" x="260" y="310" text-anchor="middle" dominant-baseline="central">Auto-match</text>
+    <text class="ts" x="260" y="328" text-anchor="middle" dominant-baseline="central">resolve + register alias</text></g>
+
+  <g class="c-amber"><rect x="355" y="292" width="130" height="52" rx="8" stroke-width="0.5"/>
+    <text class="th" x="420" y="310" text-anchor="middle" dominant-baseline="central">Borderline</text>
+    <text class="ts" x="420" y="328" text-anchor="middle" dominant-baseline="central">→ review queue</text></g>
+
+  <g class="c-teal"><rect x="500" y="292" width="140" height="52" rx="8" stroke-width="0.5"/>
+    <text class="th" x="570" y="310" text-anchor="middle" dominant-baseline="central">New concept</text>
+    <text class="ts" x="570" y="328" text-anchor="middle" dominant-baseline="central">create node</text></g>
+
+  <!-- Review queue detail -->
+  <line x1="420" y1="344" x2="420" y2="370" class="arr" marker-end="url(#a5)"/>
+  <g class="c-amber"><rect x="280" y="372" width="280" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="420" y="388" text-anchor="middle" dominant-baseline="central">/kb-review-concepts</text>
+    <text class="ts" x="420" y="404" text-anchor="middle" dominant-baseline="central">merge  ·  alias  ·  keep separate  ·  rename</text></g>
+
+  <!-- Final note -->
+  <g class="c-gray"><rect x="40" y="436" width="600" height="30" rx="8" stroke-width="0.3"/>
+    <text class="ts" x="340" y="451" text-anchor="middle" dominant-baseline="central">All three outcomes write to the SAME concept graph — this is how books and live docs converge</text></g>
+</svg>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="query">6. Interactive query flow</h2>
+<p>How a user question moves through the system. The auto-discovery branch fires when a query references an unknown technology, with a confidence gate that prefers asking the user over ingesting uncertain content.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 680" role="img">
+  <title>Interactive query flow</title><desc>Query flows through hybrid retrieval, auto-discovery decision, ranking, source merge, and synthesis.</desc>
+  <defs><marker id="a6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <g class="c-gray"><rect x="220" y="10" width="240" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="28" text-anchor="middle" dominant-baseline="central">User query</text></g>
+  <line x1="340" y1="46" x2="340" y2="64" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-teal"><rect x="140" y="66" width="400" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="80" text-anchor="middle" dominant-baseline="central">Hybrid retrieval</text>
+    <text class="ts" x="340" y="96" text-anchor="middle" dominant-baseline="central">FTS + VSS + DuckPGQ across chapters AND doc sections</text></g>
+  <line x1="340" y1="106" x2="340" y2="124" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-amber"><rect x="190" y="126" width="300" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="144" text-anchor="middle" dominant-baseline="central">Concept gap detection</text></g>
+
+  <line x1="240" y1="162" x2="240" y2="184" class="arr" marker-end="url(#a6)"/>
+  <line x1="440" y1="162" x2="440" y2="184" class="arr" marker-end="url(#a6)"/>
+  <text class="ts" x="218" y="176" text-anchor="middle" dominant-baseline="central">all known</text>
+  <text class="ts" x="462" y="176" text-anchor="middle" dominant-baseline="central">unknown</text>
+
+  <g class="c-gray"><rect x="175" y="186" width="130" height="32" rx="8" stroke-width="0.5"/>
+    <text class="ts" x="240" y="202" text-anchor="middle" dominant-baseline="central">Skip discovery</text></g>
+
+  <g class="c-coral"><rect x="360" y="186" width="200" height="40" rx="8" stroke-width="0.5"/>
+    <text class="th" x="460" y="200" text-anchor="middle" dominant-baseline="central">Probe doc sources</text>
+    <text class="ts" x="460" y="216" text-anchor="middle" dominant-baseline="central">Context7→DeepWiki→GitHub</text></g>
+  <line x1="460" y1="226" x2="460" y2="244" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-coral"><rect x="380" y="246" width="160" height="32" rx="8" stroke-width="0.5"/>
+    <text class="th" x="460" y="262" text-anchor="middle" dominant-baseline="central">Confidence gate</text></g>
+
+  <line x1="380" y1="262" x2="325" y2="262" class="arr"/>
+  <line x1="325" y1="262" x2="325" y2="296" class="arr" marker-end="url(#a6)"/>
+  <text class="ts" x="342" y="288" dominant-baseline="central">clear</text>
+
+  <line x1="540" y1="262" x2="590" y2="262" class="arr"/>
+  <line x1="590" y1="262" x2="590" y2="296" class="arr" marker-end="url(#a6)"/>
+  <text class="ts" x="555" y="288" dominant-baseline="central">ambiguous</text>
+
+  <line x1="460" y1="278" x2="460" y2="296" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-teal"><rect x="260" y="298" width="130" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="325" y="310" text-anchor="middle" dominant-baseline="central">Auto-ingest</text>
+    <text class="ts" x="325" y="326" text-anchor="middle" dominant-baseline="central">full pipeline</text></g>
+  <g class="c-gray"><rect x="405" y="298" width="110" height="36" rx="8" stroke-width="0.5"/>
+    <text class="ts" x="460" y="316" text-anchor="middle" dominant-baseline="central">Proceed without</text></g>
+  <g class="c-coral"><rect x="535" y="298" width="110" height="36" rx="8" stroke-width="0.5"/>
+    <text class="ts" x="590" y="316" text-anchor="middle" dominant-baseline="central">Ask user</text></g>
+
+  <!-- Converge -->
+  <line x1="240" y1="218" x2="240" y2="370" class="arr"/>
+  <line x1="325" y1="334" x2="325" y2="370" class="arr"/>
+  <line x1="460" y1="334" x2="460" y2="370" class="arr"/>
+  <line x1="590" y1="334" x2="590" y2="370" class="arr"/>
+  <line x1="240" y1="370" x2="590" y2="370" stroke="var(--muted)" stroke-width="0.5"/>
+  <line x1="340" y1="370" x2="340" y2="390" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-purple"><rect x="140" y="392" width="400" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="408" text-anchor="middle" dominant-baseline="central">Ranking engine (interactive mode)</text>
+    <text class="ts" x="340" y="424" text-anchor="middle" dominant-baseline="central">recency + doc alignment + relevance + corroboration + authority</text></g>
+  <line x1="340" y1="436" x2="340" y2="454" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-purple"><rect x="140" y="456" width="400" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="472" text-anchor="middle" dominant-baseline="central">Source merge (conflict surfacing)</text>
+    <text class="ts" x="340" y="488" text-anchor="middle" dominant-baseline="central">primary + corroborations + conflicts with scores</text></g>
+  <line x1="340" y1="500" x2="340" y2="518" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-gray"><rect x="140" y="520" width="400" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="536" text-anchor="middle" dominant-baseline="central">Claude synthesizes response</text>
+    <text class="ts" x="340" y="552" text-anchor="middle" dominant-baseline="central">nuanced answer with citations and currency flags</text></g>
+  <line x1="340" y1="564" x2="340" y2="582" class="arr" marker-end="url(#a6)"/>
+
+  <g class="c-gray"><rect x="220" y="584" width="240" height="32" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="600" text-anchor="middle" dominant-baseline="central">Response to user</text></g>
+</svg>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="factory">7. Skills Factory pipeline</h2>
+<p>The generation-mode flow. Ranking runs silently — no "some sources say" hedging. The output is a coherent, confidently actionable Skills package. Three source-selection strategies handle different domain characteristics.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 680" role="img">
+  <title>Skills Factory pipeline</title><desc>Seven-stage pipeline from domain request through decomposition, planning, strategy selection, per-skill generation with silent ranking, validation, and materialization.</desc>
+  <defs><marker id="a7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <g class="c-gray"><rect x="180" y="10" width="320" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="28" text-anchor="middle" dominant-baseline="central">/kb-generate-skills "CDC with Databricks"</text></g>
+  <line x1="340" y1="46" x2="340" y2="64" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Stage 1: Decompose -->
+  <g class="c-teal"><rect x="140" y="66" width="400" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="82" text-anchor="middle" dominant-baseline="central">1. Decompose domain</text>
+    <text class="ts" x="340" y="98" text-anchor="middle" dominant-baseline="central">DuckPGQ community detection + book ToCs + LLM refinement</text></g>
+  <line x1="340" y1="110" x2="340" y2="128" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Stage 2: Plan -->
+  <g class="c-teal"><rect x="140" y="130" width="400" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="146" text-anchor="middle" dominant-baseline="central">2. Plan package</text>
+    <text class="ts" x="340" y="162" text-anchor="middle" dominant-baseline="central">boundaries, prerequisites, shared patterns, folder structure</text></g>
+  <line x1="340" y1="174" x2="340" y2="192" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Stage 3: Pre-refresh -->
+  <g class="c-blue"><rect x="140" y="194" width="400" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="212" text-anchor="middle" dominant-baseline="central">3. Pre-refresh stale doc snapshots for in-scope concepts</text></g>
+  <line x1="340" y1="230" x2="340" y2="248" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Stage 4: Strategy selection -->
+  <g class="c-amber"><rect x="140" y="250" width="400" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="268" text-anchor="middle" dominant-baseline="central">4. Select strategy per skill</text></g>
+
+  <!-- Three strategies -->
+  <line x1="210" y1="286" x2="210" y2="306" class="arr" marker-end="url(#a7)"/>
+  <line x1="340" y1="286" x2="340" y2="306" class="arr" marker-end="url(#a7)"/>
+  <line x1="470" y1="286" x2="470" y2="306" class="arr" marker-end="url(#a7)"/>
+
+  <g class="c-coral"><rect x="130" y="308" width="160" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="210" y="322" text-anchor="middle" dominant-baseline="central">Recent-doc anchored</text>
+    <text class="ts" x="210" y="340" text-anchor="middle" dominant-baseline="central">Docs win on facts</text></g>
+  <g class="c-purple"><rect x="310" y="308" width="130" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="375" y="322" text-anchor="middle" dominant-baseline="central">Consensus</text>
+    <text class="ts" x="375" y="340" text-anchor="middle" dominant-baseline="central">Merge non-conflicting</text></g>
+  <g class="c-gray"><rect x="460" y="308" width="130" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="525" y="322" text-anchor="middle" dominant-baseline="central">Authority pick</text>
+    <text class="ts" x="525" y="340" text-anchor="middle" dominant-baseline="central">Single best source</text></g>
+
+  <!-- Converge -->
+  <line x1="210" y1="352" x2="210" y2="372" class="arr"/>
+  <line x1="375" y1="352" x2="375" y2="372" class="arr"/>
+  <line x1="525" y1="352" x2="525" y2="372" class="arr"/>
+  <line x1="210" y1="372" x2="525" y2="372" stroke="var(--muted)" stroke-width="0.5"/>
+  <line x1="340" y1="372" x2="340" y2="392" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Stage 5: Generate per skill -->
+  <g class="c-purple"><rect x="100" y="394" width="480" height="72" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="412" text-anchor="middle" dominant-baseline="central">5. Generate per skill (silent ranking)</text>
+    <text class="ts" x="340" y="430" text-anchor="middle" dominant-baseline="central">retrieve → rank → apply strategy → resolve conflicts →</text>
+    <text class="ts" x="340" y="446" text-anchor="middle" dominant-baseline="central">generate SKILL.md + trigger description + supporting files</text>
+    <text class="ts" x="340" y="460" text-anchor="middle" dominant-baseline="central">record provenance in skill_source (including drops)</text></g>
+  <line x1="340" y1="466" x2="340" y2="484" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Stage 6: Validate -->
+  <g class="c-amber"><rect x="140" y="486" width="400" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="502" text-anchor="middle" dominant-baseline="central">6. Validate</text>
+    <text class="ts" x="340" y="518" text-anchor="middle" dominant-baseline="central">coherence, trigger accuracy, currency flags, human-review flags</text></g>
+  <line x1="340" y1="530" x2="340" y2="548" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Stage 7: Materialize -->
+  <g class="c-teal"><rect x="140" y="550" width="400" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="566" text-anchor="middle" dominant-baseline="central">7. Materialize</text>
+    <text class="ts" x="340" y="582" text-anchor="middle" dominant-baseline="central">write to data/generated-packages/&lt;domain&gt;/</text></g>
+  <line x1="340" y1="594" x2="340" y2="612" class="arr" marker-end="url(#a7)"/>
+
+  <!-- Output -->
+  <g class="c-gray"><rect x="160" y="614" width="360" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="630" text-anchor="middle" dominant-baseline="central">Skills package</text>
+    <text class="ts" x="340" y="648" text-anchor="middle" dominant-baseline="central">SKILL.md files + _package.md + supporting files</text></g>
+</svg>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="refresh">8. Proactive refresh and priority tiers</h2>
+<p>Doc sources are refreshed proactively on a schedule to keep interactive query latency low. Priority is driven by actual query patterns, graph centrality, and source volatility. A macOS LaunchAgent runs overnight, handling the non-LLM steps (fetch, hash, embed, index). The LLM-dependent steps (extraction) run on next interactive use via sub-agents.</p>
+
+<div class="diagram-card">
+<svg width="100%" viewBox="0 0 680 540" role="img">
+  <title>Proactive refresh and priority tiers</title><desc>Four-tier refresh system from Hot daily through Cold on-demand, with the priority signals and LaunchAgent execution model.</desc>
+  <defs><marker id="a8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <!-- Priority signals -->
+  <g class="c-amber"><rect x="20" y="16" width="290" height="120" rx="10" stroke-width="0.5"/>
+    <text class="th" x="165" y="36" text-anchor="middle" dominant-baseline="central">Priority signals</text></g>
+  <g class="c-amber"><rect x="36" y="50" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="ts" x="96" y="64" text-anchor="middle" dominant-baseline="central">Query frequency</text></g>
+  <g class="c-amber"><rect x="170" y="50" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="ts" x="230" y="64" text-anchor="middle" dominant-baseline="central">Graph centrality</text></g>
+  <g class="c-amber"><rect x="36" y="90" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="ts" x="96" y="104" text-anchor="middle" dominant-baseline="central">Source volatility</text></g>
+  <g class="c-amber"><rect x="170" y="90" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="ts" x="230" y="104" text-anchor="middle" dominant-baseline="central">User pin/focus</text></g>
+
+  <line x1="312" y1="76" x2="360" y2="76" class="arr" marker-end="url(#a8)"/>
+
+  <!-- Tier assignment -->
+  <g class="c-teal"><rect x="362" y="16" width="296" height="120" rx="10" stroke-width="0.5"/>
+    <text class="th" x="510" y="36" text-anchor="middle" dominant-baseline="central">Refresh tiers</text></g>
+
+  <g class="c-coral"><rect x="378" y="50" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="438" y="64" text-anchor="middle" dominant-baseline="central">Hot — daily</text></g>
+  <g class="c-amber"><rect x="510" y="50" width="130" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="575" y="64" text-anchor="middle" dominant-baseline="central">Warm — weekly</text></g>
+  <g class="c-blue"><rect x="378" y="90" width="120" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="438" y="104" text-anchor="middle" dominant-baseline="central">Cool — monthly</text></g>
+  <g class="c-gray"><rect x="510" y="90" width="130" height="28" rx="6" stroke-width="0.5"/>
+    <text class="th" x="575" y="104" text-anchor="middle" dominant-baseline="central">Cold — on-demand</text></g>
+
+  <!-- LaunchAgent -->
+  <line x1="340" y1="136" x2="340" y2="168" class="arr" marker-end="url(#a8)"/>
+
+  <g class="c-gray"><rect x="100" y="170" width="480" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="186" text-anchor="middle" dominant-baseline="central">LaunchAgent runs nightly at 3 AM</text>
+    <text class="ts" x="340" y="202" text-anchor="middle" dominant-baseline="central">scripts/refresh_docs.py --tier=auto</text></g>
+  <line x1="340" y1="214" x2="340" y2="234" class="arr" marker-end="url(#a8)"/>
+
+  <!-- For each source -->
+  <g class="c-teal"><rect x="100" y="236" width="480" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="340" y="254" text-anchor="middle" dominant-baseline="central">For each scheduled source: fetch → compute content_hash</text></g>
+
+  <!-- Branch -->
+  <line x1="240" y1="272" x2="240" y2="296" class="arr" marker-end="url(#a8)"/>
+  <line x1="440" y1="272" x2="440" y2="296" class="arr" marker-end="url(#a8)"/>
+  <text class="ts" x="215" y="288" text-anchor="middle" dominant-baseline="central">unchanged</text>
+  <text class="ts" x="465" y="288" text-anchor="middle" dominant-baseline="central">changed</text>
+
+  <g class="c-gray"><rect x="160" y="298" width="160" height="36" rx="8" stroke-width="0.5"/>
+    <text class="th" x="240" y="316" text-anchor="middle" dominant-baseline="central">No-op (~90%)</text></g>
+
+  <g class="c-teal"><rect x="360" y="298" width="220" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="470" y="312" text-anchor="middle" dominant-baseline="central">Non-LLM steps overnight</text>
+    <text class="ts" x="470" y="330" text-anchor="middle" dominant-baseline="central">sectionize → embed → FTS index</text></g>
+  <line x1="470" y1="342" x2="470" y2="362" class="arr" marker-end="url(#a8)"/>
+
+  <g class="c-amber"><rect x="340" y="364" width="260" height="44" rx="8" stroke-width="0.5"/>
+    <text class="th" x="470" y="380" text-anchor="middle" dominant-baseline="central">LLM steps deferred</text>
+    <text class="ts" x="470" y="396" text-anchor="middle" dominant-baseline="central">entity + procedure extraction on next use</text></g>
+
+  <!-- User controls -->
+  <g class="c-purple"><rect x="60" y="440" width="560" height="80" rx="10" stroke-width="0.5"/>
+    <text class="th" x="340" y="460" text-anchor="middle" dominant-baseline="central">User controls</text></g>
+  <g class="c-purple"><rect x="80" y="474" width="150" height="28" rx="6" stroke-width="0.5"/>
+    <text class="ts" x="155" y="488" text-anchor="middle" dominant-baseline="central">/kb-focus &lt;domain&gt;</text></g>
+  <g class="c-purple"><rect x="245" y="474" width="150" height="28" rx="6" stroke-width="0.5"/>
+    <text class="ts" x="320" y="488" text-anchor="middle" dominant-baseline="central">/kb-pin-source</text></g>
+  <g class="c-purple"><rect x="410" y="474" width="190" height="28" rx="6" stroke-width="0.5"/>
+    <text class="ts" x="505" y="488" text-anchor="middle" dominant-baseline="central">/kb-refresh-status</text></g>
+</svg>
+</div>
+
+<p style="margin-top:48px; color: var(--muted); font-size: 13px; text-align: center;">
+  myPub v2 Architecture Diagrams · Companion to mypub-v2-architecture.md
+</p>
+
+</body>
+</html>
