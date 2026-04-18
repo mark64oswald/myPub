@@ -17,8 +17,10 @@ dependencies = [
     "ebooklib>=0.18",
     "beautifulsoup4>=4.12.0",
     "tiktoken>=0.7.0",
-    "anthropic>=0.40.0",
 ]
+# The anthropic SDK is deliberately NOT a dependency — v2's cost model runs
+# all LLM reasoning through Claude Code sub-agents (Task tool), covered by
+# the Max subscription. See docs/mypub-v2-execution-plan.md "Cost model".
 
 [project.optional-dependencies]
 dev = [

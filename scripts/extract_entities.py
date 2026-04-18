@@ -1,31 +1,45 @@
 #!/usr/bin/env python3
 """
-extract_entities.py — LLM-based concept/relation extraction.
+extract_entities.py — Coordinator for LLM-based concept/relation extraction.
 
-For one chapter at a time (per the Phase 2.2 prompt — Phase 2.3 tunes on
-10 books, 2.4 goes corpus-wide). Given a chapter_id, this script:
+Architecture (Phase 2 cost model): this script is the Python coordinator
+that handles DB reads, entity resolution, and DB writes. The LLM reasoning
+runs in Claude Code sub-agents via the Task tool, never in this script.
+All LLM work stays on the Max subscription — this module imports only
+duckdb and the local EntityResolver; no `anthropic` SDK.
 
-  1. Loads the chapter's content, title, and containing book metadata.
-  2. Asks Claude Haiku for structured JSON: entities (with type +
-     description) and relations (from, to, type, confidence).
-  3. Runs each extracted entity through EntityResolver so it either
-     resolves to an existing concept or creates a new one with
-     source-provenance back to this chapter.
-  4. Inserts each relation into concept_relation with
-     source_type='chapter' and source_id=<chapter_id>. Duplicate
-     relations from a re-run are handled by clearing the chapter's
-     prior relations before inserting.
+The coordinator is callable in two modes, glued together by Claude Code
+driving the sub-agents between them:
 
-Prints a resolution summary (exact / alias / embedding_high / borderline
-/ new) plus extraction counts.
+    --chapter-id N --print-prompt
+       Emits the full self-contained extraction prompt (system instructions
+       + chapter payload) to stdout or --output PATH. Feed that to a
+       sub-agent with instructions to write JSON to a known path.
 
-Requires ANTHROPIC_API_KEY. For programmatic / Phase 2.4 batch use,
-import `extract_chapter()` directly rather than shelling out.
+    --chapter-id N --json-file PATH
+       Reads the sub-agent's JSON output, validates it, resolves entities
+       via EntityResolver, and writes concept / concept_embedding /
+       concept_relation rows. Idempotent per-chapter: re-running a chapter
+       clears its prior concept_relation rows and writes the new ones.
+       Concept nodes are left in place — they may be referenced by other
+       chapters.
+
+The programmatic entry points — build_full_prompt(chapter),
+parse_llm_json(text), process_extraction_json(conn, resolver, chapter_id,
+raw) — are also exported so a future batch driver can orchestrate many
+chapters in one process.
 
 Usage:
-    .venv/bin/python3 scripts/extract_entities.py --chapter-id 12345
-    .venv/bin/python3 scripts/extract_entities.py --book-id 42 --chapter-num 3
-    .venv/bin/python3 scripts/extract_entities.py --chapter-id 12345 --dry-run
+    # Step 1: build the prompt for a sub-agent.
+    .venv/bin/python3 scripts/extract_entities.py \\
+        --chapter-id 12345 --print-prompt --output /tmp/prompt_12345.txt
+
+    # Step 2: (driven by Claude Code) have a sub-agent read that prompt,
+    # run the extraction, and write JSON to /tmp/result_12345.json.
+
+    # Step 3: write the extraction to the catalog.
+    .venv/bin/python3 scripts/extract_entities.py \\
+        --chapter-id 12345 --json-file /tmp/result_12345.json
 """
 
 from __future__ import annotations
@@ -33,7 +47,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,9 +61,7 @@ sys.path.insert(0, str(MCP_DIR))
 
 from resolution import EntityResolver  # noqa: E402  # pylint: disable=wrong-import-position
 
-MODEL = "claude-haiku-4-5"
-MAX_CONTENT_CHARS = 20000       # ~5K input tokens; truncate to cap per-call cost
-MAX_OUTPUT_TOKENS = 4000
+MAX_CONTENT_CHARS = 20000       # ~5K input tokens; cap per-call payload size
 LOG = logging.getLogger("extract_entities")
 
 ENTITY_TYPES = {"Concept", "Pattern", "Tool", "Framework", "Algorithm", "Technique"}
@@ -180,8 +191,7 @@ def build_full_prompt(chapter: ChapterRecord) -> str:
     """Build a self-contained prompt combining SYSTEM_PROMPT + chapter payload.
 
     Used when the caller invokes the LLM through a channel that takes a single
-    prompt string (e.g. Claude Code's Agent tool) rather than separate
-    system/user messages.
+    prompt string — e.g. Claude Code's Task tool dispatching a sub-agent.
     """
     return (
         f"{SYSTEM_PROMPT}\n\n"
@@ -200,17 +210,6 @@ def parse_llm_json(text: str) -> dict:
             text = text[4:]
         text = text.strip().rstrip("`").strip()
     return json.loads(text)
-
-
-def _call_llm(client, user_prompt: str) -> dict:
-    """One Haiku call returning parsed JSON. Raises on parse or validation error."""
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-    return parse_llm_json(response.content[0].text)
 
 
 def _validate_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
@@ -331,9 +330,9 @@ def process_extraction_json(
 ) -> ExtractionSummary:
     """Resolve entities and persist relations given already-parsed LLM output.
 
-    Used by both the API-driven CLI path and by any LLM-agnostic caller
-    (including the Claude Code sub-agent flow) that has already obtained the
-    structured JSON some other way.
+    This is the shared back-end for any caller that already has the
+    structured JSON — whether produced by a sub-agent, copy-pasted from a
+    chat, or synthesized by a future batch driver.
     """
     # Ensure the chapter exists; raises if not.
     _load_chapter(conn, chapter_id)
@@ -375,44 +374,6 @@ def process_extraction_json(
     )
 
 
-def extract_chapter(
-    conn: duckdb.DuckDBPyConnection,
-    client,
-    resolver: EntityResolver,
-    chapter_id: int,
-    *,
-    dry_run: bool = False,
-) -> ExtractionSummary:
-    """Extract and (optionally) persist entities + relations for one chapter
-    using the Anthropic API client."""
-    chapter = _load_chapter(conn, chapter_id)
-    LOG.info("extracting: %s :: %s", chapter.book_title[:50], (chapter.title or "")[:50])
-
-    raw = _call_llm(client, _build_user_prompt(chapter))
-    entities, relations = _validate_extraction(raw)
-    LOG.info(
-        "LLM returned %d entities (valid), %d relations (valid)",
-        len(entities), len(relations),
-    )
-
-    if dry_run:
-        print(json.dumps({"entities": entities, "relations": relations}, indent=2))
-        return ExtractionSummary(
-            chapter_id=chapter_id,
-            entities_extracted=len(entities),
-            entities_by_resolution={},
-            relations_extracted=len(relations),
-            relations_written=0,
-            prior_relations_cleared=0,
-        )
-
-    return process_extraction_json(conn, resolver, chapter_id, raw)
-
-
-# ----------------------------------------------------------------------------
-# CLI
-# ----------------------------------------------------------------------------
-
 def _print_summary(summary: ExtractionSummary) -> None:
     """Human-readable run stats to stdout."""
     print("\n=== extraction summary ===")
@@ -427,32 +388,32 @@ def _print_summary(summary: ExtractionSummary) -> None:
         print(f"prior relations cleared: {summary.prior_relations_cleared}")
 
 
+# ----------------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------------
+
 def main() -> int:
-    """Parse args, extract one chapter, print a summary.
+    """Parse args and run one of the two modes.
 
     Modes:
-      --chapter-id N                → API extraction (needs ANTHROPIC_API_KEY)
-      --chapter-id N --print-prompt → print the full self-contained prompt to
-                                       stdout (no DB write, no LLM call) so
-                                       an external LLM driver (e.g. a Claude
-                                       Code sub-agent) can run the extraction
-      --chapter-id N --json-file P  → read pre-parsed LLM JSON from path P
-                                       and process it (resolve + write DB)
+      --chapter-id N --print-prompt [--output PATH]
+          Build the sub-agent prompt for this chapter; write it to stdout or
+          PATH. No LLM call, no DB write.
+      --chapter-id N --json-file PATH
+          Read pre-parsed LLM JSON from PATH and process it (resolve +
+          write DB). No LLM call.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--chapter-id", type=int)
     parser.add_argument("--book-id", type=int)
     parser.add_argument("--chapter-num", type=int)
-    parser.add_argument("--dry-run", action="store_true",
-                        help="API mode: call the LLM and print JSON; skip DB writes")
     parser.add_argument("--print-prompt", action="store_true",
-                        help="print the full sub-agent prompt for this chapter; "
-                             "no LLM call, no DB write")
+                        help="emit the sub-agent prompt for this chapter")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="with --print-prompt, write to this path instead of stdout")
     parser.add_argument("--json-file", type=Path, default=None,
-                        help="process LLM output already stored at this path "
-                             "(JSON with entities/relations); no LLM call")
-    parser.add_argument("--api-key", default=os.environ.get("ANTHROPIC_API_KEY"))
+                        help="process LLM output already stored at this path")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -460,6 +421,13 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if not args.print_prompt and args.json_file is None:
+        LOG.error("provide --print-prompt or --json-file")
+        return 2
+    if args.print_prompt and args.json_file is not None:
+        LOG.error("--print-prompt and --json-file are mutually exclusive")
+        return 2
 
     conn = duckdb.connect(str(args.catalog))
     try:
@@ -471,36 +439,27 @@ def main() -> int:
         else:
             chapter_id = args.chapter_id
 
-        # Mode A: print-prompt (no LLM, no write)
         if args.print_prompt:
             chapter = _load_chapter(conn, chapter_id)
-            sys.stdout.write(build_full_prompt(chapter))
+            prompt = build_full_prompt(chapter)
+            if args.output is not None:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(prompt)
+                LOG.info("wrote prompt for chapter %d to %s (%d chars)",
+                         chapter_id, args.output, len(prompt))
+            else:
+                sys.stdout.write(prompt)
             return 0
 
-        # Mode B: process pre-parsed JSON (no LLM, writes DB)
-        if args.json_file is not None:
-            raw_text = args.json_file.read_text()
-            try:
-                raw = parse_llm_json(raw_text)
-            except json.JSONDecodeError as exc:
-                LOG.error("JSON parse failed in %s: %s", args.json_file, exc)
-                return 3
-            resolver = EntityResolver(conn)
-            summary = process_extraction_json(conn, resolver, chapter_id, raw)
-            _print_summary(summary)
-            return 0
-
-        # Mode C: direct API call
-        if not args.api_key:
-            LOG.error("ANTHROPIC_API_KEY not set (and --json-file not given).")
-            return 2
-        # pylint: disable=import-outside-toplevel
-        import anthropic
-        client = anthropic.Anthropic(api_key=args.api_key)
+        # --json-file mode
+        raw_text = args.json_file.read_text()
+        try:
+            raw = parse_llm_json(raw_text)
+        except json.JSONDecodeError as exc:
+            LOG.error("JSON parse failed in %s: %s", args.json_file, exc)
+            return 3
         resolver = EntityResolver(conn)
-        summary = extract_chapter(
-            conn, client, resolver, chapter_id, dry_run=args.dry_run,
-        )
+        summary = process_extraction_json(conn, resolver, chapter_id, raw)
         _print_summary(summary)
     finally:
         conn.close()

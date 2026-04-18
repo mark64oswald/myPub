@@ -123,7 +123,7 @@ LLM-based schema-guided extraction applied to any text-bearing content — both 
 
 **Design notes:**
 - Adopts the pattern used by LlamaIndex's `SchemaLLMPathExtractor` but implemented directly against DuckDB rather than through the LlamaIndex framework.
-- Runs as a Python batch script invoked from Claude Code. Not a service.
+- **Runs via Claude Code sub-agents (Task tool), not as a standalone API-calling script.** A coordinator script handles I/O, DB reads/writes, and entity resolution; sub-agents handle the LLM reasoning. This keeps all LLM costs covered by the Max subscription. The coordinator dispatches chapters or doc sections in batches to sub-agents, which return structured JSON.
 - Applies uniformly to chapters and snapshots — the same schema and prompts. Differences in document style (book prose vs. reference docs vs. README) are handled by the LLM, not by separate pipelines.
 - **Every extracted candidate entity passes through Entity Resolution (below) before being written.** This is what keeps the graph cohesive across heterogeneous sources.
 - Produces provenance: every extracted entity or relation links back to the chapter-and-paragraph or snapshot it was derived from, via a polymorphic `(source_type, source_id)` reference.
@@ -136,6 +136,7 @@ A specialized extractor that pulls step-by-step procedures, decision rules, and 
 
 **Design notes:**
 - Separate prompt template from the entity extractor because the extraction target is different.
+- **Uses the same sub-agent pattern as the entity extractor** — coordinator script handles I/O; sub-agents handle LLM reasoning. Subscription-covered.
 - Procedures link to the concepts they operate on and the patterns they implement — those concept references pass through Entity Resolution, same as entity extraction, so a Procedure extracted from Zippy's docs links to the same `CDC` concept that book chapters discuss.
 - Works well against Context7 and DeepWiki content (often rich in worked examples). Works best-effort against raw GitHub READMEs — some are procedural, many aren't.
 - Not every chapter or snapshot has procedures; the extractor no-ops gracefully.
@@ -430,15 +431,15 @@ The script:
 1. Queries `doc_source` with priority data to determine which sources are due (Hot every run, Warm on Wednesdays, Cool on the 1st of the month).
 2. For each scheduled source: fetches snapshot → computes `content_hash` → compares to stored.
 3. **Unchanged → no-op.** This is the critical efficiency: typical churn is ~10%, so most refreshes finish in milliseconds and cost nothing.
-4. **Changed → runs the full ingestion pipeline** from §6.2 (parse into sections → embed → index → extract entities with resolution → extract procedures → compute alignment).
-5. Writes a summary to `logs/refresh.log`: sources checked, sources changed, sections added/updated, concepts created, review-queue adds.
+4. **Changed → runs the non-LLM ingestion steps**: parse into sections → generate embeddings → add to FTS index. These are pure Python operations that run without Claude Code. The LLM-dependent steps (entity extraction, procedure extraction, alignment computation) are **deferred** — flagged as pending and run on the next interactive Claude Code session when the user queries a concept linked to the changed source. This keeps the LaunchAgent self-contained (no API keys, no subscription dependency) while still pre-warming the most expensive steps (fetch + embed + index).
+5. Writes a summary to `logs/refresh.log`: sources checked, sources changed, sections added/updated, extraction pending flags.
 
 **Cost profile.** With ~50 registered doc sources across the tiers, realistic workload is roughly:
-- Hot tier (~5 sources, daily): 1–2 extractions per night, ~15s each.
-- Warm tier (~15 sources, weekly): 2–5 extractions per week.
+- Hot tier (~5 sources, daily): 1–2 content-changed refreshes per night, a few seconds each for the non-LLM steps.
+- Warm tier (~15 sources, weekly): 2–5 content-changed refreshes per week.
 - Cool tier (~30 sources, monthly): ~5 per month.
 
-Total: 5–10 minutes of aggregate compute per day, entirely offline, in exchange for near-instant cached responses during actual work sessions.
+Total: under a minute of compute per night for the LaunchAgent. Deferred extraction adds 10–30 seconds per changed source on first interactive use — but only for sources that actually changed, which is a small fraction.
 
 **User-facing commands** (see §9.3 for full list):
 - `/kb-focus <domain>` — elevate a domain's sources to Hot for the duration of a project.

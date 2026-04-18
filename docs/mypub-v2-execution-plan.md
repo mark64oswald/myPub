@@ -12,6 +12,18 @@
 - README.md is updated as features land, not at the end
 - Use Context7 MCP to verify DuckDB extension APIs, FastMCP patterns, and any library docs before writing code
 
+**Cost model — sub-agents, not API scripts:**
+- All LLM reasoning runs inside Claude Code, covered by the Max subscription
+- Extraction work (entity, procedure, doc snapshot) uses Claude Code **sub-agents
+  via the Task tool**, not standalone Python scripts calling the Anthropic API
+- Coordinator scripts handle I/O, DB reads/writes, entity resolution, and progress
+  tracking; sub-agents handle the LLM reasoning (extraction prompts)
+- This means $0 incremental API cost, but extraction throughput is bounded by
+  Max subscription rate limits — full corpus extraction spans multiple sessions
+- **Never use `anthropic.Client()` or `anthropic.Anthropic()` in Python scripts** —
+  if you catch yourself importing the anthropic SDK for inference, stop and use
+  a sub-agent instead
+
 ---
 
 ## Pre-flight: Repository Setup
@@ -317,16 +329,26 @@ Tests: write tests/test_resolution.py with cases for:
 ### Prompt 2.2 — Entity/concept extractor
 
 ```
-Build scripts/extract_entities.py — the LLM-based entity extractor.
+Build the entity extraction capability using Claude Code sub-agents (Task tool),
+NOT a standalone Python script that calls the Anthropic API. All LLM reasoning
+stays inside Claude Code, covered by the Max subscription.
 
-Design:
-- Takes a chapter (or later, a doc_section) as input
-- Uses a structured prompt with the domain ontology (allowed entity types:
-  Concept, Pattern, Tool, Framework, Algorithm, Technique; allowed relation
-  types: REQUIRES, EXTENDS, CONTRASTS_WITH, IMPLEMENTS, CITES)
-- Returns structured JSON with entities and relations
-- Each entity passes through EntityResolver before writing to DB
+Architecture:
+- A coordinator script (scripts/extract_entities.py) that reads chapters from
+  DuckDB, dispatches extraction work to Claude Code sub-agents, and writes
+  results back. The script handles I/O and DB writes; the sub-agents do the
+  LLM reasoning.
+- Each sub-agent receives: chapter content, the domain ontology (allowed entity
+  types: Concept, Pattern, Tool, Framework, Algorithm, Technique; allowed
+  relation types: REQUIRES, EXTENDS, CONTRASTS_WITH, IMPLEMENTS, CITES),
+  and instructions to return structured JSON.
+- The coordinator passes each sub-agent's JSON output through EntityResolver
+  before writing to DB.
 - Records provenance via (source_type='chapter', source_id=chapter_id)
+
+IMPORTANT: The sub-agent does the extraction reasoning. The coordinator script
+does the DB reads, entity resolution, and DB writes. No anthropic.Client()
+calls anywhere — this runs entirely on your Max subscription.
 
 Start with a SINGLE CHAPTER as a test. Pick a meaty one (e.g., a chapter on
 data modeling patterns). Run the extractor. Inspect the output:
@@ -343,16 +365,25 @@ Do NOT run the full corpus yet. Tune the prompt based on this one chapter.
 **Validate:**
 - Single-chapter extraction produces reasonable entities (human review)
 - Resolution correctly matches known concepts
+- No API token charges — verify with `/cost` that no API billing occurred
 - No crashes, no schema violations
 
-🔀 Commit: `feat(phase2): entity extractor with single-chapter test`
+🔀 Commit: `feat(phase2): entity extractor via sub-agents with single-chapter test`
 
 ### Prompt 2.3 — Tune extraction on 10-book sample
 
 ```
 Run the entity extractor against 10 diverse books (mix of topics: data modeling,
 distributed systems, cloud, programming, DevOps). For each book, extract all
-chapters.
+chapters using sub-agents.
+
+Batch strategy for sub-agents:
+- Process 5-10 chapters per sub-agent call (batch multiple chapters into one
+  sub-agent task to reduce overhead)
+- Run sub-agents sequentially within a session to stay within rate limits
+- If rate limits are hit, pause and resume in the next session — note which
+  books/chapters are complete so we can resume cleanly
+- Write extraction stats to logs/extraction_run_YYYYMMDD.log
 
 After extraction, analyze quality:
 1. SELECT concept_type, COUNT(*) FROM concept GROUP BY 1 — type distribution
@@ -364,7 +395,8 @@ After extraction, analyze quality:
 If extraction quality is poor (>30% nonsensical relations, or >50% wrong entity
 types), adjust the prompt and re-run on the same 10 books.
 
-This is the tuning loop. Run it until the quality is acceptable.
+This is the tuning loop. Run it until the quality is acceptable. Because
+sub-agents are subscription-covered, iteration is free.
 ```
 
 **Validate:**
@@ -377,14 +409,23 @@ This is the tuning loop. Run it until the quality is acceptable.
 ### Prompt 2.4 — Full corpus extraction
 
 ```
-Run the entity extractor against the full corpus (~345 books). This will take
-a while. Log progress every book.
+Run the entity extractor against the full corpus (~345 books) using sub-agents.
+This will span multiple Claude Code sessions over several days.
 
-Batch settings:
+Batch strategy:
 - Process books in alphabetical order
-- Commit to DB every 10 books (not every chapter — too many small transactions)
+- Track progress in a status table or JSON file (books completed, chapters
+  extracted, last book processed) so we can resume across sessions
+- Batch 5-10 chapters per sub-agent call
+- Commit to DB after each sub-agent returns (not at the end)
 - Write extraction stats to logs/extraction_run_YYYYMMDD.log
-- If a chapter fails extraction (LLM error, timeout), log it and continue
+- If a chapter fails extraction, log it and continue
+
+Session management:
+- Each session processes as many books as rate limits allow
+- At session end, record progress: "completed through book N of 345"
+- Next session picks up where the last left off
+- Expect 10-20 sessions to complete the full corpus
 
 After completion, run the quality analysis from Prompt 2.3 on the full corpus.
 Report the same metrics.
@@ -394,6 +435,7 @@ Report the same metrics.
 - All books processed (check for skipped/failed chapters)
 - Graph is substantially larger than before
 - Resolution queue has items to review
+- Zero API token charges across all sessions
 
 🔀 Commit: `feat(phase2): full corpus entity extraction complete`
 
@@ -462,8 +504,12 @@ Run 3-5 iterations now to establish a baseline.
 ### Prompt 3.1 — Procedure extractor
 
 ```
-Build scripts/extract_procedures.py, similar to the entity extractor but with
-a different prompt targeting step-by-step procedures.
+Build the procedure extraction capability using the same sub-agent pattern
+as entity extraction (Prompt 2.2). All LLM reasoning stays inside Claude Code.
+
+The coordinator script (scripts/extract_procedures.py) handles I/O and DB;
+sub-agents do the reasoning with a different prompt targeting step-by-step
+procedures.
 
 The procedure prompt should extract:
 - procedure.name
@@ -476,8 +522,9 @@ The procedure prompt should extract:
 Test on 5 chapters known to be procedural (e.g., a tutorial chapter, an
 operations guide chapter). Inspect output quality.
 
-Then run on the full corpus. Not every chapter has procedures — expect many
-no-ops. Report: N chapters processed, N procedures extracted, N chapters with
+Then run on the full corpus using the same multi-session approach as entity
+extraction. Not every chapter has procedures — expect many no-ops.
+Report: N chapters processed, N procedures extracted, N chapters with
 zero procedures.
 ```
 
@@ -485,6 +532,7 @@ zero procedures.
 - Procedure steps are actual steps (not summaries or descriptions)
 - Linked concepts resolve correctly
 - Procedural chapters produce procedures; non-procedural chapters produce nothing
+- Zero API token charges
 
 🔀 Commit: `feat(phase3): procedure extraction with full corpus run`
 
@@ -570,22 +618,35 @@ Tests: write tests/test_sectionizer.py with:
 ### Prompt 4.4 — Snapshot ingestion pipeline
 
 ```
-Build the full snapshot ingestion pipeline from the architecture doc §6.2:
+Build the full snapshot ingestion pipeline from the architecture doc §6.2.
 
-1. Fetch snapshot from MCP server
-2. Compute content_hash, skip if unchanged
-3. Persist doc_snapshot
-4. Parse into doc_sections via sectionizer
-5. Generate embeddings per section
-6. Add sections to FTS index
-7. Run entity extractor (with resolution) at section level
-8. Run procedure extractor at section level
-9. Compute alignment (CORROBORATES/CONTRADICTS edges)
+The pipeline has two categories of work:
+- Steps 1-6 are pure Python (no LLM needed): fetch, hash, persist, sectionize,
+  embed, index. These run as normal Python code in scripts/refresh_docs.py.
+- Steps 7-9 require LLM reasoning (entity extraction, procedure extraction,
+  alignment): these use Claude Code sub-agents, same pattern as book extraction.
+
+Full pipeline:
+1. Fetch snapshot from MCP server (Python)
+2. Compute content_hash, skip if unchanged (Python)
+3. Persist doc_snapshot (Python)
+4. Parse into doc_sections via sectionizer (Python)
+5. Generate embeddings per section (Python, sentence-transformers)
+6. Add sections to FTS index (Python, DuckDB)
+7. Run entity extractor (sub-agent) with resolution at section level
+8. Run procedure extractor (sub-agent) at section level
+9. Compute alignment — CORROBORATES/CONTRADICTS edges (sub-agent)
 
 Package as scripts/refresh_docs.py with CLI:
   python scripts/refresh_docs.py --source-id 1
   python scripts/refresh_docs.py --all
   python scripts/refresh_docs.py --tier hot
+
+For steps 7-9, the script prepares the section content, then invokes Claude
+Code sub-agents for the LLM reasoning. This keeps everything on the Max
+subscription. For the proactive refresh LaunchAgent (Phase 4b), the sub-agent
+steps would need to be skipped (Claude Code isn't running at 3 AM) — the
+LaunchAgent handles steps 1-6 only, and extraction runs on next interactive use.
 
 Test with a single doc_source (e.g., DuckDB docs via Context7). Inspect:
 - Are sections created?
@@ -599,6 +660,7 @@ Test with a single doc_source (e.g., DuckDB docs via Context7). Inspect:
 - doc_section rows created with correct hierarchy
 - Entity resolution correctly links to existing concepts
 - FTS and VSS queries return doc sections alongside book chapters
+- Zero API token charges
 
 🔀 Commit: `feat(phase4): snapshot ingestion pipeline with section-level extraction`
 
