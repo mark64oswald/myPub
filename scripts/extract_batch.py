@@ -216,15 +216,20 @@ def _select_chapters(
 
     # dedup_by_hash=True: pick one representative chapter_id per (book_id,
     # content_hash). skip_extracted excludes hashes whose ANY sibling has
-    # been extracted already.
+    # been extracted — either produced concept_relation rows OR was attempted
+    # and returned empty (front-matter, TOC). The extraction_attempted_at
+    # clause is what catches the empty-result case; without it, front-matter
+    # chapters boomerang back into every subsequent session.
     where = list(base_where)
     if skip_extracted:
         where.append(
             "NOT EXISTS ("
             "  SELECT 1 FROM chapter sib "
-            "  JOIN concept_relation cr "
-            "    ON cr.source_type='chapter' AND cr.source_id = sib.chapter_id "
-            "  WHERE sib.content_hash = ch.content_hash"
+            "  WHERE sib.content_hash = ch.content_hash "
+            "    AND (sib.extraction_attempted_at IS NOT NULL "
+            "      OR EXISTS (SELECT 1 FROM concept_relation cr "
+            "                   WHERE cr.source_type='chapter' "
+            "                     AND cr.source_id = sib.chapter_id))"
             ")"
         )
     where_sql = " AND ".join(where)

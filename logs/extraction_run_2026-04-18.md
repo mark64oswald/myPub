@@ -290,3 +290,111 @@ corpus is probably 8–10 more sessions.
 Target ~1,000 blocks again. Same pipeline. Keep the post-wave
 file-count check (catch phantom-success early). Expect the exact-match
 ratio to keep climbing as the graph densifies.
+
+---
+
+# Phase 2.4 — Session 3 (2026-04-18, session-p24-03)
+
+Another 1,000 content blocks. Ran into two rate-limit windows; resumed
+through both. Also closed a long-standing bug that was wasting quota
+on front-matter.
+
+## Fix landed this session
+
+- Added `chapter.extraction_attempted_at` timestamp column. Prep now
+  skips chapters whose content_hash has any sibling where that column
+  is set OR where `concept_relation` rows exist — the old skip logic
+  only checked the latter, so chapters whose extraction produced zero
+  relations (front-matter, TOCs, short intros) came back to the top
+  of every subsequent session's pool.
+- Backfilled the new column from session-1 and session-2 manifest
+  files on disk (1,099 chapters marked attempted before session 3's
+  prep re-ran).
+- Re-ran prep with the fix; verified 0 overlap with prior sessions
+  (was 128/1000 = 12.8% on the first prep before the fix).
+
+## Dispatch
+
+Three rate-limit resets, three prep phases:
+
+| phase   | resets after        | chapters written | notes                                 |
+|---------|---------------------|------------------|---------------------------------------|
+| initial | ~200 in first push  | 200              | waves 1–2 clean, wave 3 hit 4pm limit |
+| resume  | after 4pm reset     | +700             | waves 4–9 steady, wave 10 hit 9pm     |
+| tail    | after 9pm reset     | +100             | finished wave 10                      |
+
+Two phantom-success events (agents reporting `processed: 10, written:
+10` without writing files) caught by the post-wave file check.
+Re-dispatched cleanly.
+
+## Results — this session only
+
+```
+entities extracted  15,712
+relations written   10,700
+resolution counts:
+  exact            6,357   (cross-book reuse)
+  new              8,284
+  borderline         971
+  embedding_high     100
+```
+
+Still ~41% exact (6,357 / 15,712). Slightly lower share than session 2
+(60%) — because session 3 crossed into genome/bioinformatics and text
+analytics territory, which brings in a lot of domain vocabulary the
+earlier corpus didn't have.
+
+## Cumulative corpus state
+
+```
+chapters with relations  1,822   (prev 992)     +830
+chapters attempted       2,099   (prev 1,099)   +1,000
+concepts                16,533   (prev 7,278)   +9,255
+relations               20,095   (prev 9,395)   +10,700
+review queue (pend)      1,910   (prev 939)     +971
+```
+
+### Entity types (cumulative)
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   |  6,477 | 39.2% |
+| Tool      |  3,519 | 21.3% |
+| Technique |  2,639 | 16.0% |
+| Pattern   |  1,680 | 10.2% |
+| Algorithm |  1,171 |  7.1% |
+| Framework |  1,047 |  6.3% |
+
+### Relation types (cumulative)
+
+| type           | count |
+|----------------|-----:|
+| REQUIRES       | 6,069 |
+| IMPLEMENTS     | 5,639 |
+| CITES          | 3,135 |
+| EXTENDS        | 2,681 |
+| CONTRASTS_WITH | 2,571 |
+
+Distribution remains stable across sessions. Good sign the extraction
+prompt isn't drifting as corpus breadth grows.
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  ~10,348
+  attempted so far (sessions 1–3):           2,099  (20%)
+  remaining:                                  ~8,249
+```
+
+~8 more sessions at this pace.
+
+## Next session
+
+- Same 1,000-block target.
+- With `extraction_attempted_at` landed, prep never re-queues attempted
+  content. Fresh sessions just pick up alphabetically where the last
+  left off.
+- Review queue is past 1,900 — consider an interactive
+  `/kb-review-concepts` pass soon to collapse obvious aliases before
+  it grows further.
+

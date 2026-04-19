@@ -363,6 +363,14 @@ def process_extraction_json(
         if _write_relation(conn, from_id, to_id, r["type"], r["confidence"], chapter_id):
             written += 1
 
+    # Mark attempt so prep can skip content we've already seen even when the
+    # extraction produced zero relations (front-matter, TOCs, etc.).
+    conn.execute(
+        "UPDATE chapter SET extraction_attempted_at = CURRENT_TIMESTAMP "
+        "WHERE chapter_id = ?",
+        [chapter_id],
+    )
+
     conn.commit()
     return ExtractionSummary(
         chapter_id=chapter_id,
