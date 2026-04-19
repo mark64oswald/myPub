@@ -398,3 +398,132 @@ unique content blocks at threshold=2000:  ~10,348
   `/kb-review-concepts` pass soon to collapse obvious aliases before
   it grows further.
 
+---
+
+# Phase 2.4 — Session 4 (2026-04-19, session-p24-04)
+
+Fourth full-corpus push — another 1,000 content blocks. One rate-limit
+interruption mid-wave-8, clean recovery after the 11am reset.
+
+## Dispatch
+
+10 waves of 10 concurrent sub-agents, alphabetical continuation from
+"Crucial Conversations" through "Data Modeling with Snowflake".
+
+| phase     | waves                            | chapters written | notes                            |
+|-----------|----------------------------------|------------------|----------------------------------|
+| initial   | waves 1–7                        | 700              | straight through, no incidents   |
+| stall     | wave 8 (partial)                 | +75              | rate-limit hit mid-wave          |
+| resume    | wave 8b (3 consolidated agents)  | +25              | stragglers after 11am reset      |
+| continued | wave 9 (dispatched with 8b)      | +100             | 13 agents concurrent             |
+| tail      | wave 10                          | +100             | final batches 91–100             |
+
+No phantom-success events this session — every agent that reported
+`written: N` actually wrote N files. Post-wave file counts all matched
+cumulative expectations at 100 / 200 / 300 … / 900 / 1,000.
+
+## Results — this session only
+
+```
+entities extracted  16,881
+relations written   12,458
+resolution counts:
+  exact            7,972   (cross-book reuse)
+  new              7,663
+  borderline       1,190
+  embedding_high      56
+```
+
+Exact-match ratio 47% (7,972 / 16,881) — between session 2's 60% and
+session 3's 41%. This session crossed into "Data*" territory (Data
+Architecture, Data Contracts, Data Engineering, Data Governance, Data
+Mesh), which is dense with domain-specific vocabulary but also shares
+heavy overlap with the earlier corpus on patterns and infra concepts.
+
+## Cumulative corpus state
+
+```
+chapters with relations  2,750   (prev 1,822)  +928
+chapters attempted       3,099   (prev 2,099)  +1,000
+concepts                25,386   (prev 16,533) +8,853
+relations               32,553   (prev 20,095) +12,458
+review queue (pend)      3,100   (prev 1,910)  +1,190
+```
+
+### Entity types (cumulative)
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 10,416 | 41.0% |
+| Tool      |  4,591 | 18.1% |
+| Technique |  4,469 | 17.6% |
+| Pattern   |  2,977 | 11.7% |
+| Framework |  1,530 |  6.0% |
+| Algorithm |  1,403 |  5.5% |
+
+### Relation types (cumulative)
+
+| type           | count |
+|----------------|-----:|
+| REQUIRES       | 9,979 |
+| IMPLEMENTS     | 9,409 |
+| CITES          | 4,864 |
+| EXTENDS        | 4,324 |
+| CONTRASTS_WITH | 3,977 |
+
+All five types well-balanced; REQUIRES still leads, consistent with
+sessions 2–3.
+
+## Books covered so far (top 10)
+
+| chapters | book |
+|---------:|------|
+| 193 | A Common-Sense Guide to DSA in JavaScript |
+| 183 | A Common-Sense Guide to DSA in Python, Vol. 1 |
+| 139 | A Common-Sense Guide to DSA in Python, Vol. 2 |
+| 123 | Beautiful Data |
+| 122 | Business Metadata - Capturing Enterprise Knowledge |
+|  60 | AI Agents and Applications |
+|  53 | Basic Applied Bioinformatics |
+|  43 | Data Architecture |
+|  40 | Bioinformatics and Functional Genomics |
+|  37 | Clean Architecture |
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,203
+  attempted so far (sessions 1–4):         2,607  (25.6%)
+  remaining:                               7,596
+```
+
+About **7,600 blocks to go**, ~7–8 more sessions at this pace.
+
+## Observations
+
+- Rate-limit recovery is smooth: `extraction_attempted_at` means a
+  partial wave's successful writes stay written. We just re-identify
+  which chapter_ids in the session pool lack result files and
+  re-dispatch exactly those. In this session that was 25 stragglers
+  from wave 8 plus the 200 blocks from waves 9–10.
+- The "consolidated stragglers" pattern (3 agents handling 8–9
+  chapters each) works well — no need to keep a one-to-one
+  batch-to-agent mapping during recovery.
+- Review queue now at 3,100 pending (+1,190). Crossing the threshold
+  where `/kb-review-concepts` should run before session 5, else the
+  queue starts drowning out real borderline cases.
+- Coverage distribution shifted toward data-centric books this
+  session — tracks the alphabetical traversal. Next session will
+  start at "Data Modeling" and walk through the rest of the "D" books.
+
+## Next session
+
+- Same 1,000-block target.
+- **Run `/kb-review-concepts` first.** Collapse 3,100 borderline
+  matches into alias registrations or keep-separate decisions before
+  adding another ~1,200 items to the queue. At the current growth
+  rate, deferring once more would land session 6 at ~4,300 pending —
+  well past manageable.
+- Pool picks up alphabetically from "Data Modeling with Snowflake"
+  onward.
+
