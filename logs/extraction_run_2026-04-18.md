@@ -527,3 +527,156 @@ About **7,600 blocks to go**, ~7–8 more sessions at this pace.
 - Pool picks up alphabetically from "Data Modeling with Snowflake"
   onward.
 
+---
+
+# Phase 2.4 — Review pass + Session 5 (2026-04-19 / 04-20)
+
+## Review pass (kb-review-concepts, 380 items)
+
+Partial drain of the 3,100-pending borderline queue before session 5.
+Interactive review pass from highest-similarity items downward, stopped
+at sim≈0.858 after 380 decisions.
+
+```
+queue:  3,100 pending → 2,720 pending (-380, 12% cleared)
+  159 aliases registered
+  226 kept separate
+  0 renames (not used without explicit direction)
+graph: 25,386 concepts → 25,228 concepts (-158 from merges)
+```
+
+**Alias patterns (dominant):**
+- Abbreviation expansions (CI/CD, PCI DSS, PHI, TDD, OLTP, TF-IDF, RAG, CMMI)
+- Singular/plural (Connectors, Diffusion Models, Description Logics, Vector stores)
+- Hyphen/case variants (Dead-Letter Queue, 3D-QSAR, Gray-Level Run Length Matrix)
+- Parent-brand synonyms (AWS IAM ↔ AWS Identity and Access Management, Amazon
+  Kinesis ↔ AWS Kinesis, Amazon MSK ↔ Amazon Managed Streaming for Apache Kafka)
+- Suffix variants ("Data Ingestion Pipeline" ↔ "Ingestion Pipeline")
+
+**Keep-separate patterns (dominant):**
+- Paired opposites (Input/Output Port, grid-row/grid-column, Selection/Insertion
+  Sort, SOCK_STREAM/TCP where one is the POSIX constant and one the protocol)
+- Sibling variants (EBS gp2/gp3, Graviton2/3, SIS/SIR Model, FP4/FP8 Quantization,
+  Smith-Waterman/Needleman-Wunsch, PaLM/LaMDA)
+- Competitor tools (Puppet/Chef, Superset/Tableau, Fortify/Checkmarx, seaborn/matplotlib)
+
+**Biggest graph impacts (edge migrations on merge):**
+- `RAG` ← `Retrieval-Augmented Generation (RAG)`: 25 edges
+- `Lakehouse` ← `Lakehouse Architecture`: 20 edges
+- `Diffusion Models` ← `Diffusion Model`: 20 edges
+- `Data processing pipeline` ← `Data Pipeline`: 20 edges
+- `Vector Database` ← `VectorDB`: 15 edges
+
+## Session 5 dispatch (session-p24-05)
+
+1,000 blocks covering "Data Modeling with Snowflake" → "Facilitating
+Software Architecture" (alphabetical continuation).
+
+| phase    | waves | chapters written | notes                                      |
+|----------|-------|------------------|--------------------------------------------|
+| wave 1   | 1     | 93 → then 7 redo | **dispatch bug**: fabricated IDs for 7/10  |
+| waves 2–9 | 8    | 800              | clean, no incidents                        |
+| wave 10  | partial | 50             | rate-limit hit late evening                 |
+| recovery | 5 consolidated agents | +50 | resumed after reset, session completes    |
+
+**Dispatch bug caught in wave 1.** I printed the first 3 and last 3
+batches from the manifest but made up the IDs for batches 4–10 by
+extrapolation. Five of those agents reported `written: 0/1/2` because
+the prompts didn't exist on disk. Fixed by reading the manifest
+directly for every wave thereafter. Two stray writes from the bad
+dispatches (31790, 32715) landed in chapters that were in later
+batches — harmless overwrites when those waves ran.
+
+## Results — this session only
+
+```
+entities extracted  17,243
+relations written   12,412
+resolution counts:
+  exact            9,328   (cross-book reuse)
+  new              6,804
+  borderline       1,019
+  embedding_high      52
+  alias               40   (auto-resolved from review pass aliases)
+```
+
+**The `alias` column is new.** Those 40 extractions matched names we
+registered as aliases during the review pass earlier today. Instead
+of queuing as borderline or creating duplicates, the resolver collapsed
+them on sight. Exactly the payoff that justifies the review work.
+
+Exact-match ratio climbed to **54%** (9,328 / 17,243) — highest so
+far. The graph has matured enough that more than half of new
+extractions match existing concepts by name alone.
+
+## Cumulative corpus state
+
+```
+chapters with relations  3,664   (prev 2,750)   +914
+chapters attempted       4,099   (prev 3,099)   +1,000
+concepts                33,051   (prev 25,228)  +7,823
+relations               44,965   (prev 32,553)  +12,412
+review queue (pend)      3,739   (prev 2,720)   +1,019
+```
+
+### Entity types
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 13,837 | 41.9% |
+| Technique |  6,111 | 18.5% |
+| Tool      |  5,493 | 16.6% |
+| Pattern   |  3,900 | 11.8% |
+| Framework |  2,034 |  6.2% |
+| Algorithm |  1,676 |  5.1% |
+
+Technique overtook Tool this session — tracks with the subject
+matter (CSS, JavaScript, math, molecular biology, TypeScript — all
+technique-heavy domains).
+
+### Relation types
+
+| type           | count |
+|----------------|-----:|
+| REQUIRES       | 13,921 |
+| IMPLEMENTS     | 13,026 |
+| CITES          |  6,342 |
+| EXTENDS        |  5,998 |
+| CONTRASTS_WITH |  5,678 |
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,203
+  attempted so far (sessions 1–5):         3,596  (35.2%)
+  remaining:                               6,607
+```
+
+**About 6,600 blocks left, ~6–7 more sessions at this pace.**
+
+## Observations
+
+- **Alias registry pays off immediately.** 40 auto-resolutions in the
+  first session after the review pass. That's 40 items that would
+  otherwise have gone into the queue or duplicated existing concepts.
+- **Dispatch-from-manifest is now mandatory.** The wave-1 bug wasted
+  ~7 agent dispatches. The fix is trivial — always read the manifest
+  for the batch IDs, never extrapolate.
+- **Rate-limit recovery is now routine.** Fifth session, second
+  rate-limit hit mid-wave. `extraction_attempted_at` + file-count
+  gap detection make recovery ~5 minutes of setup.
+- Graph neighborhood is starting to look dense around widely-shared
+  concepts. Next-step intuition: start checking graph connectivity
+  before session 7 (Phase 2 quality eval), not after the full corpus
+  is in.
+
+## Next session
+
+- Same 1,000-block target.
+- Pool picks up from "Facilitating Software Architecture" onward
+  (starts in the "F" and "G" range).
+- Review queue back at 3,739 — another `/kb-review-concepts` pass
+  probably worth doing before session 6. This time the first ~380
+  items are already resolved, so we'd be starting from sim≈0.858
+  rather than 0.899.
+
