@@ -68,3 +68,4 @@ htmlcov/
 
 # Large exports
 exports/
+data/extraction-sessions/
