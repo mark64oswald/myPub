@@ -680,3 +680,143 @@ unique content blocks at threshold=2000:  10,203
   items are already resolved, so we'd be starting from sim≈0.858
   rather than 0.899.
 
+---
+
+# Phase 2.4 — Session 6 (2026-04-24, session-p24-06)
+
+1,000 content blocks via the usual prep → sub-agent → process pipeline.
+Pool starts at "Facilitating Software Architecture" and runs through
+"Hands-On Entity Resolution." 100 batches of 10, dispatched as 10 waves
+of 10 concurrent sub-agents.
+
+## Dispatch
+
+| phase   | waves (10 agents ea.)              | chapters     | notes                      |
+|---------|------------------------------------|--------------|----------------------------|
+| initial | waves 1–4                          | 400 written  | clean                      |
+| stall   | wave 5                             | 47 written   | rate-limit hit mid-wave    |
+| resume  | 6 agents covering gap (after 11:40am reset) | +53 | reads manifest IDs only    |
+| tail    | waves 6–10                         | +500         | straight-through, no hiccups |
+
+Wave 5 hit a 5-hour usage cap about 2–3 minutes into the wave. Every
+sub-agent in the wave had written at least the first 4–5 chapters in
+its batch before the limit triggered, so partial progress was salvaged
+by recovering the 53 missing IDs from `ls` + manifest diff, then
+dispatching 6 resume agents with 8–9 IDs each. No duplicate writes, no
+lost chapters.
+
+Recovery was ~3 minutes of setup once the limit reset. The
+dispatch-from-manifest discipline from session 5 held up: didn't need
+to extrapolate IDs for the resume wave either.
+
+Useful agent-time (minus the ~10-minute rate-limit gap and the
+post-reset resume wave): ~55 min. Process step ran in ~2 minutes on
+1,000 result files.
+
+## Results — this session only
+
+```
+entities extracted  17,849
+relations written   13,815
+resolution counts:
+  exact            9,359   (cross-book reuse)
+  new              7,144
+  borderline       1,231
+  embedding_high      92
+  alias               23
+```
+
+Exact-match ratio: **52.4%** (9,359 / 17,849). Held roughly steady
+vs. session 5's 54% — still above half the extractions matching
+existing concepts by name alone.
+
+**Alias auto-resolutions fell (40 → 23).** Expected: the review pass
+earlier registered aliases for names that had already shown up as
+borderline, and those names mostly came from the books already
+processed. New books in session 6 introduce fresh vocabulary, so
+fewer hits against the existing alias registry. The 23 that did
+resolve are still a pure win vs. adding them to the queue.
+
+`embedding_high` jumped back up (52 → 92). Suggests the corpus is
+broad enough now that near-duplicate concepts under different spellings
+are surfacing in the embedding-high band more often than before.
+
+## Cumulative corpus state
+
+```
+chapters with relations  4,585   (prev 3,664)   +921
+chapters attempted       5,099   (prev 4,099)   +1,000
+concepts                41,426   (prev 33,051)  +8,375
+relations               58,780   (prev 44,965)  +13,815
+review queue (pend)      4,970   (prev 3,739)   +1,231
+```
+
+79 of the 1,000 attempted chapters had empty entity/relation lists
+(front-matter, indices, exercise appendices). Normal — same ratio
+as earlier sessions.
+
+### Entity types
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 17,630 | 42.6% |
+| Technique |  7,613 | 18.4% |
+| Tool      |  6,776 | 16.4% |
+| Pattern   |  4,904 | 11.8% |
+| Framework |  2,560 |  6.2% |
+| Algorithm |  1,943 |  4.7% |
+
+Shares stable across the last three sessions. The corpus has reached
+a stationary type distribution — each new 1,000-block batch adds
+proportionally rather than reshaping the mix.
+
+### Relation types
+
+| type           |  count |
+|----------------|-------:|
+| REQUIRES       | 17,995 |
+| IMPLEMENTS     | 17,294 |
+| CITES          |  8,217 |
+| EXTENDS        |  7,693 |
+| CONTRASTS_WITH |  7,581 |
+
+REQUIRES and IMPLEMENTS are within 700 of each other — effectively
+tied as the dominant relation pair.
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,203
+  attempted so far (sessions 1–6):         4,568  (44.8%)
+  remaining:                               5,635
+```
+
+**Roughly 5,600 blocks remaining, ~5–6 more sessions** at the current
+1,000-per-session pace. The back half of the alphabet likely contains
+more dense technical books (H–Z has DDD, ML, streaming, systems
+programming, etc.), so per-chapter extraction counts may climb.
+
+## Observations
+
+- **Rate-limit recovery is now a ~3-minute chore**, not a session
+  blocker. Wave-5 stalled at 11:35am-ish, reset at 11:40am, resume
+  wave dispatched by 11:50am. The persistent `data/extraction-sessions/`
+  symlink meant no state reconstruction was needed.
+- **Manifest-read-every-wave continues to pay off.** Wave 5's recovery
+  needed missing-chapter IDs that the manifest held directly — no
+  extrapolation tempt, no wasted dispatches.
+- **Stationary type distribution** is a mild surprise. Expected each
+  new domain to skew the mix; instead, the ratio Concept / Technique /
+  Tool / Pattern / Framework / Algorithm is stable enough to guess
+  next session's counts by simple multiplication.
+- Review queue at 4,970 pending. Worth another `/kb-review-concepts`
+  pass before session 7 — the alias payoff per review minute should
+  be higher now than last pass, since the cumulative corpus is larger.
+
+## Next session
+
+- Same 1,000-block target.
+- Pool picks up around "Hands-On" → early "H-range" books.
+- Strongly consider a review-concepts pass first; 4,970 pending is
+  the largest queue since sessions began.
+
