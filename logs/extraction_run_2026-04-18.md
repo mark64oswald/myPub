@@ -820,3 +820,33 @@ programming, etc.), so per-chapter extraction counts may climb.
 - Strongly consider a review-concepts pass first; 4,970 pending is
   the largest queue since sessions began.
 
+## Post-session review pass (same day, 2026-04-24)
+
+Ran `/kb-review-concepts` after session 6 on recommendation above.
+Walked 380 queue items (sim 0.900 → 0.852), matching session 5's
+pass length exactly.
+
+```
+keep-separate  214  (56%)
+alias          166  (44%)
+queue pending  4,970 → 4,590
+```
+
+Alias rate is up from prior passes — more hyphen/plural/acronym
+variants surfacing as the corpus broadens. 166 aliases registered;
+for calibration, session 5's 380-item review yielded ~40 auto-resolves
+in session 6. Session 7 should see a larger `alias` column in the
+resolver stats.
+
+**Data-quality issues flagged (not fixed — need direction):**
+
+- `S3 Protected Access` vs `S3 Private Access` — descriptions are
+  swapped relative to the AWS Amplify spec (item 4383).
+- `CCR5-Δ32 Allele Frequency` — concept name incorrectly contains
+  "Frequency" but describes the allele itself (item 4881).
+- `supertype entity` vs `subtype entity` — descriptions swapped;
+  supertype desc says "lower-level" (item 3380).
+- Multiple ADR concept roots exist (id=33165 and id=34651) — would
+  benefit from a cross-concept merge that the queue's per-item
+  resolver actions can't express (item 4125).
+
