@@ -984,3 +984,31 @@ unique content blocks at threshold=2000:  10,203
 - Worth another `/kb-review-concepts` pass between sessions; queue
   is now 5,791 pending (largest yet).
 
+## Post-session-7 review pass (2026-04-25)
+
+Walked another 380 items — third consecutive review at this length.
+Sim range 0.900 → 0.846.
+
+```
+keep-separate  220  (58%)
+alias          160  (42%)
+queue pending  5,791 → 5,411
+```
+
+Process refinement: switched from one-show-per-item to triage-from-list
++ batch-resolve. Same decision quality, ~3× faster. Decisions still
+verified via `show` for ambiguous cases (description swaps, scope
+mismatches, etc.).
+
+Cumulative aliases registered across sessions 5/6/7 reviews: ~390.
+Each session 7 already saw ~14% conversion of last review's aliases
+into auto-resolves. Expecting similar payoff into session 8.
+
+No new data-quality issues flagged this pass — the four flagged
+across earlier reviews remain open:
+
+- `S3 Protected Access` / `S3 Private Access` description swap
+- `CCR5-Δ32 Allele Frequency` misnamed
+- `supertype entity` / `subtype entity` description swap
+- Multiple ADR concept roots (id=33165 vs id=34651)
+
