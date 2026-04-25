@@ -850,3 +850,137 @@ resolver stats.
   benefit from a cross-concept merge that the queue's per-item
   resolver actions can't express (item 4125).
 
+---
+
+# Phase 2.4 — Session 7 (2026-04-24, session-p24-07)
+
+1,000 content blocks via the prep → sub-agent → process pipeline.
+Pool: "Hands-On Entity Resolution" → "Knowledge Graphs and LLMs in
+Action" — H–K range.
+
+## Dispatch
+
+10 waves of 10 sub-agents. Two rate-limit hits this session, both
+recovered cleanly via the manifest-driven resume pattern:
+
+| phase   | waves                              | chapters     | notes                        |
+|---------|------------------------------------|--------------|------------------------------|
+| initial | waves 1–4                          | ~392 written | rate-limit hit mid wave 1    |
+| resume  | wave-1 stragglers (8 chapters)     | +8           | dispatched after 4:50pm reset |
+| middle  | waves 2–6                          | +500         | clean                        |
+| stall   | wave 7 (only batches 61, 63 done)  | ~76 partial  | rate-limit hit at ~6pm        |
+| resume  | 24 missing from wave 7 (2 groups)  | +24          | dispatched after 9:50pm reset |
+| tail    | waves 8–10                         | +300         | straight-through              |
+
+Both rate-limit hits followed the same shape: dispatch → ~3 minutes
+of progress → cap triggers → most agents wrote 6–9 of 10 chapters
+before the limit fired. Recovery each time was: count missing IDs from
+the manifest, dispatch one or two consolidating resume agents, done.
+
+Useful agent-time across the session: ~90 min. Wall clock from first
+dispatch to last commit: ~12 hours, dominated by waiting on rate-limit
+windows to reset.
+
+## Results — this session only
+
+```
+entities extracted  16,511
+relations written   12,370
+resolution counts:
+  exact            8,324   (cross-book reuse)
+  new              6,867
+  borderline       1,201
+  embedding_high      73
+  alias               46
+```
+
+**Alias auto-resolutions doubled** vs session 6 (46 vs 23). The 166
+aliases registered in the post-session-6 review pass paid off as
+predicted, though not as dramatically as session 5→6 (40→46 was
+expected; we got 23→46). Worth noting the registry now sits at
+~340 cumulative aliases, so each new session benefits.
+
+Exact-match ratio: **50.4%** (8,324 / 16,511). Down slightly from
+session 6's 52.4%. The H–K range introduced more domain-specific
+material (genetics/bioinformatics-heavy books in the I–K span) — the
+slight novelty bump tracks subject matter.
+
+## Cumulative corpus state
+
+```
+chapters w/ relations    5,490   (prev 4,585)   +905
+chapters attempted       6,099   (prev 5,099)   +1,000
+concepts                49,328   (prev 41,426)  +7,902
+relations               71,150   (prev 58,780)  +12,370
+review queue (pend)      5,791   (prev 4,970)   ↑ but offset by 380 reviewed
+```
+
+Net queue growth this session: +1,201 borderline added, 380 review-
+resolved earlier today, so net delta on `pending` is +1,201 - (380
+that were already gone before extraction started) = effectively
+session added 1,201 to the post-review baseline. Math checks: 4,590
+(post-review) + 1,201 = 5,791. ✓
+
+### Entity types (cumulative, % share stable)
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 20,783 | 42.1% |
+| Technique |  9,117 | 18.5% |
+| Tool      |  8,186 | 16.6% |
+| Pattern   |  5,784 | 11.7% |
+| Framework |  2,974 |  6.0% |
+| Algorithm |  2,484 |  5.0% |
+
+Type distribution is now visibly stationary across sessions 5–7 —
+shares move by less than 0.5pp per session. Predicting session 8
+mostly requires multiplying.
+
+### Relation types
+
+| type           |  count |
+|----------------|-------:|
+| REQUIRES       | 21,621 |
+| IMPLEMENTS     | 20,955 |
+| CITES          |  9,745 |
+| EXTENDS        |  9,508 |
+| CONTRASTS_WITH |  9,321 |
+
+REQUIRES and IMPLEMENTS still tied as the dominant pair, separated
+by ~700.
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,203
+  attempted so far (sessions 1–7):         5,568  (54.6%)
+  remaining:                               4,635
+```
+
+**Past the halfway point.** ~4,600 blocks remaining = roughly
+4–5 more sessions at 1,000-per-session pace.
+
+## Observations
+
+- **Two rate-limit hits in one session is the new normal.** The 5-hour
+  rolling cap can't fit a full 1,000-block session if the day already
+  has heavy usage. Dispatch the first wave, accept that wave 5–7 may
+  stall, and wait for the next reset to finish. Total wall clock is
+  high but agent-time is what matters.
+- **Manifest-driven recovery is bulletproof.** Two stalls, two clean
+  resumes, no dropped chapters. The pattern is now: list all results
+  files → diff against manifest IDs → dispatch resume agents with
+  the missing IDs.
+- **Alias payoff measured: ~14% conversion rate per registered
+  alias.** 46 auto-resolves out of 166 aliases registered yesterday.
+  The other 86% didn't fire because their candidate names didn't
+  appear in this session's text — they'll fire when relevant chapters
+  show up in future sessions.
+
+## Next session
+
+- 4,635 blocks remaining → 4–5 more sessions.
+- Pool picks up around "L" books — Learning *, Linux *, etc.
+- Worth another `/kb-review-concepts` pass between sessions; queue
+  is now 5,791 pending (largest yet).
+
