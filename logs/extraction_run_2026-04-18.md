@@ -1012,3 +1012,164 @@ across earlier reviews remain open:
 - `supertype entity` / `subtype entity` description swap
 - Multiple ADR concept roots (id=33165 vs id=34651)
 
+## Phase 2.4 session 8 (2026-04-25 → 2026-04-26)
+
+Pool prepped on 2026-04-25 covering "Knowledge Graphs and LLMs in
+Action" → "Methods and Applications of Statistics in Clinical Trials"
+(1,000 chapters, 100 batches × 10). Persistent session dir
+`data/extraction-sessions/session-p24-08`.
+
+### Wall clock and rate limits
+
+Three-stall session — first one we've seen need a full overnight
+wait. Sessions split across two days:
+
+- **Day 1 (2026-04-25, ~07:30 PDT)**: waves 1–2 done cleanly (200
+  results), wave 3 hit limit immediately on dispatch — all 10 agents
+  returned "You've hit your limit · resets 4am" with no chapters
+  written. Reset window already past for that calendar day, so the
+  next reset was ~20.5h away.
+- **Process partial**: ran on the 210 results in hand (200 from
+  waves 1–2 + 10 stragglers) so the work-so-far landed in the catalog
+  before pausing. 1,681 new concepts, 2,352 exact matches, 236
+  borderline.
+- **Day 2 (2026-04-26, ~06:15 PDT)**: resumed wave 3 from manifest
+  diff (90 missing across batches 21–30, 8–10 missing per batch).
+  Waves 3–8 all completed cleanly. Wave 9 hit limit mid-flight —
+  9 agents stalled, only batch 85 finished (10/10). 80 wave-9
+  chapters landed before the cap.
+- **Day 2 reset (~11:10 PDT)**: ran a single consolidated cleanup
+  agent for the 20 wave-9 stragglers + 10 fresh wave-10 batches
+  (110 chapters, 11 agents). All clean.
+
+### Agent dispatch summary
+
+```
+wave  batches   chapters  outcome
+  1   1-10      100       clean
+  2   11-20     100       clean
+  3   21-30     90 resume clean (after first wave 3 stall)
+  4   31-40     100       clean
+  5   41-50     100       clean
+  6   51-60     100       clean
+  7   61-70     100       clean
+  8   71-80     100       clean
+  9   81-90     80 (1 batch + partial) — rest stalled
+ 9c   cleanup   20        clean (wave 9 stragglers)
+ 10   91-100    100       clean
+                ─────
+                1,000     all chapters extracted
+```
+
+### Process step output
+
+```
+processed:            1,000
+missing result files: 0
+entities total:       19,792
+relations written:    15,186
+resolution counts:
+  exact            12,310   (62.2%) ← alias registry humming
+  new               6,238   (31.5%)
+  borderline        1,102   (5.6%)
+  alias                75
+  embedding_high       67
+```
+
+Note: the process step counts include re-passes over the 210
+chapters processed mid-session on day 1; the resolver dedupes inserts,
+so catalog state is correct, but headline counts above are the union
+across both runs.
+
+### Catalog growth (sessions 5/6/7/8)
+
+```
+                          s5      s6      s7      s8
+concepts              35,693  41,260  49,392  58,425   ↑ +9,033
+concept_relation      45,411  58,780  71,149  86,335   ↑ +15,186
+review queue (pend)    3,830   4,970   5,791   6,749   ↑ +958
+aliases registered     ~145    ~330    ~390     482    ↑ +92
+```
+
+### Entity types
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 24,606 | 42.1% |
+| Technique | 10,854 | 18.6% |
+| Tool      |  9,566 | 16.4% |
+| Pattern   |  6,957 | 11.9% |
+| Framework |  3,376 |  5.8% |
+| Algorithm |  3,066 |  5.2% |
+
+Distribution still stationary across sessions 5–8. Shares moved
+≤0.4pp from session 7. Predicting session 9 mostly requires
+multiplying.
+
+### Relation types
+
+| type           |  count |
+|----------------|-------:|
+| REQUIRES       | 26,226 |
+| IMPLEMENTS     | 25,766 |
+| EXTENDS        | 11,798 |
+| CITES          | 11,396 |
+| CONTRASTS_WITH | 11,149 |
+
+REQUIRES still leads IMPLEMENTS, narrowed to ~460. The three trailing
+types (EXTENDS / CITES / CONTRASTS_WITH) now cluster within ~650
+of each other.
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,203
+  attempted so far (sessions 1–8):         6,038  (59.2%)
+  remaining:                               4,165
+```
+
+Net unique blocks from session 8: +470 (vs +1,000 chapter_ids
+processed). The 530-chapter gap is content-hash-duplicate chapters
+in the pool — sister books, re-imports, and shared boilerplate that
+the prep step did not skip but the catalog dedups via content_hash.
+Conversion from raw chapter throughput to unique blocks is dropping
+as the corpus saturates: was ~70-80% in early sessions, ~47% now.
+
+**Roughly 4,200 blocks remaining** → 4–5 more sessions if conversion
+holds, or 5–6 if it keeps dropping.
+
+## Observations
+
+- **Three rate-limit hits in one session (across two calendar days)
+  is the new ceiling.** Wave 3 stalled at dispatch on day 1; wave 9
+  stalled mid-flight on day 2. Wall clock for session 8 was ~28h end
+  to end, but useful agent-time was ~3h. The pattern is now: dispatch,
+  monitor, partial-process when stalled, wait for reset, resume from
+  manifest diff.
+- **Mid-session process step is worth doing.** Running the resolver
+  on partial results when stalled (a) saves the work-in-progress to
+  the catalog so a crash doesn't lose it, (b) registers any alias
+  hits from those partials, helping later waves auto-resolve. No API
+  cost since embeddings are local sentence-transformers.
+- **Content-hash dedup is now the binding constraint.** Pool prep
+  ordered by title gives sister books / republished editions
+  back-to-back; many "new" chapters in this session were re-prints
+  of content already extracted. Future sessions will get more
+  efficient if prep adds a "skip if any sibling chapter shares
+  content_hash" filter, but it's not blocking — the resolver handles
+  duplicates correctly.
+- **Alias payoff scaled with cumulative registrations.** 75 alias
+  resolutions this session vs ~46 last session — registry now at
+  482, with conversion still in the 14-15% range per registered
+  alias.
+
+## Next session
+
+- 4,165 blocks remaining → 4–5 more sessions at current pace.
+- Pool picks up around "M" and "N" books — Microservices, Modeling,
+  Natural Language, Neural Networks, etc.
+- `/kb-review-concepts` pass between sessions: queue is now 6,749
+  pending (largest yet — borderline backlog grew faster than review
+  cleared). Next pass should be 500-item rather than 380 to stay on
+  pace.
+
