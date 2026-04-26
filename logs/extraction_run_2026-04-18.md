@@ -1173,3 +1173,69 @@ holds, or 5–6 if it keeps dropping.
   cleared). Next pass should be 500-item rather than 380 to stay on
   pace.
 
+## Post-session-8 review pass (2026-04-26)
+
+500-item pass — first review at this length, sized up from the prior
+380 to keep pace with the queue's growth rate. Sim range 0.900 →
+0.839.
+
+```
+keep-separate  274  (54.8%)
+alias          226  (45.2%)
+queue pending  6,749 → 6,249
+```
+
+Alias share dropped from ~42% (session 7 review) to 45% — actually
+slightly higher despite going deeper into the queue, because the
+pool has been getting many "X (acronym)" / "x and y singular/plural"
+pairs from the GitHub Actions, GraphQL, and clinical-trials material
+in session 8.
+
+### Cumulative alias registry growth
+
+```
+session       aliases registered
+post-s5         ~145
+post-s6         ~330  (+185, 380-item pass)
+post-s7         ~390  (+ 60 net, 380-item pass — sister-book overlap)
+post-s8          703  (+313, 500-item pass)
+```
+
+The post-s8 jump is bigger than expected. Likely explanation: many of
+the items I aliased had multiple already-resolved siblings, so a
+single alias decision sometimes registered 2–3 names. (E.g. resolving
+"X (FOO)" → "X" can also fold "X variants" already in `concept_alias`.)
+Worth noting but not investigating further; the registry growing
+faster than per-pass count means future sessions will see better
+auto-resolve ratios.
+
+### Patterns observed
+
+- **Acronym/expansion pairs are still the highest-value alias target.**
+  Roughly a third of aliases this pass were "Foo (FOO)" ↔ "FOO".
+  The extractor produces both forms when a chapter introduces and
+  uses an acronym.
+- **Hyphen/space variants** keep appearing — "Zero-Padding" vs
+  "Zero Padding", "Back-Translation" vs "Backtranslation". Easy
+  alias decisions.
+- **Clinical-trials material introduces lots of "X Design" vs "X
+  Trial" pairs** — almost always alias, since the literature uses
+  these interchangeably for the same study setup.
+- **GitHub Actions, gRPC, and Kafka concepts contributed many
+  "opposite" pairs** (Bidirectional/Server Streaming RPC, Wide/Narrow
+  Transformation, etc.) — these are reliable keep-separates.
+
+No new data-quality issues flagged this pass. Five flagged across
+earlier reviews remain open:
+
+- `S3 Protected Access` / `S3 Private Access` description swap
+- `CCR5-Δ32 Allele Frequency` misnamed
+- `supertype entity` / `subtype entity` description swap
+- Multiple ADR concept roots (id=33165 vs id=34651)
+- Several `'?'` placeholder concepts surfaced as nearest-neighbor
+  in the queue (q=7711, 7264, 7190, 4842, 4876, 4257, 6238).
+  All flagged keep-separate as a defensive measure. Worth a sweep:
+  query `concept` for `name = '?'` and decide whether to delete
+  or repair them.
+
+
