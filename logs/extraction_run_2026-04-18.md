@@ -1238,4 +1238,146 @@ earlier reviews remain open:
   query `concept` for `name = '?'` and decide whether to delete
   or repair them.
 
+## Phase 2.4 session 9 (2026-04-26)
+
+Pool prepped 2026-04-26 covering "Python for Data Analysis" through
+"SQL Cookbook" (1,000 chapters, 100 batches × 10). P→S range, with
+heavy React/Rust/RAG/Refactoring/Reinforcement Learning content.
+Persistent dir `data/extraction-sessions/session-p24-09`.
+
+### Wall clock and rate limits
+
+Mostly clean session — one rate-limit hit + two stream-watchdog
+stalls.
+
+- **Wave 6 (~16:20 PDT)**: hit rate limit mid-dispatch. 9 agents
+  returned "limit · resets 4:20pm" with only 1-3 chapters each in
+  flight. Reset at 4:20pm; resumed wave 6 from manifest diff at
+  16:31 (78 stragglers across batches 51-60). Clean recovery.
+- **Wave 1 batch 6 stall**: agent stalled with 8/10 chapters written
+  before stream watchdog killed it (no rate-limit reason given).
+  Folded the 2 stragglers into wave 2 batch 11 dispatch. Same
+  stream-stall pattern hit again on batch 56 in wave 6 (no progress
+  for 600s); resumed via the wave 6 cleanup batch. Watchdog stalls
+  appear unrelated to rate limits — they look like the underlying
+  agent runtime quietly losing the connection and never reconnecting.
+
+Total wall clock: ~7h end-to-end (single calendar day, no overnight
+wait). Useful agent-time: ~3h.
+
+### Process step output
+
+```
+processed:            1,000
+missing result files: 0
+entities total:       17,821
+relations written:    14,064
+resolution counts:
+  exact            9,229    (51.8%) ← alias registry payoff
+  new              7,065    (39.6%)
+  borderline       1,321    (7.4%)
+  alias              123
+  embedding_high      83
+```
+
+The exact-match rate dropped from 62.2% (session 8) to 51.8%, which
+matches what we'd expect from less-overlapping P-to-S material —
+React/Rust/etc. introduce many new framework-specific concepts that
+don't already exist in the catalog. The 39.6% new-concept rate is
+the highest since session 5.
+
+### Catalog growth (sessions 5–9)
+
+```
+                          s5      s6      s7      s8      s9
+concepts              35,693  41,260  49,392  58,425  66,585   ↑ +8,160
+concept_relation      45,411  58,780  71,149  86,335 100,397   ↑ +14,062
+review queue (pend)    3,830   4,970   5,791   6,749   7,570   ↑ +821
+aliases registered     ~145    ~330    ~390     482     703    (no change; extractions don't add)
+```
+
+**Crossed 100k relations.** First time the relation count is in
+six digits.
+
+### Entity types
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 27,694 | 41.6% |
+| Technique | 12,589 | 18.9% |
+| Tool      | 10,795 | 16.2% |
+| Pattern   |  8,199 | 12.3% |
+| Framework |  3,962 |  6.0% |
+| Algorithm |  3,346 |  5.0% |
+
+Pattern share ticked up 0.4pp this session (Refactoring + Rust +
+React material dense with named patterns). All other shares within
+0.4pp of session 8.
+
+### Relation types
+
+| type           |  count |
+|----------------|-------:|
+| REQUIRES       | 30,528 |
+| IMPLEMENTS     | 30,023 |
+| EXTENDS        | 13,937 |
+| CITES          | 12,982 |
+| CONTRASTS_WITH | 12,927 |
+
+REQUIRES and IMPLEMENTS still neck-and-neck (within 500). The
+trailing trio (EXTENDS/CITES/CONTRASTS_WITH) clusters within ~1,000
+of each other.
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,203
+  attempted so far (sessions 1–9):         6,932  (67.9%)
+  remaining:                               3,271
+```
+
+Net unique blocks from session 9: **+894** (vs. +470 in session 8).
+Conversion from chapter throughput to unique blocks rebounded to
+~89% — the P-to-S material has fewer sister-book duplicates than
+the K-to-M range did. Refactoring, Rust trio, and React quartet
+introduced large amounts of fresh material.
+
+**~3,300 blocks remaining** → 3-4 more sessions to corpus
+completion.
+
+## Observations
+
+- **Stream-watchdog stalls are a new failure mode.** Two agents
+  this session (batch 6 wave 1, batch 56 wave 6) hit "no progress
+  for 600s" without any rate-limit signal. They produced 8/10 and
+  1/10 chapters before failing. Recovery is identical to rate-limit
+  stalls (manifest diff + resume). Unclear root cause — possibly
+  long-running prompts triggering whatever timeout the runtime uses
+  to detect dead connections.
+- **Conversion-rate variance is real.** Session 8 was 47% chapter
+  → unique-block conversion (P-name sister-book overlap was the
+  binding constraint). Session 9 was 89% (P-to-S range had little
+  overlap with prior sessions). Corpus saturation is uneven —
+  some letter ranges are already deeply covered, others fresh.
+  Session 10's pool will skew more toward fresh material as we
+  approach the long tail of less-popular books.
+- **First time in flow without a multi-day wall clock.** Sessions
+  6, 7, 8 each spread over 12-28h with overnight pauses. Session
+  9 finished in ~7h on a single calendar day. The single rate-limit
+  hit recovered within 11 minutes (16:20 → 16:31).
+
+## Next session
+
+- 3,271 blocks remaining → 3-4 more sessions. Realistic completion
+  by session 12.
+- Pool picks up around "S" continuing through end of alphabet —
+  Software, Statistics, System Design, Tensorflow, Test books,
+  plus tail letters U-Z.
+- `/kb-review-concepts` pass between sessions: queue is now 7,570
+  pending. Prior pass cleared 500 in ~30min; a 500-item pass keeps
+  pace and the queue stable.
+- Watch for: whether stream-watchdog stalls become more frequent
+  (would suggest runtime issue); whether aliases registry growth
+  resumes (it stayed at 703 because extractions don't auto-register;
+  next review pass will push it).
 
