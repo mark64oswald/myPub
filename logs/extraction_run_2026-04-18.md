@@ -1401,7 +1401,7 @@ Rust trait pairs (`std::ops::Mul` vs `MulAssign`, `Send` vs `Sync`,
 opposites — all keep-separate. Sister-API libraries (Bugsnag vs
 Sentry, klaR vs tidymodels, JAMPred vs LDpred) added more.
 
-### Patterns this pass
+### Patterns (s9 review)
 
 - **Rust trait family explosion.** Rust in Action / Rust for
   Rustaceans / Rust Atomics & Locks introduced ~20+ trait pairs
@@ -1563,7 +1563,7 @@ The S/T material loaded the queue with cloud product names ("AWS X"
 ↔ "Amazon X" ↔ "X" — three forms for many services), which were
 near-100% alias.
 
-### Patterns this pass
+### Patterns (s10 review)
 
 - **AWS service triple forms** dominated (~25 aliases): "AWS EBS" ↔
   "Amazon Elastic Block Store" ↔ "EBS", "Amazon EKS" ↔ "EKS" ↔
@@ -1725,3 +1725,80 @@ a small session 13 cleanup.
   pending. Maintain 500-item cadence.
 - A second graph-connectivity snapshot at completion would be
   worth running — last one was at 44.8%; we're now at 74.7%.
+
+## Post-session-11 review pass (2026-04-30)
+
+500-item pass — sim range 0.899 → 0.826.
+
+```
+keep-separate  305  (61.0%)
+alias          194  (38.8%)
+rename           1  (0.2%)   q=8976 At-rules → At-rule (post-hoc fold)
+queue pending  8,785 → 8,285
+aliases        1,149 → 1,322   (+173 net; 22 collisions with existing rows)
+```
+
+Alias share dropped to 39%, the lowest in five passes. As the queue
+descends past 0.83 similarity the long tail loads up with
+contrast pairs and family-member distinctions rather than the
+trivial AWS triple-form / paren-strip fodder that dominated the
+top of s10's queue.
+
+### Patterns (s11 review)
+
+- **Contrast/inverse pairs dominated keep-separates** (~80 items):
+  Hot/Cold Path, Forward/Backward Recovery, Soft/Hard Voting,
+  Scale-Up/Scale-Out, Source/Consumer-Aligned, Pages/App Router,
+  Stateful/Stateless processor, Strong/Basic Eventual Consistency,
+  Two-State/Three-State Mutex, Dynamic/Static Redundancy. The
+  embedding model puts these at 0.83-0.88 because they share the
+  same domain framing, but each pair encodes the design *choice*
+  the chapters discuss — merging would destroy the relation.
+- **Hay's Data Model Resource Book entities** kept generating
+  near-duplicate-but-distinct entity-name pairs: `PARTY ROLE
+  CATEGORY` vs `PARTY ROLE`, `STATUS TYPE CATEGORY TYPE` vs
+  `STATUS TYPE TYPE entity`, `GEOGRAPHIC BOUNDARY TYPE` vs
+  `GEOGRAPHIC BOUNDARY`, `CONTACT MECHANISM TYPE` vs
+  `Contact Mechanism`. All keep-separate — the suffix `_TYPE`
+  is load-bearing in Hay's Level-2 patterns.
+- **Generic-helper / generic-param paren variants** alias as
+  expected: `OnlyRequired<T, K>` ↔ `OnlyRequired`,
+  `DeepPartial<T>` ↔ `DeepPartial`, `Omit<T, K>` ↔ `Omit Helper`,
+  `Partial<T>` ↔ `Partial Helper`, `SetRequired<T, K>` ↔
+  `SetRequired`. The TypeScript chapter loaded several of these.
+- **Kimball pattern aliases** picked up: `Type 4 Mini-Dimension`
+  ↔ `SCD Type 4`, `Bridge Tables` ↔ `Dimension Bridge Table`,
+  `Inventory Periodic Snapshot` ↔ `Inventory Snapshot Fact
+  Table`, `Enterprise Bus Matrix` ↔ `Enterprise Data Warehouse
+  Bus Matrix`. These are canonical Kimball doublets.
+- **Acronym/expansion pairs** continued as alias backbone (~25):
+  `MRO` ↔ `Method Resolution Order`, `GAAP` ↔ expansion, `PPO`
+  ↔ expansion, `ISMS` ↔ expansion, `NCCL` ↔ expansion, `CUPTI`
+  ↔ expansion, `MTD` ↔ expansion, `ETL` (paren variant), etc.
+
+### One rename
+
+`q=8976 'At-rules'` arrived with `nearest_concept_id=NULL` —
+an earlier session's merge of a CSS-At-Rules variant had nulled
+its FK. Resolved via `rename --merge-into 19429` (At-rule),
+folding the provisional and registering the alias.
+
+### Notable judgement calls
+
+- `'Tableau Desktop' ↔ 'Tableau Software'` — kept separate.
+  Desktop is the specific app, Software is the company/portfolio.
+- `'GLUE' ↔ 'GLUE Benchmark'` — kept separate. Bare `GLUE` is
+  ambiguous (NLP benchmark vs AWS Glue) and the candidate context
+  didn't disambiguate.
+- `'Coefficient of Determination' ↔ 'R-squared'` — alias.
+  Canonical statistical synonyms.
+- `'Coreference resolution' ↔ 'Reference resolution'` — kept
+  separate; they're distinct NLP tasks despite the embedding overlap.
+- `'EMR Managed Scaling' ↔ 'EMR Autoscaling'` appeared twice
+  (q=9601, q=9591) under different concept_types; both aliased.
+
+Cumulative aliases across all reviews: 1,322. Auto-resolve hits
+in s11 extraction: ~70 (from a 1,149-entry registry at start;
+will be ~1,322 entering s12).
+
+No new data-quality flags this pass. Existing five remain open.
