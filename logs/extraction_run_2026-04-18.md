@@ -1381,3 +1381,46 @@ completion.
   resumes (it stayed at 703 because extractions don't auto-register;
   next review pass will push it).
 
+## Post-session-9 review pass (2026-04-29)
+
+500-item pass — sim range 0.900 → 0.834.
+
+```
+keep-separate  292  (58.4%)
+alias          208  (41.6%)
+queue pending  7,570 → 7,070
+aliases        703 → 909   (+206)
+```
+
+Alias share fell back to 42% (from 45% in the post-s8 review). Reasons:
+the deeper queue surfaced more genuine "X vs Y" distinctions —
+matplotlib/plt method pairs (`plt.contour` vs `plt.contourf`,
+`plt.fill` vs `plt.fill_between`, `np.histogram` vs `np.histogram2d`),
+Rust trait pairs (`std::ops::Mul` vs `MulAssign`, `Send` vs `Sync`,
+`*const T` vs `*mut T`, `BitOr` vs `BitAnd`), and many SQL/CSS
+opposites — all keep-separate. Sister-API libraries (Bugsnag vs
+Sentry, klaR vs tidymodels, JAMPred vs LDpred) added more.
+
+### Patterns this pass
+
+- **Rust trait family explosion.** Rust in Action / Rust for
+  Rustaceans / Rust Atomics & Locks introduced ~20+ trait pairs
+  surfacing as borderline. Almost all keep-separate (each trait
+  has distinct semantics). The sole exceptions were name variants
+  (`Debug` vs `Debug trait`, `Send` vs `Send Trait`, `Clone trait`
+  vs `std::clone::Clone`).
+- **Matplotlib pairs.** `plt.subplot` vs `plt.subplots`, `plt.xlim`
+  vs `plt.ylim`, `plt.contour` vs `plt.contourf`, `plt.hist` vs
+  `plt.hist2d`. All keep-separate (different functions). The Python
+  for Data Analysis chapters were the source.
+- **Acronym/expansion still ~15-20% of aliases.** "X (FOO)" ↔ "FOO"
+  and "X (FOO)" ↔ "X" both reliable.
+- **GroupBy methods all keep-separate.** `first/last/head/tail` are
+  distinct methods even when sim is high.
+
+Cumulative aliases across all reviews: 909. Each session 9 saw ~123
+auto-alias resolutions during extraction (vs ~75 in session 8) —
+registry growth is paying dividends.
+
+No new data-quality flags this pass. Existing five remain open.
+
