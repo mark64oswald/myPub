@@ -1545,3 +1545,45 @@ On track for **session 12 finish**.
   pending. Maintain 500-item cadence.
 - Consider an ad-hoc graph connectivity snapshot before session 12
   — last one was at 44.8% coverage; would be informative at ~85%.
+
+## Post-session-10 review pass (2026-04-30)
+
+500-item pass — sim range 0.900 → 0.831.
+
+```
+keep-separate  271  (54.2%)
+alias          229  (45.8%)
+queue pending  8,418 → 7,918
+aliases        909 → 1,133   (+224)
+```
+
+Alias share rebounded to 46% — biggest crop of acronym/expansion
+pairs and AWS/Azure service variants since the post-s7 review.
+The S/T material loaded the queue with cloud product names ("AWS X"
+↔ "Amazon X" ↔ "X" — three forms for many services), which were
+near-100% alias.
+
+### Patterns this pass
+
+- **AWS service triple forms** dominated (~25 aliases): "AWS EBS" ↔
+  "Amazon Elastic Block Store" ↔ "EBS", "Amazon EKS" ↔ "EKS" ↔
+  "Amazon Elastic Kubernetes Service", "Amazon MWAA" ↔ "Managed
+  Workflows for Apache Airflow", etc. The Snowflake and Spark
+  sister-book chapters introduced these in many forms.
+- **Spark API methods with paren variants** kept appearing: `mapValues`
+  ↔ `mapValues()`, `flatMapValues` ↔ `flatMapValues()`, `textFile`
+  ↔ `textFile()`. All alias.
+- **Healthcare data model variants** surfaced from "The Data Model
+  Resource Book": entity-name keep-separates dominated (PRODUCT
+  CATEGORY vs PRODUCT CATEGORY TYPE vs PRODUCT CATEGORY ROLLUP
+  TYPE — all distinct entities in Hay's data model patterns).
+- **owl: properties all keep-separate** as expected: `owl:hasValue`
+  vs `owl:someValuesFrom`, `owl:maxCardinality` vs
+  `owl:maxQualifiedCardinality`, etc. Each has distinct semantics.
+
+Cumulative aliases across all reviews: 1,133. Crossed 1k milestone.
+Auto-resolve hits in extractions: ~172 in session 10 (vs ~123 in
+session 9, ~75 in session 8) — registry growth continues to
+compound.
+
+No new data-quality flags this pass. Existing five remain open.
