@@ -1587,3 +1587,141 @@ session 9, ~75 in session 8) — registry growth continues to
 compound.
 
 No new data-quality flags this pass. Existing five remain open.
+
+# Phase 2.4 — Session 11 (2026-04-30, session-p24-11)
+
+Final-letter sweep. Pool: 802 chapters across 81 batches (last batch
+just 2 chapters) — first time the prep step returned fewer than 1,000.
+Pool covers 45 books from "The Data Model Resource Book Vol 3"
+through "gRPC: Up and Running". Persistent dir
+`data/extraction-sessions/session-p24-11`.
+
+## Dispatch
+
+8 waves of 10–11 sub-agents (vs 10 waves in earlier 1k-block sessions).
+One rate-limit hit at wave 5 — same shape as prior sessions.
+
+| phase   | waves                                  | chapters     | notes                    |
+|---------|----------------------------------------|--------------|--------------------------|
+| initial | waves 1–4                              | +400         | clean                    |
+| stall   | wave 5 (~12pm PDT)                     | +46 partial  | rate-limit cap triggered |
+| resume  | wave 5 cleanup, 4 consolidated agents  | +54          | post-12pm reset, clean   |
+| middle  | wave 6 (batches 51–60)                 | +100         | clean                    |
+| tail    | waves 7–8 (batches 61–81)              | +212         | clean                    |
+
+Useful agent-time: ~70 min. Smaller pool meant the session finished
+in fewer dispatch rounds; only the wave-5 stall added wall-clock cost.
+
+## Results — this session only
+
+```
+processed:            802
+missing result files: 0
+entities total:       13,401
+relations written:    10,412
+resolution counts:
+  exact            6,832   (51.0%)
+  new              5,584   (41.7%)
+  borderline         867   (6.5%)
+  alias               70
+  embedding_high      48
+```
+
+Resolution mix essentially identical to sessions 9–10. Stationarity
+holds even at corpus tail — no late-stage saturation cliff.
+
+Top books in session 11:
+
+| chapters | book                                                  |
+|---------:|-------------------------------------------------------|
+|     101  | The Go Programming Language                           |
+|     100  | The Data Model Resource Book, Volume 3                |
+|      42  | The Handbook of Conversation Analysis                 |
+|      28  | TypeScript Cookbook                                   |
+|      26  | The Rust Programming Language                         |
+|      24  | Transformers for NLP and Computer Vision (3rd ed.)    |
+|      22  | Unlocking Data with Generative AI and RAG (2nd ed.)   |
+|      22  | Version Control with Git                              |
+|      21  | The Data Warehouse Toolkit (3rd ed.)                  |
+|      21  | Think Bayes                                           |
+
+## Cumulative corpus state
+
+```
+concepts                 80,981   (prev 74,760)   +6,221
+concept_relation        124,223   (prev 113,813)  +10,410
+review queue (pend)       8,785   (prev 7,918)    +867 net
+aliases                   1,149   (prev 1,133)    +16 inline
+```
+
+### Entity types
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 33,842 | 41.8% |
+| Technique | 15,430 | 19.1% |
+| Tool      | 12,763 | 15.8% |
+| Pattern   | 10,632 | 13.1% |
+| Framework |  4,594 |  5.7% |
+| Algorithm |  3,720 |  4.6% |
+
+Pattern share crept up another 0.5pp (Data Model Resource Book Vol 3
+was pattern-heavy: party / product / order / accounting universal
+patterns). Framework share down slightly. Otherwise stationary.
+
+### Relation types
+
+| type           |  count |
+|----------------|-------:|
+| REQUIRES       | 38,503 |
+| IMPLEMENTS     | 36,668 |
+| EXTENDS        | 17,321 |
+| CITES          | 15,883 |
+| CONTRASTS_WITH | 15,848 |
+
+Same ranking as session 10. REQUIRES still leads IMPLEMENTS by ~1,800.
+
+## Full-corpus progress
+
+The corpus expanded between sessions — book count grew from ~345
+(start of Phase 2.4) to **541** at session 11, reflecting interim
+ingest. So denominator is moving:
+
+```
+unique content blocks (current denominator): 12,981
+  attempted (sessions 1–11):                   9,691  (74.7%)
+  remaining:                                   3,290
+```
+
+Net unique blocks attempted from session 11: ~+800 (rest of the +1,857
+delta vs session 10 baseline came from re-imports / new books sharing
+content_hashes that this session hit).
+
+**~3,300 blocks remaining.** With pool size dropping to 802 this
+session, expect session 12 to clear most of the rest, possibly with
+a small session 13 cleanup.
+
+## Observations
+
+- **First sub-1k pool.** Confirms the prep query is honest — it pulls
+  whatever's actually unique-and-fresh, no padding. Pool size will
+  keep shrinking from here.
+- **Single rate-limit hit, recovered cleanly.** Pattern unchanged
+  across last 5 sessions: one stall per session, manifest diff →
+  consolidated cleanup agents → done. The cadence is now mechanical.
+- **Conversion rate slightly lower at tail.** 51% exact (vs 51.4%
+  in s10) — a hair more novelty at the corpus edges, consistent
+  with the "new books bring new vocabulary" pattern.
+- **No data-quality surprises.** The 70 inline alias auto-resolves
+  came from the 1,133-entry registry — comparable to s10's 172
+  but session was 20% smaller, so per-chapter rate held.
+
+## Next session
+
+- 3,290 blocks remaining → 1–2 more sessions to corpus completion.
+- Pool will pick up wherever the alphabetic sweep hasn't yet
+  reached, plus any newly-imported books that came in mid-grind.
+- `/kb-review-concepts` pass between sessions: queue is 8,785
+  pending. Maintain 500-item cadence.
+- A second graph-connectivity snapshot at completion would be
+  worth running — last one was at 44.8%; we're now at 74.7%.
