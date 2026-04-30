@@ -1424,3 +1424,124 @@ registry growth is paying dividends.
 
 No new data-quality flags this pass. Existing five remain open.
 
+## Phase 2.4 session 10 (2026-04-29 → 2026-04-30)
+
+Pool prepped on 2026-04-29 covering "Software" through "The Data
+Model Resource Book" (1,000 chapters, 100 batches × 10). S→T range
+including Software/Statistics/System Design/Snowflake/Spark/Star
+Schema/Take Control/TCP-IP Illustrated/The C4 Model/Cloud Data Lake
+material. Persistent dir `data/extraction-sessions/session-p24-10`.
+
+### Wall clock and rate limits
+
+Two-day session — only one rate-limit hit (wave 10, near completion).
+
+- **Day 1 (2026-04-29 evening)**: waves 1-9 ran completely clean.
+  No rate-limit hits, no stream-watchdog stalls. ~3.5h end-to-end
+  for the first 900 chapters.
+- **Day 1 → Day 2 transition**: wave 10 dispatched late evening,
+  hit "limit · resets 3:10am" mid-flight on all 10 agents. Each
+  agent got 1-3 chapters in before stalling — 64 of 100 chapters
+  landed before the cap.
+- **Day 2 (2026-04-30, ~07:00 PDT)**: resumed from manifest diff,
+  4 consolidated agents covering the 36 stragglers across batches
+  91-100. Clean recovery in one round (~5min wall, ~10min agent).
+
+### Process step output
+
+```
+processed:            1,000
+missing result files: 0
+entities total:       17,767
+relations written:    13,417
+resolution counts:
+  exact            9,128    (51.4%)
+  new              7,035    (39.6%)
+  borderline       1,348    (7.6%)
+  alias              172
+  embedding_high      84
+```
+
+Resolution mix nearly identical to session 9 (51.8% / 39.6% / 7.4%).
+Stationary now — corpus saturation hasn't shifted the extraction
+behavior much.
+
+### Catalog growth (sessions 5–10)
+
+```
+                          s5      s6      s7      s8      s9     s10
+concepts              35,693  41,260  49,392  58,425  66,585  74,760    ↑ +8,175
+concept_relation      45,411  58,780  71,149  86,335 100,397 113,813    ↑ +13,416
+review queue (pend)    3,830   4,970   5,791   6,749   7,570   8,418    ↑ +848
+aliases registered     ~145    ~330    ~390     482     703     909     (unchanged this session)
+```
+
+### Entity types
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 30,956 | 41.4% |
+| Technique | 14,049 | 18.8% |
+| Tool      | 12,182 | 16.3% |
+| Pattern   |  9,431 | 12.6% |
+| Framework |  4,502 |  6.0% |
+| Algorithm |  3,640 |  4.9% |
+
+Pattern share rose another 0.3pp (data modeling material from "The
+Data Model Resource Book" + Snowflake patterns). Distribution
+stationarity holding across sessions 5-10.
+
+### Relation types
+
+| type           |  count |
+|----------------|-------:|
+| REQUIRES       | 34,539 |
+| IMPLEMENTS     | 33,805 |
+| EXTENDS        | 15,841 |
+| CITES          | 14,832 |
+| CONTRASTS_WITH | 14,796 |
+
+REQUIRES still leads IMPLEMENTS, gap widened slightly to ~700.
+
+## Full-corpus progress
+
+```
+unique content blocks at threshold=2000:  10,203
+  attempted so far (sessions 1–10):        7,834  (76.8%)
+  remaining:                               2,369
+```
+
+Net unique blocks from session 10: **+902** (vs +894 session 9).
+Conversion rate held at ~90% — the S/T material was as fresh as the
+P/R range. The deep dive into The Data Model Resource Book volumes
+(many new chapter-level concepts in B2C/B2B/manufacturing/insurance/
+financial-services data models) added significant breadth.
+
+**~2,400 blocks remaining** → 2-3 more sessions to completion.
+On track for **session 12 finish**.
+
+## Observations
+
+- **Best run yet for stability.** Only 1 rate-limit hit out of 10
+  waves (vs 1-3 in earlier sessions). No stream-watchdog stalls.
+  The pattern of "dispatch waves of 10 between rate-limit windows"
+  is now well-tuned.
+- **Wave 10 stalls remain a thing.** 4 of last 10 sessions stalled
+  on wave 10. Probably because dispatch always eventually crosses
+  whatever 5-hour rolling window the limiter uses, regardless of
+  how cleanly earlier waves ran.
+- **Conversion rate stable at ~90% for fresh letter ranges.** S→T
+  was as fresh as P→S. Sessions 8 (47%) was the outlier — that
+  K→M range had unusual sister-book overlap. Next session (T-Z)
+  will probably stay high.
+
+## Next session
+
+- 2,369 blocks remaining → 2-3 more sessions to corpus completion.
+- Pool picks up from "The Data Warehouse Toolkit" through end of
+  alphabet — mid-T through Z. Fewer total books in this range,
+  but they're often dense (Kimball's data warehousing books, etc.).
+- `/kb-review-concepts` pass between sessions: queue is now 8,418
+  pending. Maintain 500-item cadence.
+- Consider an ad-hoc graph connectivity snapshot before session 12
+  — last one was at 44.8% coverage; would be informative at ~85%.
