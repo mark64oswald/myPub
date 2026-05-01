@@ -109,7 +109,7 @@ variations:
     name: Bridge Table
     description: Many-to-many relationship via bridge
     when_to_use: "'Any diagnosis contains X' queries, unlimited diagnoses"
-    
+
   - variation_id: healthcare.dimensional.diagnosis_handling:array_column
     name: Array/JSON Column
     description: Store diagnoses as array or JSON
@@ -184,7 +184,8 @@ When Claude loads a pattern, it should:
 6. **Explain rationale** for choices
 
 Example decision flow:
-```
+
+```text
 Request: "Build claims dimensional model for Medicare Advantage"
          ↓
 Context clues: "Medicare Advantage" → needs HCC analysis

@@ -3,6 +3,7 @@
 ## Context
 
 You are helping build the concept graph for the myPub knowledge base. This is Phase 2 of 5, focused on:
+
 - Extracting concepts from indexed chapters
 - Building concept relationships
 - Mapping chapters to concepts
@@ -12,6 +13,7 @@ You are helping build the concept graph for the myPub knowledge base. This is Ph
 ## Understanding Concepts
 
 A concept is a canonical idea, technology, methodology, or pattern that appears across multiple sources. Examples:
+
 - Technologies: Spark, Kafka, DuckDB, Delta Lake
 - Methodologies: Kimball Dimensional Modeling, Data Vault
 - Techniques: SCD Type 2, CDC, Star Schema
@@ -24,18 +26,18 @@ Start by adding fundamental concepts for your domains:
 ```sql
 -- Data Engineering core concepts
 INSERT INTO concepts (concept_id, name, domain, description, aliases) VALUES
-('data_warehouse', 'Data Warehouse', 'data_engineering', 
- 'Central repository of integrated data from multiple sources', 
+('data_warehouse', 'Data Warehouse', 'data_engineering',
+ 'Central repository of integrated data from multiple sources',
  ARRAY['DW', 'DWH', 'enterprise data warehouse']),
- 
+
 ('etl', 'ETL', 'data_engineering',
  'Extract, Transform, Load - traditional data integration pattern',
  ARRAY['extract transform load']),
- 
+
 ('elt', 'ELT', 'data_engineering',
  'Extract, Load, Transform - modern pattern with transformation in warehouse',
  ARRAY['extract load transform']),
- 
+
 ('dimensional_modeling', 'Dimensional Modeling', 'data_engineering',
  'Technique for designing data warehouses around business processes',
  ARRAY['dimensional model', 'star schema design']),
@@ -52,12 +54,12 @@ INSERT INTO concepts (concept_id, name, domain, description, aliases) VALUES
  'Bronze/Silver/Gold layered data organization pattern',
  ARRAY['bronze silver gold', 'multi-hop architecture']);
 
--- Healthcare core concepts  
+-- Healthcare core concepts
 INSERT INTO concepts (concept_id, name, domain, description, aliases) VALUES
 ('healthcare_claims', 'Healthcare Claims', 'healthcare',
  'Insurance claims for healthcare services',
  ARRAY['medical claims', 'claims data']),
- 
+
 ('hcc', 'HCC Risk Adjustment', 'healthcare',
  'Hierarchical Condition Category model for Medicare risk adjustment',
  ARRAY['HCC', 'risk adjustment', 'RAF']),
@@ -71,7 +73,7 @@ INSERT INTO concepts (concept_id, name, domain, description, aliases) VALUES
 ('fact_table', 'Fact Table', 'dimensional_modeling',
  'Table containing measurements and metrics of business processes',
  ARRAY['facts']),
- 
+
 ('dimension_table', 'Dimension Table', 'dimensional_modeling',
  'Table containing descriptive attributes for analysis context',
  ARRAY['dimensions', 'dim']),
@@ -127,6 +129,7 @@ For each indexed book, analyze chapters to extract concepts:
 ### Workflow for Each Chapter
 
 1. **Load chapter content**
+
    ```sql
    SELECT ch.chapter_id, ch.title, ch.href, b.filepath, b.title AS book
    FROM chapters ch
@@ -136,12 +139,14 @@ For each indexed book, analyze chapters to extract concepts:
    ```
 
 2. **Load via ebook-mcp**
-   ```
+
+   ```text
    ebook-mcp:get_epub_chapter_markdown(filepath, href)
    ```
 
 3. **Analyze with this prompt:**
-   ```
+
+   ```text
    Analyze this chapter and identify:
    1. Key concepts discussed (not just mentioned)
    2. For each concept:
@@ -150,28 +155,30 @@ For each indexed book, analyze chapters to extract concepts:
       - Brief excerpt showing the treatment
    3. Any new concepts not in our existing list
    4. Relationships between concepts revealed
-   
+
    Format as:
    CONCEPTS:
    - concept_name (treatment): "brief excerpt"
-   
+
    NEW CONCEPTS:
    - suggested_name: description
-   
+
    RELATIONSHIPS:
    - concept_a -> REQUIRES -> concept_b
    ```
 
 4. **Update database**
+
    ```sql
    -- Add chapter-concept mappings
    INSERT INTO chapter_concepts (chapter_id, concept_id, treatment, relevance)
    VALUES ('{chapter_id}', '{concept_id}', '{treatment}', {relevance});
-   
+
    -- Update chapter with key concepts
-   UPDATE chapters 
+   UPDATE chapters
    SET key_concepts = ARRAY['{concept_1}', '{concept_2}', ...]
    WHERE chapter_id = '{chapter_id}';
+
    ```
 
 ## Step 4: Batch Processing Strategy
@@ -179,6 +186,7 @@ For each indexed book, analyze chapters to extract concepts:
 Process books in priority order:
 
 ```sql
+
 -- High-value books to process first
 SELECT b.book_id, b.title, b.chapter_count
 FROM books b
@@ -189,13 +197,15 @@ WHERE b.title ILIKE '%warehouse%'
    OR b.title ILIKE '%spark%'
    OR b.title ILIKE '%kafka%'
 ORDER BY b.chapter_count DESC;
+
 ```
 
 ## Step 5: Validate Concept Graph
 
 ```sql
+
 -- Concept coverage
-SELECT 
+SELECT
     c.domain,
     COUNT(*) AS concept_count,
     SUM(CASE WHEN cc.concept_id IS NOT NULL THEN 1 ELSE 0 END) AS has_chapters
@@ -210,7 +220,7 @@ LEFT JOIN chapter_concepts cc ON c.concept_id = cc.concept_id
 WHERE cc.concept_id IS NULL;
 
 -- Most covered concepts
-SELECT 
+SELECT
     c.name,
     COUNT(*) AS chapter_count,
     array_agg(DISTINCT cc.treatment) AS treatments
@@ -225,9 +235,9 @@ WITH RECURSIVE req_chain AS (
     SELECT source_id, target_id, ARRAY[source_id] AS path
     FROM concept_relationships
     WHERE relationship = 'REQUIRES'
-    
+
     UNION ALL
-    
+
     SELECT cr.source_id, cr.target_id, array_append(rc.path, cr.source_id)
     FROM concept_relationships cr
     JOIN req_chain rc ON cr.source_id = rc.target_id
@@ -237,6 +247,7 @@ WITH RECURSIVE req_chain AS (
 )
 SELECT * FROM req_chain WHERE array_contains(path, target_id);
 -- Should return empty (no cycles)
+
 ```
 
 ## Success Criteria for Phase 2

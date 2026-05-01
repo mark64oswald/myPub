@@ -1,9 +1,11 @@
 # Phase 2: Concept Extraction
 
 ## Objective
+
 Build the concept graph by extracting concepts from indexed chapters and establishing relationships.
 
 ## Prerequisites
+
 - Phase 1 complete (catalog database with indexed books)
 - Claude access with KB skill loaded
 
@@ -19,7 +21,7 @@ Start with well-known concepts to anchor the graph:
 
 -- Data Engineering concepts
 INSERT INTO concepts (concept_id, name, domain, description) VALUES
-('dimensional_modeling', 'Dimensional Modeling', 'data_engineering', 
+('dimensional_modeling', 'Dimensional Modeling', 'data_engineering',
  'Data modeling technique for analytical databases using facts and dimensions'),
 ('star_schema', 'Star Schema', 'data_engineering',
  'Dimensional model with central fact table surrounded by dimension tables'),
@@ -93,7 +95,7 @@ Find chapters that discuss each concept:
 
 ```sql
 -- Example: Find chapters about dimensional modeling
-SELECT 
+SELECT
     ch.chapter_id,
     ch.title,
     b.title as book,
@@ -121,7 +123,8 @@ INSERT INTO chapter_concepts (chapter_id, concept_id, treatment, relevance) VALU
 For chapters without obvious concept mappings, ask Claude:
 
 **Prompt:**
-```
+
+```text
 I have a chapter from [Book Title] called "[Chapter Title]".
 Here's the content: [paste chapter content or chapter_id]
 
@@ -135,6 +138,7 @@ Our existing concepts include:
 ```
 
 Claude will analyze and suggest:
+
 - New concepts to add
 - Chapter-concept mappings
 - Relationships to create
@@ -143,7 +147,7 @@ Claude will analyze and suggest:
 
 ```sql
 -- Concepts without chapters
-SELECT c.name 
+SELECT c.name
 FROM concepts c
 LEFT JOIN chapter_concepts cc ON c.concept_id = cc.concept_id
 WHERE cc.chapter_id IS NULL;
@@ -157,7 +161,7 @@ WHERE cc.concept_id IS NULL
   AND ch.token_count > 1000;
 
 -- Isolated concepts (no relationships)
-SELECT c.name 
+SELECT c.name
 FROM concepts c
 LEFT JOIN concept_relationships cr1 ON c.concept_id = cr1.source_id
 LEFT JOIN concept_relationships cr2 ON c.concept_id = cr2.target_id
@@ -192,14 +196,17 @@ ORDER BY relevance DESC;
 ## Tips
 
 ### Treatment Levels
+
 - **mention**: Brief reference (< 200 tokens)
-- **explain**: Substantial coverage (200-1000 tokens)  
+- **explain**: Substantial coverage (200-1000 tokens)
 - **deep_dive**: Primary focus (> 1000 tokens or dedicated section)
 
 ### Relationship Strength
+
 - 0.9-1.0: Strong/definite relationship
 - 0.7-0.9: Moderate relationship
 - 0.5-0.7: Weak/tangential relationship
 
 ## Next Phase
+
 Proceed to [Phase 3: Skills Generation](./PHASE_3_SKILLS.md) once concept graph is established.

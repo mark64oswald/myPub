@@ -45,18 +45,21 @@ Key books in collection:
 ## Common Patterns
 
 ### RAG (Retrieval Augmented Generation)
+
 - Document chunking strategies
 - Embedding selection
 - Retrieval optimization
 - Context window management
 
 ### Agent Development
+
 - ReAct pattern
 - Tool selection
 - Memory management
 - Multi-agent coordination
 
 ### Evaluation
+
 - Benchmark design
 - Human evaluation
 - Automated metrics

@@ -3,6 +3,7 @@
 ## Context
 
 You are helping generate Skills files for the myPub knowledge base. This is Phase 3 of 5, focused on:
+
 - Creating domain-specific skills
 - Auto-generating skills from chapters
 - Establishing skill patterns
@@ -12,6 +13,7 @@ You are helping generate Skills files for the myPub knowledge base. This is Phas
 ## Understanding Skills
 
 A Skill file is a structured document that encodes expertise for Claude. It tells Claude:
+
 - What domain knowledge is available
 - How to query and use that knowledge
 - Response patterns for different request types
@@ -21,7 +23,7 @@ A Skill file is a structured document that encodes expertise for Claude. It tell
 
 ```sql
 -- See which domains have good coverage
-SELECT 
+SELECT
     c.domain,
     COUNT(DISTINCT c.concept_id) AS concepts,
     COUNT(DISTINCT cc.chapter_id) AS chapters,
@@ -56,9 +58,11 @@ For each major domain, create a skill file.
 ## Concept Relationships
 
 ```
+
 {concept_a} ─REQUIRES→ {concept_b}
 {concept_c} ─RELATED_TO→ {concept_d}
-```
+
+```text
 
 ## Common Patterns
 
@@ -71,15 +75,19 @@ For each major domain, create a skill file.
 
 ### Finding {domain} Content
 ```sql
+
 -- Find chapters on {domain} topics
 SELECT ...
-```
+
+```text
 
 ### Getting Related Concepts
 ```sql
+
 -- Find related {domain} concepts
 SELECT ...
-```
+
+```text
 
 ## Response Patterns
 
@@ -111,7 +119,7 @@ SELECT ...
 
 ```sql
 -- Get top chapters for data engineering
-SELECT 
+SELECT
     b.title AS book,
     ch.title AS chapter,
     ch.chapter_id,
@@ -130,7 +138,8 @@ LIMIT 20;
 Load 3-5 top chapters and generate the skill:
 
 **Prompt for Claude:**
-```
+
+```text
 Based on these chapters, generate a Data Engineering skill file that:
 
 1. Provides an overview of data engineering fundamentals
@@ -150,7 +159,7 @@ Save to: `skills/domains/data-engineering/SKILL.md`
 
 ```sql
 -- Get top chapters for healthcare
-SELECT 
+SELECT
     b.title AS book,
     ch.title AS chapter,
     ch.chapter_id,
@@ -167,6 +176,7 @@ LIMIT 20;
 ```
 
 Focus areas for healthcare skill:
+
 - Claims data structures (header, line, diagnosis, procedure)
 - Provider and member dimensions
 - Healthcare metrics (PMPM, MLR, utilization)
@@ -179,6 +189,7 @@ Save to: `skills/domains/healthcare-analytics/SKILL.md`
 ## Step 5: Generate Dimensional Modeling Skill
 
 Focus areas:
+
 - Kimball methodology fundamentals
 - Fact table types (transaction, snapshot, factless)
 - Dimension types (SCD, role-playing, junk, degenerate)
@@ -202,13 +213,13 @@ This creates a scaffold that Claude can fill in.
 
 ```sql
 INSERT INTO skills (skill_id, name, filepath, domain, description, source_chapters, generated_at) VALUES
-('data-engineering', 'Data Engineering', 
- 'skills/domains/data-engineering/SKILL.md', 
+('data-engineering', 'Data Engineering',
+ 'skills/domains/data-engineering/SKILL.md',
  'data_engineering',
  'Core data engineering concepts, patterns, and practices',
  ARRAY['{chapter_id_1}', '{chapter_id_2}', ...],
  CURRENT_TIMESTAMP),
- 
+
 ('healthcare-analytics', 'Healthcare Analytics',
  'skills/domains/healthcare-analytics/SKILL.md',
  'healthcare',
@@ -229,16 +240,19 @@ INSERT INTO skills (skill_id, name, filepath, domain, description, source_chapte
 For each skill, test with sample queries:
 
 **Data Engineering:**
+
 - "Explain CDC and when to use it"
 - "What are the differences between ETL and ELT?"
 - "How does medallion architecture work?"
 
 **Healthcare Analytics:**
+
 - "Explain healthcare claims data structure"
 - "What is HCC risk adjustment?"
 - "How do I calculate PMPM?"
 
 **Dimensional Modeling:**
+
 - "Explain SCD Type 2"
 - "When should I use a bridge table?"
 - "What's the difference between fact types?"

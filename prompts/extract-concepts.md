@@ -1,19 +1,22 @@
 # Super Prompt: Extract Concepts from Chapter
 
 ## Goal
+
 Analyze a chapter and extract key concepts, relationships, and metadata for the concept graph.
 
 ## Prerequisites
+
 - Book is indexed in catalog
 - Chapter content is accessible via ebook-mcp
 
 ## Variables
+
 - `{{CHAPTER_ID}}`: The chapter_id from the catalog (e.g., "book-slug:7")
 - `{{DOMAIN}}`: Optional domain hint (e.g., "data_engineering", "healthcare")
 
 ## Prompt
 
-```
+````text
 I need to extract concepts from a chapter in my knowledge base.
 
 **Chapter ID:** {{CHAPTER_ID}}
@@ -23,7 +26,8 @@ Please:
 
 1. **Get chapter details from catalog:**
    ```sql
-   SELECT 
+
+   SELECT
        ch.chapter_id,
        ch.title,
        ch.href,
@@ -34,7 +38,8 @@ Please:
    FROM chapters ch
    JOIN books b ON ch.book_id = b.book_id
    WHERE ch.chapter_id = '{{CHAPTER_ID}}';
-   ```
+
+   ```text
 
 2. **Load the full chapter content:**
    Use ebook-mcp:get_epub_chapter_markdown with the filepath and href.
@@ -64,6 +69,7 @@ Please:
 
 4. **Output as JSON:**
    ```json
+
    {
      "chapter_id": "{{CHAPTER_ID}}",
      "concepts": [
@@ -78,7 +84,8 @@ Please:
        "summary": "..."
      }
    }
-   ```
+
+   ```text
 
 5. **Generate SQL to store results:**
    Provide INSERT/UPDATE statements to save to the catalog.
@@ -86,20 +93,24 @@ Please:
 6. **Check for existing concepts:**
    Before creating new concepts, check if similar ones exist:
    ```sql
+
    SELECT concept_id, name, aliases
    FROM concepts
    WHERE name ILIKE '%keyword%'
       OR 'keyword' = ANY(aliases);
-   ```
+
+   ```text
    Reuse existing concept_ids where appropriate.
-```
+````
 
 ## Expected Output
+
 - Structured JSON with extracted concepts
 - SQL statements to store in catalog
 - Notes on any ambiguous extractions
 
 ## Quality Checklist
+
 - [ ] Concept names are consistent with existing KB
 - [ ] Treatment levels accurately reflect coverage depth
 - [ ] Relationships have clear directionality

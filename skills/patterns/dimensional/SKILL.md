@@ -39,24 +39,28 @@ This skill guides Claude in using dimensional modeling patterns from the myPub p
 ## Fact Table Selection Guide
 
 ### Transaction Fact
+
 - **Grain**: One row per event/transaction
 - **When**: Individual transactions, line items, clicks
 - **Measures**: Additive (sum, count)
 - **Example**: Sales, claims, orders
 
 ### Periodic Snapshot
+
 - **Grain**: One row per entity per time period
 - **When**: Track state at regular intervals
 - **Measures**: Semi-additive (can't sum across time)
 - **Example**: Account balances, inventory levels
 
 ### Accumulating Snapshot
+
 - **Grain**: One row per process instance
 - **When**: Track pipeline/workflow milestones
 - **Measures**: Durations between stages
 - **Example**: Order fulfillment, claims processing
 
 ### Factless Fact
+
 - **Grain**: One row per event occurrence
 - **When**: Track events without measures
 - **Measures**: None (or just count)
@@ -65,18 +69,21 @@ This skill guides Claude in using dimensional modeling patterns from the myPub p
 ## SCD Selection Guide
 
 ### Type 1 (Overwrite)
+
 - No history needed
 - Current value only
 - Simple implementation
 - Example: Correcting data errors
 
 ### Type 2 (Versioning)
+
 - Full history required
 - Temporal analysis needed
 - Most common for analysis
 - Example: Customer address history
 
 ### Type 3 (Previous Value)
+
 - Limited history (current + previous)
 - Specific comparison needed
 - Simple history tracking
@@ -99,7 +106,7 @@ WHERE pattern_id = 'dimensional.dimensions.scd_type_2';
 
 ## Pattern Location
 
-```
+```text
 patterns/dimensional-modeling/
 ├── facts/
 │   ├── transaction_fact.yaml

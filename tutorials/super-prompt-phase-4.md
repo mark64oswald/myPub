@@ -3,6 +3,7 @@
 ## Context
 
 You are helping build the pattern library for the myPub knowledge base. This is Phase 4 of 5, focused on:
+
 - Extracting reusable patterns from chapters
 - Documenting variations and extensions
 - Creating decision frameworks
@@ -14,6 +15,7 @@ You are helping build the pattern library for the myPub knowledge base. This is 
 Patterns transform narrative knowledge into actionable building blocks. A developer with Claude + patterns should produce the same quality output as a domain expert.
 
 **Value proposition:** Accelerated time-to-quality
+
 - Without patterns: Generic approach → wrong grain → 3 iterations → 6-12 months
 - With patterns: Correct structure → right the first time → 2-4 months
 
@@ -23,7 +25,7 @@ Find chapters with implementable structures:
 
 ```sql
 -- Chapters likely to contain patterns
-SELECT 
+SELECT
     b.title AS book,
     ch.title AS chapter,
     ch.chapter_id,
@@ -50,7 +52,8 @@ Priority patterns for healthcare domain:
 1. Load relevant chapter (e.g., Kimball Ch 11 Healthcare)
 
 2. Extract pattern with this prompt:
-```
+
+```text
 From this chapter, extract the healthcare claim line fact pattern:
 
 1. Problem statement: What problem does this solve?
@@ -65,9 +68,10 @@ From this chapter, extract the healthcare claim line fact pattern:
 Format as YAML following the pattern template in docs/patterns.md
 ```
 
-3. Save to: `patterns/healthcare/dimensional/fct_claim_line.yml`
+1. Save to: `patterns/healthcare/dimensional/fct_claim_line.yml`
 
-4. Register in database:
+1. Register in database:
+
 ```sql
 INSERT INTO patterns (pattern_id, name, domain, category, description, canonical_yaml)
 VALUES (
@@ -83,6 +87,7 @@ VALUES (
 ### Pattern: Member Dimension (SCD Type 2)
 
 Extract pattern for tracking member history:
+
 - Effective/expiration dates
 - Current flag
 - Key handling
@@ -93,6 +98,7 @@ Save to: `patterns/healthcare/dimensional/dim_member.yml`
 ### Pattern: Provider Dimension
 
 Extract provider dimension pattern:
+
 - NPI handling
 - Specialty tracking
 - Network status
@@ -103,6 +109,7 @@ Save to: `patterns/healthcare/dimensional/dim_provider.yml`
 ### Pattern: PMPM Metric
 
 Extract Per Member Per Month calculation:
+
 - Numerator (paid/allowed amounts)
 - Denominator (member months)
 - Variations (medical PMPM, Rx PMPM, total)
@@ -115,7 +122,7 @@ For each pattern, identify variations from different sources:
 
 ```sql
 -- Find different sources discussing same concept
-SELECT 
+SELECT
     c.name AS concept,
     b.title AS book,
     b.authors,
@@ -134,7 +141,7 @@ ORDER BY c.name, b.pub_date DESC;
 
 Load multiple sources discussing diagnosis handling, then:
 
-```
+```text
 Compare how these sources handle multiple diagnoses on claims:
 
 Source 1: [Kimball DW Toolkit]
@@ -150,17 +157,18 @@ For each approach, document:
 ```
 
 Save variations:
+
 ```sql
 INSERT INTO pattern_variations (variation_id, pattern_id, name, when_to_use, variation_yaml)
-VALUES 
-('healthcare.dimensional.diagnosis_handling:positional', 
+VALUES
+('healthcare.dimensional.diagnosis_handling:positional',
  'healthcare.dimensional.fct_claim_line',
  'Positional Columns',
  'Primary diagnosis queries, simple star schema, limited diagnosis count',
  '{yaml}'),
- 
+
 ('healthcare.dimensional.diagnosis_handling:bridge_table',
- 'healthcare.dimensional.fct_claim_line', 
+ 'healthcare.dimensional.fct_claim_line',
  'Bridge Table',
  'Any-diagnosis-contains queries, unlimited diagnoses, HCC analysis',
  '{yaml}');
@@ -185,7 +193,7 @@ additional_tables:
       - icd10_code
       - hcc_code
       - version_year
-      
+
   - name: dim_hcc
     description: HCC dimension
     columns:
@@ -207,6 +215,7 @@ schema_additions:
 Create skills that teach Claude how to use patterns:
 
 `skills/patterns/healthcare/SKILL.md`:
+
 ```markdown
 # Healthcare Patterns Skill
 
@@ -223,17 +232,21 @@ Create skills that teach Claude how to use patterns:
 
 ### Finding Patterns
 ```sql
-SELECT pattern_id, name, description 
-FROM patterns 
+
+SELECT pattern_id, name, description
+FROM patterns
 WHERE domain = 'healthcare';
-```
+
+```text
 
 ### Loading a Pattern
 ```sql
+
 SELECT canonical_yaml FROM patterns WHERE pattern_id = ?;
 SELECT * FROM pattern_variations WHERE pattern_id = ?;
 SELECT * FROM pattern_extensions WHERE pattern_id = ?;
-```
+
+```text
 
 ### Decision Framework
 
@@ -249,8 +262,8 @@ When user asks to build healthcare data model:
 
 ## Example Response
 
-"I'll use the fct_claim_line pattern with the bridge table variation 
-because you mentioned HCC analysis. This requires flexible diagnosis 
+"I'll use the fct_claim_line pattern with the bridge table variation
+because you mentioned HCC analysis. This requires flexible diagnosis
 queries. I'm also applying the hcc_risk_mapping extension.
 
 [Generated DDL]

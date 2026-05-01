@@ -48,7 +48,7 @@ Python-side processing (resolver + DB writes) for all 100 results: ~30 s.
 
 ## Results — this session only
 
-```
+```text
 entities extracted   754
 relations written    504
 borderline queue    +46
@@ -63,7 +63,7 @@ with the earlier SQL/ML/microservices sample.
 
 ## Cumulative corpus state
 
-```
+```text
 chapters extracted    126   (prev 35)
 concepts             1197   (prev 731)
 relations            1121   (prev 617)
@@ -113,7 +113,7 @@ All 5 types still well-represented.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,348 total
   already extracted (direct or sibling):     100 (this session)
                                               +35 (earlier sample work)
@@ -185,7 +185,7 @@ rate-limit gap; useful agent-time was ~40 min.
 
 ## Results — this session only
 
-```
+```text
 entities extracted  12,164
 relations written    8,274
 resolution counts:
@@ -202,7 +202,7 @@ mostly sees concepts it's seen before.
 
 ## Cumulative corpus state
 
-```
+```text
 chapters extracted    992   (prev  126)   +866
 concepts             7,278  (prev 1,195)  +6,083
 relations            9,395  (prev 1,121)  +8,274
@@ -260,7 +260,7 @@ prose is different per language edition.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,348 total
   already extracted (direct or sibling):    992 (cumulative)
                                              +35 (earlier sample work)
@@ -329,7 +329,7 @@ Re-dispatched cleanly.
 
 ## Results — this session only
 
-```
+```text
 entities extracted  15,712
 relations written   10,700
 resolution counts:
@@ -346,7 +346,7 @@ earlier corpus didn't have.
 
 ## Cumulative corpus state
 
-```
+```text
 chapters with relations  1,822   (prev 992)     +830
 chapters attempted       2,099   (prev 1,099)   +1,000
 concepts                16,533   (prev 7,278)   +9,255
@@ -380,7 +380,7 @@ prompt isn't drifting as corpus breadth grows.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  ~10,348
   attempted so far (sessions 1–3):           2,099  (20%)
   remaining:                                  ~8,249
@@ -424,7 +424,7 @@ cumulative expectations at 100 / 200 / 300 … / 900 / 1,000.
 
 ## Results — this session only
 
-```
+```text
 entities extracted  16,881
 relations written   12,458
 resolution counts:
@@ -442,7 +442,7 @@ heavy overlap with the earlier corpus on patterns and infra concepts.
 
 ## Cumulative corpus state
 
-```
+```text
 chapters with relations  2,750   (prev 1,822)  +928
 chapters attempted       3,099   (prev 2,099)  +1,000
 concepts                25,386   (prev 16,533) +8,853
@@ -491,7 +491,7 @@ sessions 2–3.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,203
   attempted so far (sessions 1–4):         2,607  (25.6%)
   remaining:                               7,596
@@ -537,7 +537,7 @@ Partial drain of the 3,100-pending borderline queue before session 5.
 Interactive review pass from highest-similarity items downward, stopped
 at sim≈0.858 after 380 decisions.
 
-```
+```text
 queue:  3,100 pending → 2,720 pending (-380, 12% cleared)
   159 aliases registered
   226 kept separate
@@ -546,6 +546,7 @@ graph: 25,386 concepts → 25,228 concepts (-158 from merges)
 ```
 
 **Alias patterns (dominant):**
+
 - Abbreviation expansions (CI/CD, PCI DSS, PHI, TDD, OLTP, TF-IDF, RAG, CMMI)
 - Singular/plural (Connectors, Diffusion Models, Description Logics, Vector stores)
 - Hyphen/case variants (Dead-Letter Queue, 3D-QSAR, Gray-Level Run Length Matrix)
@@ -554,6 +555,7 @@ graph: 25,386 concepts → 25,228 concepts (-158 from merges)
 - Suffix variants ("Data Ingestion Pipeline" ↔ "Ingestion Pipeline")
 
 **Keep-separate patterns (dominant):**
+
 - Paired opposites (Input/Output Port, grid-row/grid-column, Selection/Insertion
   Sort, SOCK_STREAM/TCP where one is the POSIX constant and one the protocol)
 - Sibling variants (EBS gp2/gp3, Graviton2/3, SIS/SIR Model, FP4/FP8 Quantization,
@@ -561,6 +563,7 @@ graph: 25,386 concepts → 25,228 concepts (-158 from merges)
 - Competitor tools (Puppet/Chef, Superset/Tableau, Fortify/Checkmarx, seaborn/matplotlib)
 
 **Biggest graph impacts (edge migrations on merge):**
+
 - `RAG` ← `Retrieval-Augmented Generation (RAG)`: 25 edges
 - `Lakehouse` ← `Lakehouse Architecture`: 20 edges
 - `Diffusion Models` ← `Diffusion Model`: 20 edges
@@ -589,7 +592,7 @@ batches — harmless overwrites when those waves ran.
 
 ## Results — this session only
 
-```
+```text
 entities extracted  17,243
 relations written   12,412
 resolution counts:
@@ -611,7 +614,7 @@ extractions match existing concepts by name alone.
 
 ## Cumulative corpus state
 
-```
+```text
 chapters with relations  3,664   (prev 2,750)   +914
 chapters attempted       4,099   (prev 3,099)   +1,000
 concepts                33,051   (prev 25,228)  +7,823
@@ -646,7 +649,7 @@ technique-heavy domains).
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,203
   attempted so far (sessions 1–5):         3,596  (35.2%)
   remaining:                               6,607
@@ -715,7 +718,7 @@ post-reset resume wave): ~55 min. Process step ran in ~2 minutes on
 
 ## Results — this session only
 
-```
+```text
 entities extracted  17,849
 relations written   13,815
 resolution counts:
@@ -743,7 +746,7 @@ are surfacing in the embedding-high band more often than before.
 
 ## Cumulative corpus state
 
-```
+```text
 chapters with relations  4,585   (prev 3,664)   +921
 chapters attempted       5,099   (prev 4,099)   +1,000
 concepts                41,426   (prev 33,051)  +8,375
@@ -785,7 +788,7 @@ tied as the dominant relation pair.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,203
   attempted so far (sessions 1–6):         4,568  (44.8%)
   remaining:                               5,635
@@ -826,7 +829,7 @@ Ran `/kb-review-concepts` after session 6 on recommendation above.
 Walked 380 queue items (sim 0.900 → 0.852), matching session 5's
 pass length exactly.
 
-```
+```text
 keep-separate  214  (56%)
 alias          166  (44%)
 queue pending  4,970 → 4,590
@@ -883,7 +886,7 @@ windows to reset.
 
 ## Results — this session only
 
-```
+```text
 entities extracted  16,511
 relations written   12,370
 resolution counts:
@@ -907,7 +910,7 @@ slight novelty bump tracks subject matter.
 
 ## Cumulative corpus state
 
-```
+```text
 chapters w/ relations    5,490   (prev 4,585)   +905
 chapters attempted       6,099   (prev 5,099)   +1,000
 concepts                49,328   (prev 41,426)  +7,902
@@ -951,7 +954,7 @@ by ~700.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,203
   attempted so far (sessions 1–7):         5,568  (54.6%)
   remaining:                               4,635
@@ -980,7 +983,7 @@ unique content blocks at threshold=2000:  10,203
 ## Next session
 
 - 4,635 blocks remaining → 4–5 more sessions.
-- Pool picks up around "L" books — Learning *, Linux *, etc.
+- Pool picks up around "L" books — Learning \*, Linux \*, etc.
 - Worth another `/kb-review-concepts` pass between sessions; queue
   is now 5,791 pending (largest yet).
 
@@ -989,15 +992,15 @@ unique content blocks at threshold=2000:  10,203
 Walked another 380 items — third consecutive review at this length.
 Sim range 0.900 → 0.846.
 
-```
+```text
 keep-separate  220  (58%)
 alias          160  (42%)
 queue pending  5,791 → 5,411
 ```
 
-Process refinement: switched from one-show-per-item to triage-from-list
-+ batch-resolve. Same decision quality, ~3× faster. Decisions still
-verified via `show` for ambiguous cases (description swaps, scope
+Process refinement: switched from one-show-per-item to a triage-from-list
+plus batch-resolve workflow. Same decision quality, ~3× faster. Decisions
+still verified via `show` for ambiguous cases (description swaps, scope
 mismatches, etc.).
 
 Cumulative aliases registered across sessions 5/6/7 reviews: ~390.
@@ -1044,7 +1047,7 @@ wait. Sessions split across two days:
 
 ### Agent dispatch summary
 
-```
+```text
 wave  batches   chapters  outcome
   1   1-10      100       clean
   2   11-20     100       clean
@@ -1063,7 +1066,7 @@ wave  batches   chapters  outcome
 
 ### Process step output
 
-```
+```text
 processed:            1,000
 missing result files: 0
 entities total:       19,792
@@ -1083,7 +1086,7 @@ across both runs.
 
 ### Catalog growth (sessions 5/6/7/8)
 
-```
+```text
                           s5      s6      s7      s8
 concepts              35,693  41,260  49,392  58,425   ↑ +9,033
 concept_relation      45,411  58,780  71,149  86,335   ↑ +15,186
@@ -1122,7 +1125,7 @@ of each other.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,203
   attempted so far (sessions 1–8):         6,038  (59.2%)
   remaining:                               4,165
@@ -1179,7 +1182,7 @@ holds, or 5–6 if it keeps dropping.
 380 to keep pace with the queue's growth rate. Sim range 0.900 →
 0.839.
 
-```
+```text
 keep-separate  274  (54.8%)
 alias          226  (45.2%)
 queue pending  6,749 → 6,249
@@ -1193,7 +1196,7 @@ in session 8.
 
 ### Cumulative alias registry growth
 
-```
+```text
 session       aliases registered
 post-s5         ~145
 post-s6         ~330  (+185, 380-item pass)
@@ -1267,7 +1270,7 @@ wait). Useful agent-time: ~3h.
 
 ### Process step output
 
-```
+```text
 processed:            1,000
 missing result files: 0
 entities total:       17,821
@@ -1288,7 +1291,7 @@ the highest since session 5.
 
 ### Catalog growth (sessions 5–9)
 
-```
+```text
                           s5      s6      s7      s8      s9
 concepts              35,693  41,260  49,392  58,425  66,585   ↑ +8,160
 concept_relation      45,411  58,780  71,149  86,335 100,397   ↑ +14,062
@@ -1330,7 +1333,7 @@ of each other.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,203
   attempted so far (sessions 1–9):         6,932  (67.9%)
   remaining:                               3,271
@@ -1385,7 +1388,7 @@ completion.
 
 500-item pass — sim range 0.900 → 0.834.
 
-```
+```text
 keep-separate  292  (58.4%)
 alias          208  (41.6%)
 queue pending  7,570 → 7,070
@@ -1449,7 +1452,7 @@ Two-day session — only one rate-limit hit (wave 10, near completion).
 
 ### Process step output
 
-```
+```text
 processed:            1,000
 missing result files: 0
 entities total:       17,767
@@ -1468,7 +1471,7 @@ behavior much.
 
 ### Catalog growth (sessions 5–10)
 
-```
+```text
                           s5      s6      s7      s8      s9     s10
 concepts              35,693  41,260  49,392  58,425  66,585  74,760    ↑ +8,175
 concept_relation      45,411  58,780  71,149  86,335 100,397 113,813    ↑ +13,416
@@ -1505,7 +1508,7 @@ REQUIRES still leads IMPLEMENTS, gap widened slightly to ~700.
 
 ## Full-corpus progress
 
-```
+```text
 unique content blocks at threshold=2000:  10,203
   attempted so far (sessions 1–10):        7,834  (76.8%)
   remaining:                               2,369
@@ -1550,7 +1553,7 @@ On track for **session 12 finish**.
 
 500-item pass — sim range 0.900 → 0.831.
 
-```
+```text
 keep-separate  271  (54.2%)
 alias          229  (45.8%)
 queue pending  8,418 → 7,918
@@ -1614,7 +1617,7 @@ in fewer dispatch rounds; only the wave-5 stall added wall-clock cost.
 
 ## Results — this session only
 
-```
+```text
 processed:            802
 missing result files: 0
 entities total:       13,401
@@ -1647,7 +1650,7 @@ Top books in session 11:
 
 ## Cumulative corpus state
 
-```
+```text
 concepts                 80,981   (prev 74,760)   +6,221
 concept_relation        124,223   (prev 113,813)  +10,410
 review queue (pend)       8,785   (prev 7,918)    +867 net
@@ -1687,7 +1690,7 @@ The corpus expanded between sessions — book count grew from ~345
 (start of Phase 2.4) to **541** at session 11, reflecting interim
 ingest. So denominator is moving:
 
-```
+```text
 unique content blocks (current denominator): 12,981
   attempted (sessions 1–11):                   9,691  (74.7%)
   remaining:                                   3,290
@@ -1730,7 +1733,7 @@ a small session 13 cleanup.
 
 500-item pass — sim range 0.899 → 0.826.
 
-```
+```text
 keep-separate  305  (61.0%)
 alias          194  (38.8%)
 rename           1  (0.2%)   q=8976 At-rules → At-rule (post-hoc fold)
@@ -1835,7 +1838,7 @@ because of the tail-of-corpus low-yield chapters (39% empty).
 
 ## Results — session 12 only
 
-```
+```text
 processed:            1,185
 missing result files: 0
 substantive results:  720    (60.8%)
@@ -1878,7 +1881,7 @@ content was already covered in earlier sessions).
 
 ## Cumulative corpus state (post-s12)
 
-```
+```text
 concepts                 81,859   (prev 80,981)   +878
 concept_relation        126,401   (prev 124,223)  +2,178
 review queue (pend)       8,519   (prev 8,285 post s11 review)  +234

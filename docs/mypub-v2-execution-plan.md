@@ -5,6 +5,7 @@
 **Companion document:** `mypub-v2-architecture.md` (the design reference)
 
 **Working conventions:**
+
 - Every prompt runs in Claude Code from the project root (`~/Developer/projects/myPub`)
 - Test and validate at every step; do not proceed with broken state
 - Fix issues when you find them, even from prior sessions
@@ -13,6 +14,7 @@
 - Use Context7 MCP to verify DuckDB extension APIs, FastMCP patterns, and any library docs before writing code
 
 **Cost model — sub-agents, not API scripts:**
+
 - All LLM reasoning runs inside Claude Code, covered by the Max subscription
 - Extraction work (entity, procedure, doc snapshot) uses Claude Code **sub-agents
   via the Task tool**, not standalone Python scripts calling the Anthropic API
@@ -30,7 +32,7 @@
 
 ### Prompt 0.1 — Initialize v2 branch and project structure
 
-```
+```text
 Create a new branch `v2-substrate` from main. Set up the v2 project structure
 per the architecture doc at docs/mypub-v2-architecture.md (which I'll add to the
 repo). Create the directory skeleton:
@@ -60,6 +62,7 @@ doc location, and how to set up the dev environment.
 ```
 
 **Validate:**
+
 - `python -c "import duckdb; print(duckdb.__version__)"` succeeds
 - Directory structure matches the architecture doc §9.2
 - CLAUDE.md is present and readable
@@ -69,7 +72,7 @@ doc location, and how to set up the dev environment.
 
 ### Prompt 0.2 — Copy and commit the architecture doc
 
-```
+```text
 Copy the architecture doc into docs/mypub-v2-architecture.md.
 Also create docs/EXECUTION-PLAN.md (this document).
 ```
@@ -84,7 +87,7 @@ Also create docs/EXECUTION-PLAN.md (this document).
 
 ### Prompt 1.1 — Schema migration: add v2 tables
 
-```
+```text
 Read the existing catalog.ddb schema. Compare it to the v2 target schema in
 docs/mypub-v2-architecture.md §7.1.
 
@@ -130,6 +133,7 @@ for existing books and chapters.
 ```
 
 **Validate:**
+
 - `pytest tests/test_schema.py -v` passes
 - `duckdb data/catalog.ddb "SELECT table_name FROM information_schema.tables ORDER BY 1"` shows all expected tables
 - Existing data (books, chapters, concepts) is intact
@@ -138,7 +142,7 @@ for existing books and chapters.
 
 ### Prompt 1.2 — Install and verify DuckDB extensions
 
-```
+```text
 Write scripts/install_extensions.py that:
 1. Opens the catalog.ddb
 2. Installs and loads: fts, vss, duckpgq (community extensions)
@@ -157,6 +161,7 @@ Run it. All three should pass. If any fail, debug before proceeding.
 ```
 
 **Validate:**
+
 - All three extensions pass smoke tests
 - Script is idempotent (safe to re-run)
 
@@ -164,7 +169,7 @@ Run it. All three should pass. If any fail, debug before proceeding.
 
 ### Prompt 1.3 — Generate embeddings for existing chapters
 
-```
+```text
 Write scripts/generate_embeddings.py that:
 1. Loads sentence-transformers/all-MiniLM-L6-v2
 2. Reads all chapters from catalog.ddb that have NULL embedding
@@ -180,6 +185,7 @@ This will take a while for 345 books. That's fine.
 ```
 
 **Validate:**
+
 - `SELECT COUNT(*) FROM chapter WHERE embedding IS NOT NULL` matches total chapters
 - `SELECT COUNT(*) FROM concept WHERE embedding IS NOT NULL` matches total concepts
 - Spot-check: query a few embeddings, verify they're 384-dim float arrays
@@ -188,7 +194,7 @@ This will take a while for 345 books. That's fine.
 
 ### Prompt 1.4 — Build FTS indexes
 
-```
+```text
 Write scripts/build_fts_index.py that:
 1. Creates a full-text index on chapter.content using the FTS extension
 2. Runs test queries:
@@ -202,6 +208,7 @@ CREATE INDEX ... USING fts — the syntax has changed across versions).
 ```
 
 **Validate:**
+
 - Test queries return sensible results
 - FTS index persists across database close/reopen
 
@@ -209,7 +216,7 @@ CREATE INDEX ... USING fts — the syntax has changed across versions).
 
 ### Prompt 1.5 — Build VSS indexes
 
-```
+```text
 Write scripts/build_vss_index.py that:
 1. Creates an HNSW index on chapter.embedding using the VSS extension
 2. Creates an HNSW index on concept.embedding
@@ -224,6 +231,7 @@ as a known limitation — we'll rebuild on MCP server startup.
 ```
 
 **Validate:**
+
 - Semantic search returns topically relevant results
 - Cross-check: FTS results for "change data capture" and VSS results for the same query should have meaningful overlap (not identical, but correlated)
 
@@ -231,7 +239,7 @@ as a known limitation — we'll rebuild on MCP server startup.
 
 ### Prompt 1.6 — Define the property graph
 
-```
+```text
 Write schemas/property_graph.sql with the DuckPGQ CREATE PROPERTY GRAPH statement
 from the architecture doc §7.2.
 
@@ -248,6 +256,7 @@ and ANY SHORTEST PATH.
 ```
 
 **Validate:**
+
 - Graph queries return results
 - Prerequisite chains make sense (spot-check 3-4 manually)
 
@@ -255,7 +264,7 @@ and ANY SHORTEST PATH.
 
 ### Prompt 1.7 — Phase 1 integration test
 
-```
+```text
 Write tests/test_phase1_integration.py that exercises all three retrieval
 modalities together:
 
@@ -275,6 +284,7 @@ as a regression suite.
 ```
 
 **Validate:**
+
 - `pytest tests/test_phase1_integration.py -v` passes
 - Results are plausible (human review of a few)
 
@@ -282,7 +292,7 @@ as a regression suite.
 
 ### Prompt 1.8 — Update README for Phase 1
 
-```
+```text
 Update README.md:
 - Document the three DuckDB extensions and what they enable
 - Add a "Quick start" section showing how to run a semantic search query
@@ -297,6 +307,7 @@ Update README.md:
 **Before starting Phase 2, spend 3–5 sessions using the substrate.**
 
 Try real queries across all three modalities. Keep notes:
+
 - Does VSS find things FTS missed? (It should — that's the point.)
 - Does DuckPGQ traversal produce useful prerequisite chains?
 - Are there topics where all three modalities agree vs. disagree?
@@ -313,7 +324,7 @@ If the substrate feels broken, fix it before layering extraction on top.
 
 ### Prompt 2.1 — Entity resolution module
 
-```
+```text
 Build the entity resolution module at mcp-servers/kb-mcp/resolution.py.
 
 This is the foundation that ALL extraction depends on, so build it first.
@@ -343,6 +354,7 @@ Tests: write tests/test_resolution.py with cases for:
 ```
 
 **Validate:**
+
 - `pytest tests/test_resolution.py -v` passes
 - Alias seed script produces sensible results (human review)
 
@@ -350,7 +362,7 @@ Tests: write tests/test_resolution.py with cases for:
 
 ### Prompt 2.2 — Entity/concept extractor
 
-```
+```text
 Build the entity extraction capability using Claude Code sub-agents (Task tool),
 NOT a standalone Python script that calls the Anthropic API. All LLM reasoning
 stays inside Claude Code, covered by the Max subscription.
@@ -385,6 +397,7 @@ Do NOT run the full corpus yet. Tune the prompt based on this one chapter.
 ```
 
 **Validate:**
+
 - Single-chapter extraction produces reasonable entities (human review)
 - Resolution correctly matches known concepts
 - No API token charges — verify with `/cost` that no API billing occurred
@@ -394,7 +407,7 @@ Do NOT run the full corpus yet. Tune the prompt based on this one chapter.
 
 ### Prompt 2.3 — Tune extraction on 10-book sample
 
-```
+```text
 Run the entity extractor against 10 diverse books (mix of topics: data modeling,
 distributed systems, cloud, programming, DevOps). For each book, extract all
 chapters using sub-agents.
@@ -422,6 +435,7 @@ sub-agents are subscription-covered, iteration is free.
 ```
 
 **Validate:**
+
 - Entity type distribution is reasonable (not all one type)
 - Relations make semantic sense (spot-check)
 - Resolution queue contains genuinely borderline cases, not obvious matches or misses
@@ -430,7 +444,7 @@ sub-agents are subscription-covered, iteration is free.
 
 ### Prompt 2.4 — Full corpus extraction
 
-```
+```text
 Run the entity extractor against the full corpus (~345 books) using sub-agents.
 This will span multiple Claude Code sessions over several days.
 
@@ -454,6 +468,7 @@ Report the same metrics.
 ```
 
 **Validate:**
+
 - All books processed (check for skipped/failed chapters)
 - Graph is substantially larger than before
 - Resolution queue has items to review
@@ -463,7 +478,7 @@ Report the same metrics.
 
 ### Prompt 2.5 — Review queue command
 
-```
+```text
 Build the /kb-review-concepts slash command at .claude/commands/kb-review-concepts.md.
 
 The command should call the MCP server's list_pending_resolutions tool, display
@@ -477,6 +492,7 @@ Review the first 25 items in the queue now. Resolve them. This teaches the syste
 ```
 
 **Validate:**
+
 - Command works interactively
 - Resolved items are removed from the queue
 - Merges correctly rewrite edges
@@ -486,7 +502,7 @@ Review the first 25 items in the queue now. Resolve them. This teaches the syste
 
 ### Prompt 2.6 — Phase 2 eval set and autoresearch
 
-```
+```text
 Create an autoresearch eval for extraction quality.
 
 Write tests/eval/extraction_eval.py that:
@@ -513,6 +529,7 @@ Run 3-5 iterations now to establish a baseline.
 ```
 
 **Validate:**
+
 - Golden set is manually verified
 - Baseline metrics are recorded in logs/extraction_eval_baseline.md
 - At least one prompt improvement iteration completed
@@ -525,7 +542,7 @@ Run 3-5 iterations now to establish a baseline.
 
 ### Prompt 3.1 — Procedure extractor
 
-```
+```text
 Build the procedure extraction capability using the same sub-agent pattern
 as entity extraction (Prompt 2.2). All LLM reasoning stays inside Claude Code.
 
@@ -551,6 +568,7 @@ zero procedures.
 ```
 
 **Validate:**
+
 - Procedure steps are actual steps (not summaries or descriptions)
 - Linked concepts resolve correctly
 - Procedural chapters produce procedures; non-procedural chapters produce nothing
@@ -560,7 +578,7 @@ zero procedures.
 
 ### Prompt 3.2 — Incremental re-indexing for updated books
 
-```
+```text
 Update the /kb-index command and scripts/index_books.py to support incremental
 re-indexing per the architecture doc §6.1.
 
@@ -595,6 +613,7 @@ Test /kb-retire-book:
 ```
 
 **Validate:**
+
 - Incremental detection correctly identifies changed vs. unchanged chapters
 - Only changed/new chapters trigger extraction (sub-agent calls)
 - Stale edges from changed chapters are removed and replaced
@@ -608,7 +627,7 @@ Test /kb-retire-book:
 
 ### Prompt 4.1 — MCP server skeleton
 
-```
+```text
 Build the KB MCP server at mcp-servers/kb-mcp/server.py using FastMCP.
 
 Use Context7 to check the current FastMCP API for tool registration and stdio
@@ -624,6 +643,7 @@ architecture doc §9.3.
 ```
 
 **Validate:**
+
 - MCP server starts without errors
 - Each tool returns results from Claude Code
 - `search_chapters` combines all three modalities
@@ -632,7 +652,7 @@ architecture doc §9.3.
 
 ### Prompt 4.2 — Context7 + DeepWiki + GitHub MCP integration
 
-```
+```text
 Configure all three doc-source MCP servers in Claude Code settings per the
 architecture doc §9.3 (Context7 stdio, DeepWiki HTTPS, GitHub stdio).
 
@@ -648,6 +668,7 @@ authority_score, and refresh_ttl_days.
 ```
 
 **Validate:**
+
 - All three MCP servers respond
 - doc_source table has 10+ entries
 
@@ -655,7 +676,7 @@ authority_score, and refresh_ttl_days.
 
 ### Prompt 4.3 — Sectionizer
 
-```
+```text
 Build mcp-servers/kb-mcp/sectionizer.py — the module that parses doc content
 into doc_section trees.
 
@@ -676,6 +697,7 @@ Tests: write tests/test_sectionizer.py with:
 ```
 
 **Validate:**
+
 - `pytest tests/test_sectionizer.py -v` passes
 - Section trees match expected heading hierarchy
 
@@ -683,7 +705,7 @@ Tests: write tests/test_sectionizer.py with:
 
 ### Prompt 4.4 — Snapshot ingestion pipeline
 
-```
+```text
 Build the full snapshot ingestion pipeline from the architecture doc §6.2.
 
 The pipeline has two categories of work:
@@ -722,6 +744,7 @@ Test with a single doc_source (e.g., DuckDB docs via Context7). Inspect:
 ```
 
 **Validate:**
+
 - End-to-end pipeline works for one source
 - doc_section rows created with correct hierarchy
 - Entity resolution correctly links to existing concepts
@@ -732,7 +755,7 @@ Test with a single doc_source (e.g., DuckDB docs via Context7). Inspect:
 
 ### Prompt 4.5 — Ranking engine
 
-```
+```text
 Build mcp-servers/kb-mcp/ranking.py — the two-mode ranking engine from
 the architecture doc §8.
 
@@ -754,6 +777,7 @@ come together — verify that both appear in results.
 ```
 
 **Validate:**
+
 - Ranking produces sensible orderings
 - Interactive mode surfaces conflicts when they exist
 - Generation mode produces clean consolidated output
@@ -762,7 +786,7 @@ come together — verify that both appear in results.
 
 ### Prompt 4.5b — Auto-discovery module
 
-```
+```text
 Build mcp-servers/kb-mcp/discovery.py — the auto-discovery module from the
 architecture doc §5.4.
 
@@ -806,6 +830,7 @@ Test sequence:
 ```
 
 **Validate:**
+
 - Confident matches auto-ingest correctly
 - Ambiguous matches prompt user for disambiguation
 - Not-found cases degrade gracefully to book-only results
@@ -817,7 +842,7 @@ Test sequence:
 
 ### Prompt 4.6 — Phase 4 eval set
 
-```
+```text
 Create tests/eval/retrieval_eval.py that:
 1. Loads test queries from tests/eval/retrieval_queries.json — 25 queries
    spanning topics with and without doc sources, including:
@@ -839,6 +864,7 @@ confidence thresholds if needed using the autoresearch keep/revert loop.
 ```
 
 **Validate:**
+
 - Eval runs successfully
 - Baseline metrics recorded for both retrieval quality and discovery accuracy
 - At least one weight/threshold adjustment iteration completed
@@ -850,12 +876,14 @@ confidence thresholds if needed using the autoresearch keep/revert loop.
 **Before starting Phase 4b or Phase 5, use the system for 1–2 weeks of real Q&A work.**
 
 This is the most important checkpoint. You now have:
+
 - Book content with semantic + graph retrieval
 - Live doc content from three sources with section-level granularity
 - Auto-discovery for technologies not in your KB
 - Two-mode ranking with conflict surfacing
 
 Use it daily. Ask real questions about your actual work. Keep notes:
+
 - Does the ranking feel right? Which weight profile needs adjustment?
 - Are the doc sections the right granularity, or too coarse/fine?
 - How often does auto-discovery fire? Is it useful or noisy?
@@ -874,7 +902,7 @@ Factory quality depends entirely on the retrieval + ranking being solid).
 
 ### Prompt 4b.1 — Fixed-TTL scheduled refresh
 
-```
+```text
 Extend scripts/refresh_docs.py to support --tier=auto mode:
 - Query doc_source for all sources where last_refresh_at is beyond refresh_ttl_days
 - Refresh those sources (most will no-op on unchanged content_hash)
@@ -889,6 +917,7 @@ Test: manually run the refresh script. Verify it logs to logs/refresh.log.
 ```
 
 **Validate:**
+
 - `launchctl list | grep mypub` shows the agent
 - Manual run produces log output
 - No-op sources complete quickly
@@ -897,7 +926,7 @@ Test: manually run the refresh script. Verify it logs to logs/refresh.log.
 
 ### Prompt 4b.2 — Adaptive tiering
 
-```
+```text
 Build scripts/assign_tiers.py and mcp-servers/kb-mcp/tiering.py.
 
 Add query logging: every call to search_chapters logs touched concepts to
@@ -915,6 +944,7 @@ verify sources move between tiers as expected.
 ```
 
 **Validate:**
+
 - Tier assignment produces sensible results
 - Pin/unpin commands work
 - `/kb-refresh-status` shows tier inventory
@@ -927,7 +957,7 @@ verify sources move between tiers as expected.
 
 ### Prompt 5.1 — Decomposition via DuckPGQ community detection
 
-```
+```text
 Build the first stage of the Skills Factory: domain decomposition.
 
 Given a domain string like "CDC with Databricks", use DuckPGQ to:
@@ -944,6 +974,7 @@ you use them?
 ```
 
 **Validate:**
+
 - Decomposition produces 5-15 Skills for a mid-sized domain
 - Skill boundaries don't overlap significantly
 - Concepts that should be together are together
@@ -952,7 +983,7 @@ you use them?
 
 ### Prompt 5.2 — Package planning and strategy selection
 
-```
+```text
 Build the second stage: given a proposed Skill list, plan the package.
 
 1. Determine Skill ordering (prerequisites first, using REQUIRES edges)
@@ -966,6 +997,7 @@ Test: plan a package for "CDC with Databricks". Review the strategy assignments.
 ```
 
 **Validate:**
+
 - Prerequisite ordering is logical
 - Strategy assignments match domain characteristics
 - No circular dependencies
@@ -974,7 +1006,7 @@ Test: plan a package for "CDC with Databricks". Review the strategy assignments.
 
 ### Prompt 5.3 — Per-Skill generation
 
-```
+```text
 Build the third stage: generate a single Skill.
 
 1. Retrieve candidates via hybrid retriever scoped to Skill concepts
@@ -993,6 +1025,7 @@ Test: generate one Skill from the "CDC with Databricks" package. Review:
 ```
 
 **Validate:**
+
 - Generated SKILL.md reads like a real, usable Skill
 - Trigger description is specific and accurate
 - Provenance is complete
@@ -1001,7 +1034,7 @@ Test: generate one Skill from the "CDC with Databricks" package. Review:
 
 ### Prompt 5.4 — Full package generation and /kb-generate-skills command
 
-```
+```text
 Wire it all together:
 1. Build the /kb-generate-skills command
 2. Build mcp-servers/kb-mcp/skills_factory.py that orchestrates the full pipeline
@@ -1016,6 +1049,7 @@ Review the full package:
 ```
 
 **Validate:**
+
 - Package generates end-to-end
 - SKILL.md files are well-formatted
 - _package.md provides a useful overview
@@ -1024,7 +1058,7 @@ Review the full package:
 
 ### Prompt 5.5 — Skills Factory eval
 
-```
+```text
 Create an autoresearch eval for Skills quality.
 
 Write tests/eval/skills_eval.py that:
@@ -1046,6 +1080,7 @@ Run the eval. Establish baseline. Use the autoresearch loop to improve:
 ```
 
 **Validate:**
+
 - Eval framework works
 - Baseline trigger accuracy > 70%
 - At least one improvement iteration completed
@@ -1058,7 +1093,7 @@ Run the eval. Establish baseline. Use the autoresearch loop to improve:
 
 ### Prompt 6.1 — Comprehensive README
 
-```
+```text
 Rewrite README.md to cover the full v2 system:
 
 1. Overview and purpose
@@ -1079,7 +1114,7 @@ Rewrite README.md to cover the full v2 system:
 
 ### Prompt 6.2 — Full regression suite
 
-```
+```text
 Create tests/test_regression.py that runs ALL evals in sequence:
 1. Schema integrity (test_schema.py)
 2. Extension availability (install_extensions.py --check)
@@ -1102,7 +1137,7 @@ This is the gatekeeper for merging v2 to main.
 
 ### Git conventions
 
-```
+```text
 # Branch naming
 v2-substrate          Phase 1
 v2-extraction         Phase 2-3
@@ -1122,7 +1157,7 @@ chore: <description>
 
 The pattern from Karpathy's autoresearch, applied to extraction and Skills quality:
 
-```
+```text
 1. Establish baseline metrics (run eval, record scores)
 2. Hypothesize a change (modify ONE thing — a prompt, a threshold, a weight)
 3. Implement the change
@@ -1159,7 +1194,7 @@ python tests/eval/skills_eval.py
 Before writing code that calls DuckDB extensions, FastMCP, sentence-transformers,
 or any other library:
 
-```
+```text
 use library /duckdb/duckdb — verify extension syntax
 use library /jlowin/fastmcp — verify tool registration API
 use library /upstash/context7 — verify MCP query patterns

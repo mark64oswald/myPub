@@ -52,8 +52,8 @@ Check the results:
 
 ```bash
 duckdb data/catalog.ddb -c "
-SELECT title, chapter_count, total_tokens 
-FROM books 
+SELECT title, chapter_count, total_tokens
+FROM books
 LIMIT 5;
 "
 ```
@@ -63,7 +63,7 @@ LIMIT 5;
 ### List indexed books
 
 ```sql
-SELECT 
+SELECT
     title,
     authors[1] as primary_author,
     chapter_count,
@@ -75,7 +75,7 @@ ORDER BY title;
 ### Find chapters by topic
 
 ```sql
-SELECT 
+SELECT
     b.title as book,
     ch.title as chapter,
     ch.token_count
@@ -96,9 +96,10 @@ ORDER BY ch.token_count DESC;
 ### Option B: Reference in Conversation
 
 Tell Claude:
-```
-I have a knowledge base of technical ePubs. The catalog is at 
-~/Developer/projects/myPub/data/catalog.ddb. Please read the 
+
+```text
+I have a knowledge base of technical ePubs. The catalog is at
+~/Developer/projects/myPub/data/catalog.ddb. Please read the
 skill file at ~/Developer/projects/myPub/skills/kb-usage/SKILL.md
 to understand how to use it.
 ```
@@ -107,10 +108,11 @@ to understand how to use it.
 
 Try asking Claude:
 
-> "Search my knowledge base for chapters about dimensional modeling 
+> "Search my knowledge base for chapters about dimensional modeling
 > and show me the top 5 by token count."
 
 Claude should:
+
 1. Query the DuckDB catalog
 2. Return matching chapters
 3. Offer to load and explain content
@@ -122,7 +124,7 @@ Claude should:
 ```sql
 -- Add some foundational concepts
 INSERT INTO concepts (concept_id, name, domain, description) VALUES
-('dimensional_modeling', 'Dimensional Modeling', 'data_engineering', 
+('dimensional_modeling', 'Dimensional Modeling', 'data_engineering',
  'A data modeling technique optimized for query and analysis'),
 ('star_schema', 'Star Schema', 'data_engineering',
  'A dimensional model with a central fact table surrounded by dimensions'),
@@ -152,10 +154,11 @@ INSERT INTO chapter_concepts (chapter_id, concept_id, treatment, relevance) VALU
 
 Now you can ask Claude:
 
-> "Explain dimensional modeling using my knowledge base. 
+> "Explain dimensional modeling using my knowledge base.
 > What are the prerequisites I should understand first?"
 
 Claude will:
+
 1. Find the concept and related chapters
 2. Load relevant chapter content
 3. Synthesize an explanation
@@ -185,6 +188,7 @@ duckdb data/catalog.ddb -c "SELECT COUNT(*) as books, SUM(chapter_count) as chap
 ### "No such table: books"
 
 Run the schema initialization:
+
 ```bash
 duckdb data/catalog.ddb < schemas/catalog.sql
 ```
@@ -192,6 +196,7 @@ duckdb data/catalog.ddb < schemas/catalog.sql
 ### "ebooklib not found"
 
 Install dependencies:
+
 ```bash
 pip install ebooklib beautifulsoup4
 ```
@@ -199,6 +204,7 @@ pip install ebooklib beautifulsoup4
 ### "Permission denied reading ePub"
 
 Check file permissions:
+
 ```bash
 chmod 644 ~/Documents/ebooks/*.epub
 ```
@@ -206,6 +212,7 @@ chmod 644 ~/Documents/ebooks/*.epub
 ### "Chapter content empty"
 
 Some ePubs have unusual structure. Check:
+
 ```bash
 python -c "
 import ebooklib

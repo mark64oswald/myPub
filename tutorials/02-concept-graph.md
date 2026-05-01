@@ -5,6 +5,7 @@ This tutorial shows how to extract concepts from your indexed chapters and build
 ## Overview
 
 The concept graph enables:
+
 - **Prerequisites**: "What do I need to learn first?"
 - **Related topics**: "What else should I explore?"
 - **Learning paths**: "What order should I read?"
@@ -12,7 +13,7 @@ The concept graph enables:
 
 ## Step 1: Understand the Model
 
-```
+```text
 ┌─────────────┐         ┌─────────────────────────┐
 │  concepts   │◄────────│  chapter_concepts       │
 │             │         │  (many-to-many)         │
@@ -39,7 +40,7 @@ Identify chapters that haven't been processed yet:
 
 ```sql
 -- Find chapters without concepts
-SELECT 
+SELECT
     ch.chapter_id,
     ch.title,
     b.title AS book,
@@ -68,7 +69,7 @@ python scripts/extract_concepts.py --book "fundamentals-of-data-engineering" --o
 
 Load a chapter and ask Claude to extract concepts:
 
-```
+```text
 You: "Load chapter 7 of Fundamentals of Data Engineering and extract the key concepts"
 
 Claude will:
@@ -128,12 +129,12 @@ VALUES ('change_data_capture', 'Change Data Capture', 'data_engineering', CURREN
 
 -- Map concept to chapter
 INSERT INTO chapter_concepts (chapter_id, concept_id, treatment, excerpt)
-VALUES ('fundamentals-of-data-engineering:7', 'change_data_capture', 'deep_dive', 
+VALUES ('fundamentals-of-data-engineering:7', 'change_data_capture', 'deep_dive',
         'CDC is a technique for tracking changes...');
 
 -- Add relationship
 INSERT INTO concept_relationships (source_id, target_id, relationship, source_ref)
-VALUES ('change_data_capture', 'database_replication', 'REQUIRES', 
+VALUES ('change_data_capture', 'database_replication', 'REQUIRES',
         'fundamentals-of-data-engineering:7');
 
 -- Update chapter metadata
@@ -160,9 +161,9 @@ WITH RECURSIVE prereqs AS (
     SELECT target_id, 1 AS depth
     FROM concept_relationships
     WHERE source_id = 'dimensional_modeling' AND relationship = 'REQUIRES'
-    
+
     UNION ALL
-    
+
     SELECT cr.target_id, p.depth + 1
     FROM concept_relationships cr
     JOIN prereqs p ON cr.source_id = p.target_id
@@ -184,7 +185,7 @@ WITH my_chapters AS (
 )
 SELECT c.name, COUNT(*) AS co_occurrences
 FROM chapter_concepts cc
-JOIN concepts c ON cc.concept_id = c.concept_id  
+JOIN concepts c ON cc.concept_id = c.concept_id
 WHERE cc.chapter_id IN (SELECT * FROM my_chapters)
   AND cc.concept_id != 'cdc'
 GROUP BY c.name
@@ -220,7 +221,7 @@ LEFT JOIN chapter_concepts cc ON c.concept_id = cc.concept_id
 WHERE cc.chapter_id IS NULL;
 
 -- Orphan relationships (concepts not in concepts table)
-SELECT DISTINCT source_id 
+SELECT DISTINCT source_id
 FROM concept_relationships
 WHERE source_id NOT IN (SELECT concept_id FROM concepts);
 
@@ -228,9 +229,9 @@ WHERE source_id NOT IN (SELECT concept_id FROM concepts);
 WITH RECURSIVE cycle_check AS (
     SELECT source_id, target_id, ARRAY[source_id] AS path
     FROM concept_relationships WHERE relationship = 'REQUIRES'
-    
+
     UNION ALL
-    
+
     SELECT cr.source_id, cr.target_id, array_append(cc.path, cr.source_id)
     FROM concept_relationships cr
     JOIN cycle_check cc ON cr.source_id = cc.target_id

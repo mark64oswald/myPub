@@ -9,7 +9,7 @@ Corpus progress: 4,568 / 10,203 unique content blocks (44.8%).
 
 ## Graph size
 
-```
+```text
 concepts   41,260
 relations  52,277   (undirected node-pair count; concept_relation has 58,780 rows,
                     the delta is self-loops or duplicate from/to pairs)
@@ -18,7 +18,7 @@ books touched (≥1 relation): 284
 
 ## Weakly connected components
 
-```
+```text
 total components     6,990
 largest component    30,682  (74.4% of all concepts)
 2nd largest                 49
@@ -40,7 +40,7 @@ with zero relations — dead weight, but not structurally harmful.
 
 ## Degree distribution
 
-```
+```text
 mean     2.53
 median   1
 max      169
@@ -61,7 +61,7 @@ concepts with degree ≥ 11 — 3% of total.
 
 ### Top 20 hubs
 
-```
+```text
 169  Apache Spark
 157  Deep Learning
 154  Large Language Model
@@ -94,7 +94,7 @@ Product). No surprises — the corpus knows what matters.
 
 How many books cite each concept? (Higher = more cross-book reuse.)
 
-```
+```text
 1 book (book-unique)  29,586  82.2%
 2-3 books              4,766  13.2%
 4-10 books             1,388   3.9%
@@ -138,7 +138,7 @@ correctly — no wasted work.
 
 ## Novelty trend over extraction days
 
-```
+```text
 day          books  total    novel   novel%
 2026-04-18      97  17,565   9,398   53.5%
 2026-04-19      56  11,070   6,782   61.3%

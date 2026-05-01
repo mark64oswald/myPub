@@ -49,8 +49,6 @@ For dynamic concept exploration during conversations:
 - Track concepts discussed
 - Build temporary relationship maps
 
-
-
 ## Query Strategies
 
 ### Finding Content for a Topic
@@ -59,12 +57,12 @@ For dynamic concept exploration during conversations:
 -- Step 1: Find matching concepts
 SELECT concept_id, name, description, domain, aliases
 FROM concepts
-WHERE name ILIKE '%{topic}%' 
+WHERE name ILIKE '%{topic}%'
    OR '{topic}' = ANY(aliases)
    OR description ILIKE '%{topic}%';
 
 -- Step 2: Find chapters that cover it well
-SELECT 
+SELECT
     book_title,
     chapter_title,
     treatment,
@@ -73,18 +71,18 @@ SELECT
     chapter_id
 FROM v_concept_chapters
 WHERE concept_id = '{found_concept_id}'
-ORDER BY 
-    CASE treatment 
-        WHEN 'deep_dive' THEN 1 
-        WHEN 'explain' THEN 2 
-        WHEN 'mention' THEN 3 
+ORDER BY
+    CASE treatment
+        WHEN 'deep_dive' THEN 1
+        WHEN 'explain' THEN 2
+        WHEN 'mention' THEN 3
     END,
     pub_date DESC
 LIMIT 10;
 
 -- Step 3: Get book filepath for ePub retrieval
-SELECT filepath, href 
-FROM v_chapters_with_books 
+SELECT filepath, href
+FROM v_chapters_with_books
 WHERE chapter_id = '{selected_chapter_id}';
 ```
 
@@ -123,9 +121,9 @@ WITH RECURSIVE prereq_chain AS (
     SELECT target_id AS concept_id, 1 AS depth
     FROM concept_relationships
     WHERE source_id = '{concept_id}' AND relationship = 'REQUIRES'
-    
+
     UNION ALL
-    
+
     SELECT cr.target_id, pc.depth + 1
     FROM concept_relationships cr
     JOIN prereq_chain pc ON cr.source_id = pc.concept_id
@@ -144,11 +142,11 @@ ORDER BY depth;
 -- Find relevant patterns
 SELECT pattern_id, name, description, domain, category
 FROM patterns
-WHERE domain = '{domain}' 
+WHERE domain = '{domain}'
   AND (category = '{category}' OR '{category}' IS NULL);
 
 -- Get full pattern with variations
-SELECT 
+SELECT
     p.pattern_id,
     p.name,
     p.canonical_yaml,
@@ -167,8 +165,6 @@ FROM pattern_extensions
 WHERE pattern_id = '{pattern_id}';
 ```
 
-
-
 ## Response Patterns
 
 ### For Learning Requests
@@ -183,7 +179,8 @@ WHERE pattern_id = '{pattern_id}';
 6. Offer to explore further: "I found N other chapters on this topic from different authors. Want me to compare perspectives?"
 
 **Example response structure:**
-```
+
+```text
 [Explanation synthesized from chapter content]
 
 **Source:** [Book Title] by [Author], Chapter N: [Chapter Title]
@@ -210,7 +207,8 @@ Would you like me to:
 6. Explain choices with rationale
 
 **Example response structure:**
-```
+
+```text
 I'll use the [pattern_name] pattern for this. Here's my approach:
 
 **Pattern Selected:** [pattern_id]
@@ -238,7 +236,8 @@ I'll use the [pattern_name] pattern for this. Here's my approach:
 6. Note knowledge gaps if relevant
 
 **Example response structure:**
-```
+
+```text
 I found [N] chapters covering [topic] across [M] books. Here's my analysis:
 
 **Perspectives:**
@@ -270,34 +269,37 @@ I found [N] chapters covering [topic] across [M] books. Here's my analysis:
 5. Save to skills/generated/ directory
 6. Update skills table in catalog
 
-
-
 ## Key Principles
 
 ### Native-First Retrieval
+
 - Load **full chapters**, not chunks
 - Most chapters are 4K-17K tokens (fits in context)
 - Preserve author's structure and flow
 - Only summarize when chapter is too large
 
 ### Source Traceability
+
 - Always cite book, author, and chapter
 - Provide enough detail for user to find source
 - Note when synthesizing from multiple sources
 
 ### Multi-Perspective Awareness
+
 - Different authors have different approaches
 - Methodological differences (Kimball vs Inmon, etc.) are valid
 - Present alternatives when relevant
 - Help user choose based on their context
 
 ### Pattern-Informed Building
+
 - Use patterns for consistency and quality
 - Apply decision frameworks to select variations
 - Explain rationale for choices
 - Extend patterns as needed for specific requirements
 
 ### Concept-Aware Navigation
+
 - Use concept relationships for discovery
 - Show prerequisites when helpful
 - Suggest related topics
@@ -320,7 +322,8 @@ The knowledge base covers approximately:
 ## Workflow Examples
 
 ### Example 1: Learning Query
-```
+
+```text
 User: "Explain CDC and how it fits into data pipelines"
 
 Claude:
@@ -332,7 +335,8 @@ Claude:
 ```
 
 ### Example 2: Building Query
-```
+
+```text
 User: "Build a dimensional model for healthcare claims"
 
 Claude:
@@ -345,7 +349,8 @@ Claude:
 ```
 
 ### Example 3: Research Query
-```
+
+```text
 User: "Compare Kimball vs Inmon for my data warehouse"
 
 Claude:
@@ -359,11 +364,13 @@ Claude:
 ## Database Location
 
 The catalog database should be at:
-```
+
+```text
 ~/Developer/projects/myPub/data/catalog.ddb
 ```
 
 If it doesn't exist, guide user to initialize:
+
 ```bash
 cd ~/Developer/projects/myPub
 duckdb data/catalog.ddb < schemas/catalog.sql

@@ -138,6 +138,7 @@ The ranking engine already supports both modes. The generator framework just nee
 **Input:** Starting knowledge ("I understand SQL and basic Python") + target knowledge ("I want to design distributed CDC pipelines") + optional constraints (time budget, depth preference).
 
 **Decomposition — prerequisite traversal:**
+
 1. Identify start concepts in the graph (SQL, Python — match via entity resolution).
 2. Identify target concepts (CDC, distributed systems, pipeline design).
 3. Run DuckPGQ `ANY SHORTEST PATH` from each start concept to each target concept following REQUIRES and EXTENDS edges. Merge the paths.
@@ -146,13 +147,15 @@ The ranking engine already supports both modes. The generator framework just nee
 
 **Gap analysis:**
 For each concept in the path, check coverage:
+
 - Book chapters that DISCUSS this concept → reading assignments
 - Procedures that link to this concept → practice exercises
 - Doc sections covering this concept → supplementary/current material
 - Concepts with no book coverage → flag as gap, suggest doc sources or note "consider acquiring a book on this topic"
 
 **Output shape:**
-```
+
+```text
 learning-paths/<path-name>/
 ├── _path.md              # Overview, prerequisites, estimated time, gap report
 ├── stage-1-<name>/
@@ -169,6 +172,7 @@ learning-paths/<path-name>/
 **Selection strategy:** Authority pick for foundational concepts (Kleppmann for distributed systems, Kimball for data modeling). Recent-doc anchored for technology-specific stages. Consensus synthesis for design patterns and architectural topics.
 
 **Validation:**
+
 - Prerequisite completeness: every concept in stage N has its prerequisites covered in stages 1..N-1
 - No circular dependencies between stages
 - Every stage has at least one reading assignment (not just doc references)
@@ -186,6 +190,7 @@ learning-paths/<path-name>/
 **Input:** Topic + audience + format (blog post, conference talk, design doc, book chapter) + angle/thesis (optional).
 
 **Decomposition — rhetorical structure:**
+
 1. Retrieve broadly across the topic. Cast wide — pull from books, doc sections, procedures. The goal is to see the full landscape before structuring.
 2. LLM-driven outline generation given: topic, audience, format conventions, and the retrieved source material. The LLM proposes a narrative arc appropriate to the format:
    - Blog post: hook → context → problem → approaches → comparison → recommendation → conclusion
@@ -197,7 +202,8 @@ learning-paths/<path-name>/
 **Ranking mode: interactive.** This is the critical difference from Skills. The author *wants* to see where sources disagree. "Two books recommend trigger-based CDC for simplicity; current docs and one recent book strongly favor log-based. The shift happened because..." — that's not noise, that's the substance of good technical writing.
 
 **Output shape:**
-```
+
+```text
 content/<project-name>/
 ├── _brief.md             # Topic, audience, angle, format, source summary
 ├── outline.md            # Rhetorical structure with section goals
@@ -214,6 +220,7 @@ content/<project-name>/
 **Selection strategy:** Consensus synthesis as default (breadth matters for articles). But conflicts are surfaced in `notes.md` rather than silently resolved. The author decides how to handle them — that's editorial judgment, not something the system should automate.
 
 **Validation:**
+
 - Every outline section has at least 2 source references
 - Source coverage spans the topic (not all from one book)
 - Currency flags present for any source >2 years old on a fast-moving topic
@@ -231,6 +238,7 @@ content/<project-name>/
 **Input:** Topic + skill level (beginner/intermediate/advanced) + tools/technologies to cover + optional time budget.
 
 **Decomposition — exercise sequencing:**
+
 1. Prerequisite traversal (like learning paths) to establish concept ordering.
 2. Filter to concepts that have associated procedures — a concept without a procedure can't become a hands-on exercise.
 3. Group into workshop modules: each module teaches 1–2 concepts through 1–3 exercises.
@@ -241,7 +249,8 @@ content/<project-name>/
 **Ranking mode: generation (silent).** Tutorial steps must be concrete and current. "Some sources recommend X" is death in a tutorial — the student needs one unambiguous instruction. Recent-doc anchored is the dominant strategy because API calls and configuration steps must match current reality.
 
 **Output shape:**
-```
+
+```text
 tutorials/<tutorial-name>/
 ├── _workshop.md          # Overview, prerequisites, setup, estimated time
 ├── module-1-<name>/
@@ -261,6 +270,7 @@ tutorials/<tutorial-name>/
 **Selection strategy:** Recent-doc anchored exclusively for any step involving an API call, CLI command, or configuration. Book content provides the "why" context in lesson.md (consensus synthesis). Procedures are the primary source for exercise steps.
 
 **Validation:**
+
 - Every exercise references a procedure from the procedure table
 - API calls and configurations verified against current doc snapshots
 - Prerequisites are complete (every tool mentioned in exercises is listed in setup)
@@ -276,9 +286,10 @@ tutorials/<tutorial-name>/
 
 **Purpose:** Discover and document reusable patterns from the concept graph — automated identification of recurring architectural approaches, with trade-offs surfaced from multiple sources.
 
-**Input:** Domain scope (e.g., "data integration patterns", "stream processing patterns") or discovery mode ("find patterns in my library related to <topic>").
+**Input:** Domain scope (e.g., "data integration patterns", "stream processing patterns") or discovery mode ("find patterns in my library related to `<topic>`").
 
 **Decomposition — pattern discovery:**
+
 1. Query the concept graph for clusters of concepts connected by IMPLEMENTS edges. Each cluster is a candidate pattern: a concept (the pattern) linked to multiple procedures (implementations) and discussed across multiple chapters/doc sections (evidence).
 2. Filter to clusters with sufficient evidence — at least 2 independent sources discussing the pattern (not just one author's invention).
 3. For each candidate pattern, check against the existing YAML pattern library to avoid duplicates.
@@ -287,7 +298,8 @@ tutorials/<tutorial-name>/
 **Ranking mode: interactive (surface conflicts).** Pattern trade-offs *are* the content. When Kleppmann describes event sourcing differently than a Databricks architecture guide, that's not noise — it's the essential information about when and why to choose different approaches. The Pattern Catalog Generator explicitly surfaces these perspectives.
 
 **Output shape:**
-```
+
+```text
 patterns/<catalog-name>/
 ├── _catalog.md           # Overview, scope, how patterns relate
 ├── <pattern-name>/
@@ -306,6 +318,7 @@ patterns/<catalog-name>/
 **Selection strategy:** Consensus synthesis for problem statements and solutions (multiple authors should agree on what the pattern *is*). Interactive surfacing for trade-offs (where authors disagree is where the interesting design wisdom lives). Authority pick for canonical formulations when one source is definitional.
 
 **Validation:**
+
 - Every pattern has at least 2 independent source references
 - No duplicate patterns (check against existing pattern library)
 - Trade-offs section contains at least one genuine tension or design choice
@@ -324,6 +337,7 @@ patterns/<catalog-name>/
 **Input:** Decision context ("We need a CDC solution for our Databricks lakehouse") + optional constraints (must support schema evolution, must integrate with existing Kafka cluster, team has no JVM experience).
 
 **Decomposition — decision framing:**
+
 1. Identify the core decision concept(s) from the input (CDC, lakehouse integration).
 2. Traverse CONTRASTS_WITH and IMPLEMENTS edges to find candidate options. For CDC: Debezium, Delta Live Tables, Kafka Connect, Zippy (if auto-discovered). The graph tells you what the real alternatives are — not a speculative list but technologies that your sources actually discuss as alternatives to each other.
 3. For each option, collect the concept neighborhood: what it REQUIRES, what it EXTENDS, what patterns it IMPLEMENTS, what technologies it integrates with.
@@ -333,7 +347,8 @@ patterns/<catalog-name>/
 **Ranking mode: interactive.** The pros and cons must surface real tensions. A pro is a claim supported by a source; a con is either a gap, a conflict, or a currency concern. "Debezium has excellent schema evolution support [Kleppmann, Ch.11; Debezium docs v2.6] but requires JVM operations expertise that your team lacks [constraint from user]."
 
 **Output shape:**
-```
+
+```text
 decisions/<decision-name>/
 ├── _adr.md               # The complete ADR document
 │                         # Status, context, options, criteria, analysis, decision
@@ -344,6 +359,7 @@ decisions/<decision-name>/
 ```
 
 The `_adr.md` follows a standard ADR template:
+
 - **Status:** Proposed
 - **Context:** The decision scenario (from user input + graph context)
 - **Options considered:** Each with a sourced description (not invented by the LLM)
@@ -357,6 +373,7 @@ The `_adr.md` follows a standard ADR template:
 **What the graph gives you that ad-hoc research can't:** The options come from the graph's actual CONTRASTS_WITH relationships, not from Claude guessing alternatives. The consequences come from REQUIRES edges — real dependency chains. The currency flags are computed, not estimated. An ADR generated from the graph is grounded in your accumulated knowledge in a way that "ask Claude to write an ADR" never is.
 
 **Validation:**
+
 - Every option is a real concept in the graph (not invented)
 - Every pro/con traces to a source with a score
 - Evaluation criteria are comprehensive (not just the user's constraints)
@@ -377,6 +394,7 @@ The `_adr.md` follows a standard ADR template:
 **Input:** Technology to assess ("FastMCP" or "DuckDB" or "LangGraph") + optional evaluation dimensions (maturity, performance, ecosystem, learning curve, community health).
 
 **Decomposition — evaluation matrix:**
+
 1. Identify the target concept in the graph. If not present, trigger auto-discovery.
 2. Map its graph neighborhood:
    - What does it REQUIRE? (dependencies, prerequisites)
@@ -395,7 +413,8 @@ The `_adr.md` follows a standard ADR template:
 **Ranking mode: interactive.** An honest assessment requires showing both strengths and weaknesses with their sources. "DuckDB has excellent analytical performance [7 sources, strong consensus] but its HNSW persistence is still experimental [DuckDB docs, confirmed; 2 books don't mention this limitation because they predate it]."
 
 **Output shape:**
-```
+
+```text
 assessments/<technology>/
 ├── _assessment.md        # Executive summary + detailed evaluation
 ├── dimensions/
@@ -412,6 +431,7 @@ assessments/<technology>/
 **Selection strategy:** Consensus synthesis for established assessments (what multiple sources agree on). Interactive surfacing for tensions and risks. Recent-doc anchored for any claims about current state (performance benchmarks, feature availability, known limitations).
 
 **Unique validation:**
+
 - Graph coverage report is accurate (spot-check source counts)
 - Maturity assessment correlates with real-world signals (not just graph metrics)
 - Risk section includes at least one non-obvious risk (not just "it's new")
@@ -443,6 +463,7 @@ Default characters (can be overridden per generation):
 Characters aren't personas pasted onto generic dialogue — they're **view functions over the ranking engine.** The Architect sees the same ranked results but weights authority and corroboration higher. The Practitioner weights recency and doc alignment higher. When they disagree in dialogue, the disagreement traces to actual source-ranking differences.
 
 **Decomposition — conversational arc:**
+
 1. Retrieve broadly across the topic. Identify the key concepts, debates, and practical concerns.
 2. Identify the **natural tension points** — concepts where sources with high authority-weight disagree with sources that have high recency-weight. These become the dialogue's dramatic structure.
 3. Structure the conversation as scenes:
@@ -453,7 +474,8 @@ Characters aren't personas pasted onto generic dialogue — they're **view funct
 4. Target length calibration: ~150 words per minute of spoken audio. A 20-minute podcast episode ≈ 3,000 words of dialogue.
 
 **Output shape:**
-```
+
+```text
 dialogs/<topic>/
 ├── _script.md            # The complete script with character labels
 │                         # ARCHITECT: "The fundamental issue with trigger-based CDC..."
@@ -474,6 +496,7 @@ dialogs/<topic>/
 **Ranking mode: interactive — but consumed differently.** Instead of surfacing conflicts in a notes file for the author, conflicts are *distributed across characters*. The ranking engine identifies tension points; the decomposer assigns each side of the tension to a character based on their weight profile; the generator produces dialogue where the tension plays out naturally.
 
 **Selection strategy per character:**
+
 - The Architect uses authority pick + consensus synthesis (books and established patterns)
 - The Practitioner uses recent-doc anchored (current docs, procedures, live APIs)
 - The Explorer uses no strategy bias — draws from the full ranked set and asks about gaps
@@ -481,6 +504,7 @@ dialogs/<topic>/
 **What makes this genuinely novel:** Most AI-generated "discussions" are fake — both sides are written by the same model with the same knowledge. myPub's dialog generator produces discussions where character disagreements are **grounded in actual source disagreements.** The Architect's defense of event sourcing comes from Kleppmann; the Practitioner's skepticism comes from a Databricks operations guide that documents the operational complexity. The argument is real because the sources are real.
 
 **Validation:**
+
 - Every factual claim in the dialogue traces to a source in show-notes.md
 - Character voices are consistent (the Architect doesn't suddenly cite current docs without narrative reason)
 - Tension points are genuine source disagreements, not manufactured conflict
@@ -553,7 +577,7 @@ Option 2 (clean but disruptive): Migrate `skill_*` data into `generated_*` table
 
 ## 4. Project Layout Changes
 
-```
+```text
 mcp-servers/kb-mcp/
 ├── server.py
 ├── retrievers.py
@@ -654,7 +678,7 @@ identify_tension_points(domain, min_sources_per_side=2)
 
 #### Prompt 7.1 — Refactor Skills Factory into generator framework
 
-```
+```text
 Refactor mcp-servers/kb-mcp/skills_factory.py into a generalized
 generator framework.
 
@@ -681,6 +705,7 @@ continues using the existing skill_* tables for now — migration comes later.
 ```
 
 **Validate:**
+
 - Skills Factory eval passes with identical scores to pre-refactoring baseline
 - `/kb-generate-skills` still works end-to-end
 - Generator base class is clean and extensible
@@ -694,7 +719,7 @@ continues using the existing skill_* tables for now — migration comes later.
 
 #### Prompt 8.1 — Prerequisite decomposer
 
-```
+```text
 Build decomposers/prerequisite.py — the decomposer for learning paths.
 
 Given start concepts and target concepts:
@@ -717,6 +742,7 @@ no circular dependencies.
 ```
 
 **Validate:**
+
 - Prerequisite paths make pedagogical sense (human review)
 - Stages are coherent groupings (not random splits)
 - Different scope requests produce appropriately-sized paths
@@ -725,7 +751,7 @@ no circular dependencies.
 
 #### Prompt 8.2 — Gap analysis and reading list assembly
 
-```
+```text
 Build the gap analysis and reading list components for learning paths.
 
 For each concept in the prerequisite chain:
@@ -748,6 +774,7 @@ book for this stage?
 ```
 
 **Validate:**
+
 - Reading assignments match the stage's concepts (not generic suggestions)
 - Gaps are correctly identified
 - Checkpoint questions are answerable from the assigned reading
@@ -757,7 +784,7 @@ book for this stage?
 
 #### Prompt 8.3 — Full learning path generation and command
 
-```
+```text
 Wire the learning path generator end-to-end:
 1. Build templates/learning_stage.py
 2. Build validators/path_validator.py (prerequisite completeness,
@@ -773,6 +800,7 @@ Review the full output package. Is this a curriculum you'd actually follow?
 ```
 
 **Validate:**
+
 - End-to-end generation works
 - Output structure matches the spec (_path.md, stages, reading lists, checkpoints)
 - Provenance recorded in generated_source
@@ -782,7 +810,7 @@ Review the full output package. Is this a curriculum you'd actually follow?
 
 #### Prompt 8.4 — Learning path eval
 
-```
+```text
 Create tests/eval/learning_path_eval.py:
 
 1. Generate paths for 5 different start→target combinations spanning
@@ -802,6 +830,7 @@ Use the autoresearch loop to tune the stage-grouping prompt.
 ```
 
 **Validate:**
+
 - Eval runs successfully
 - Path quality baseline established
 - At least one tuning iteration completed
@@ -814,7 +843,7 @@ Use the autoresearch loop to tune the stage-grouping prompt.
 
 #### Prompt 9.1 — Rhetorical decomposer
 
-```
+```text
 Build decomposers/rhetorical.py — the decomposer for content generation.
 
 Unlike prerequisite or community decomposers, this one is LLM-driven
@@ -839,6 +868,7 @@ when the topic is similar.
 ```
 
 **Validate:**
+
 - Outlines follow format conventions
 - Different formats produce structurally different outlines for the same topic
 - Source summary is useful (not just a list of titles)
@@ -847,7 +877,7 @@ when the topic is similar.
 
 #### Prompt 9.2 — Draft generation with interactive ranking
 
-```
+```text
 Build the content generation stage using INTERACTIVE ranking mode.
 
 This is the key difference from Skills: the draft includes provenance
@@ -873,6 +903,7 @@ editorial decisions the author needs to make?
 ```
 
 **Validate:**
+
 - Draft is readable prose (not a collection of quotes)
 - Provenance annotations are specific and accurate
 - Conflicts represent genuine disagreements, not noise
@@ -883,7 +914,7 @@ editorial decisions the author needs to make?
 
 #### Prompt 9.3 — Full content generator and eval
 
-```
+```text
 Wire end-to-end:
 1. Build validators/content_validator.py (source coverage, currency
    flags, code example validity, comparison table completeness)
@@ -901,6 +932,7 @@ Build tests/eval/content_eval.py:
 ```
 
 **Validate:**
+
 - Three distinct content projects generated successfully
 - Eval baseline established
 
@@ -912,7 +944,7 @@ Build tests/eval/content_eval.py:
 
 #### Prompt 10.1 — Exercise sequencing and procedure adaptation
 
-```
+```text
 Build the tutorial decomposer and exercise generation.
 
 The decomposer (decomposers/prerequisite.py extended) does:
@@ -936,6 +968,7 @@ Test: generate a tutorial for "Getting started with CDC using Debezium"
 ```
 
 **Validate:**
+
 - Exercises have concrete, executable steps
 - Expected outputs are specific
 - Troubleshooting covers common failure modes
@@ -946,7 +979,7 @@ Test: generate a tutorial for "Getting started with CDC using Debezium"
 
 #### Prompt 10.2 — Full tutorial generator with solutions and eval
 
-```
+```text
 Complete the tutorial generator:
 1. Build solution generation (complete solutions for every exercise)
 2. Build setup/prerequisites.md generation
@@ -968,6 +1001,7 @@ Build tests/eval/tutorial_eval.py:
 ```
 
 **Validate:**
+
 - Complete tutorial with solutions generated
 - Eval baseline established
 
@@ -979,7 +1013,7 @@ Build tests/eval/tutorial_eval.py:
 
 #### Prompt 11.1 — Pattern discovery via graph clustering
 
-```
+```text
 Build decomposers/pattern_cluster.py — discovers patterns from the
 concept graph.
 
@@ -998,6 +1032,7 @@ positives (unrelated concepts that happen to cluster)?
 ```
 
 **Validate:**
+
 - Discovered patterns are recognizable and real
 - False positive rate < 30%
 - Duplicate detection against existing library works
@@ -1007,7 +1042,7 @@ positives (unrelated concepts that happen to cluster)?
 
 #### Prompt 11.2 — Pattern documentation with multi-perspective analysis
 
-```
+```text
 Build the pattern documentation generator using INTERACTIVE ranking.
 
 For each discovered pattern:
@@ -1029,6 +1064,7 @@ Test: generate a pattern catalog for "stream processing patterns".
 ```
 
 **Validate:**
+
 - Trade-offs section contains genuine design tensions
 - Multiple author perspectives are represented
 - Implementation links point to valid procedures
@@ -1039,7 +1075,7 @@ Test: generate a pattern catalog for "stream processing patterns".
 
 #### Prompt 11.3 — Full pattern catalog and eval
 
-```
+```text
 Complete the pattern catalog generator:
 1. Build validators/pattern_validator.py
 2. Register as generator_type='pattern_catalog'
@@ -1059,6 +1095,7 @@ manually-curated patterns.
 ```
 
 **Validate:**
+
 - Complete catalog generated
 - Eval baseline established
 - No conflicts with existing pattern library
@@ -1073,7 +1110,7 @@ ADR and Technical Assessment are structurally similar — both are evaluation-or
 
 #### Prompt 12.1 — Decision framing decomposer (ADR)
 
-```
+```text
 Build decomposers/decision_frame.py — the decomposer for ADRs.
 
 Given a decision context and constraints:
@@ -1092,6 +1129,7 @@ both user constraints and source-derived dimensions.
 ```
 
 **Validate:**
+
 - Options are real graph concepts with CONTRASTS_WITH relationships
 - Criteria reflect both user constraints and source-derived concerns
 - Consequences follow real REQUIRES edges
@@ -1100,7 +1138,7 @@ both user constraints and source-derived dimensions.
 
 #### Prompt 12.2 — ADR generator with options matrix
 
-```
+```text
 Build the full ADR generator:
 1. templates/adr_section.py — generates each ADR section with provenance
 2. Options matrix with per-option pros/cons from interactive ranking
@@ -1117,6 +1155,7 @@ Review the ADR. Is it a document you'd actually use in a design review?
 ```
 
 **Validate:**
+
 - ADR follows standard template (status, context, options, criteria, analysis, decision)
 - Every pro/con traces to a source
 - Consequences are real dependency chains
@@ -1126,7 +1165,7 @@ Review the ADR. Is it a document you'd actually use in a design review?
 
 #### Prompt 12.3 — Evaluation matrix decomposer (Tech Assessment)
 
-```
+```text
 Build decomposers/eval_matrix.py — the decomposer for technical assessments.
 
 Given a technology to assess:
@@ -1146,6 +1185,7 @@ with thin coverage — should honestly report the coverage gaps.
 ```
 
 **Validate:**
+
 - Coverage metrics are accurate (spot-check against manual counts)
 - Assessment dimensions are comprehensive
 - Thin coverage is honestly flagged, not hidden
@@ -1154,7 +1194,7 @@ with thin coverage — should honestly report the coverage gaps.
 
 #### Prompt 12.4 — Tech Assessment generator and eval
 
-```
+```text
 Complete the tech assessment generator:
 1. templates/assessment_dim.py
 2. validators/assessment_validator.py
@@ -1178,6 +1218,7 @@ Also build tests/eval/adr_eval.py:
 ```
 
 **Validate:**
+
 - Both generators work end-to-end
 - Eval baselines established for both
 
@@ -1191,7 +1232,7 @@ The most architecturally novel generator. Characters are view functions over the
 
 #### Prompt 13.1 — Character system and tension point identification
 
-```
+```text
 Build the character system for dialog generation.
 
 Character definition:
@@ -1218,6 +1259,7 @@ exactly-once semantics (theoretical vs. practical perspectives).
 ```
 
 **Validate:**
+
 - Tension points represent genuine source disagreements
 - Character weight profiles produce meaningfully different rankings for the same query
 - At least 3 tension points identified for a mid-complexity topic
@@ -1226,7 +1268,7 @@ exactly-once semantics (theoretical vs. practical perspectives).
 
 #### Prompt 13.2 — Conversational arc decomposer
 
-```
+```text
 Build decomposers/conversational.py — structures a dialog from topic
 and tension points.
 
@@ -1251,6 +1293,7 @@ create genuine dramatic structure (not manufactured conflict)?
 ```
 
 **Validate:**
+
 - Arc has clear narrative progression (not just alternating monologues)
 - Scene count matches target length
 - Tension points are distributed across scenes (not all in one)
@@ -1259,7 +1302,7 @@ create genuine dramatic structure (not manufactured conflict)?
 
 #### Prompt 13.3 — Dialog generation with character-specific ranking
 
-```
+```text
 Build the dialog generation stage:
 
 For each scene:
@@ -1286,6 +1329,7 @@ productively?
 ```
 
 **Validate:**
+
 - Character voices are distinct and consistent
 - Disagreements trace to actual source ranking differences
 - Dialogue reads naturally (not stilted or robotic)
@@ -1296,7 +1340,7 @@ productively?
 
 #### Prompt 13.4 — Full dialog generator with format variants and eval
 
-```
+```text
 Complete the dialog generator:
 1. Support format variants:
    - podcast (conversational, informal, 2-3 characters)
@@ -1326,6 +1370,7 @@ Build tests/eval/dialog_eval.py:
 ```
 
 **Validate:**
+
 - Three format variants all generate successfully
 - Eval baseline established across all metrics
 - At least one script sounds genuinely engaging when read aloud
@@ -1338,7 +1383,7 @@ Build tests/eval/dialog_eval.py:
 
 #### Prompt 14.1 — Unified /kb-generate command and comprehensive README
 
-```
+```text
 Finalize the unified generation interface:
 
 1. /kb-generate dispatches to all eight generator types:
@@ -1370,6 +1415,7 @@ Finalize the unified generation interface:
 ```
 
 **Validate:**
+
 - Unified command works for all eight types
 - Full regression suite passes
 - README is comprehensive and accurate
@@ -1380,14 +1426,16 @@ Finalize the unified generation interface:
 
 ## 7. Summary
 
-### Architecture changes (minimal):
+### Architecture changes (minimal)
+
 - Generalized `Generator` base class extracted from Skills Factory
 - Pluggable decomposers, templates, validators per generator type (8 generators)
 - Generalized output tables (`generated_*`) parallel to `skill_*` tables
 - Character system for dialog generation (weight-biased views over the ranking engine)
 - New MCP tools: `generate_package` (generalized), `analyze_knowledge_gaps`, `discover_patterns`, `assess_graph_coverage`, `identify_tension_points`
 
-### What stays the same (almost everything):
+### What stays the same (almost everything)
+
 - DuckDB substrate with FTS + VSS + DuckPGQ
 - Entity resolution
 - Hybrid retrieval
@@ -1397,7 +1445,7 @@ Finalize the unified generation interface:
 - Auto-discovery
 - Proactive refresh
 
-### The eight generators at a glance:
+### The eight generators at a glance
 
 | Generator | Decomposer | Ranking mode | Output for | Key graph operation |
 |---|---|---|---|---|
@@ -1410,12 +1458,14 @@ Finalize the unified generation interface:
 | Tech Assessment | Evaluation matrix | Interactive | Evaluators | Coverage analysis + neighborhood mapping |
 | Dialog | Conversational arc | Interactive | Audiences | Tension point identification across character views |
 
-### The key insight:
+### The key insight
+
 The generators don't add complexity to the core architecture — they add *value extraction surfaces* to the existing knowledge graph. Each generator is a different lens on the same underlying data: Skills are for agents, learning paths are for sequential understanding, content is for sharing knowledge, tutorials are for hands-on practice, pattern catalogs are for architectural decision-making, ADRs are for technology decisions, assessments are for due diligence, and dialogs are for making knowledge engaging and accessible.
 
 The Dialog Generator introduces the most novel architectural concept: **characters as view functions over the ranking engine.** Instead of one author resolving conflicts, multiple characters each present the perspective that their weight profile favors, producing discussions where disagreements are grounded in actual source-ranking differences. This is structurally different from "ask an LLM to write a dialogue" — the debate is real because the underlying sources genuinely disagree.
 
-### Timeline:
+### Timeline
+
 - Phase 7 (framework): 2 weeks
 - Phase 8 (learning paths): 3 weeks
 - Phase 9 (content): 3 weeks

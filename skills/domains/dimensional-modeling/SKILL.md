@@ -35,18 +35,21 @@ Dimensional modeling is the foundation for analytical databases:
 ## Methodologies
 
 ### Kimball (Bottom-Up)
+
 - Business process focus
 - Dimensional bus architecture
 - Conformed dimensions
 - Star schema oriented
 
 ### Inmon (Top-Down)
+
 - Enterprise data warehouse first
 - 3NF normalized hub
 - Dependent data marts
 - Corporate information factory
 
 ### Data Vault
+
 - Hub and spoke architecture
 - Historical tracking built-in
 - Auditability focus

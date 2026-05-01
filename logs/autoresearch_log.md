@@ -19,7 +19,7 @@ Catalog state: 126 chapters extracted across 10 books, Phase 2.4 session 1
 done, 5 queue items manually reviewed, SKU alias + Horizontal Scaling
 merge applied.
 
-```
+```text
 === extraction ===
 golden pairs:   22
 hits:           20
@@ -59,7 +59,7 @@ as required extractions may fix the Star Schema and Kafka misses.
 
 **Prompt change applied.** Added one bullet to the `Rules` block:
 
-> * **Always include headline / umbrella concepts.** If the chapter's
+> - **Always include headline / umbrella concepts.** If the chapter's
 >   title, section headings, or opening paragraphs center on a named,
 >   canonical concept (e.g. "Star Schema" in a retail-analytics chapter,
 >   "Kafka" in a Kafka-internals chapter, "Linearizability" in a
@@ -93,7 +93,7 @@ deterministically rather than relying on its own sense of "importance."
 
 **Prompt change applied.**
 
-> * **Headings are promises.** If the chapter title or any H1/H2/H3
+> - **Headings are promises.** If the chapter title or any H1/H2/H3
 >   heading in the provided content names a specific concept, pattern,
 >   tool, framework, algorithm, or technique, that name must appear in
 >   your entities list.

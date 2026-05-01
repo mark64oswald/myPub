@@ -46,16 +46,19 @@ Key books in collection:
 ## Common Tasks
 
 ### Pipeline Design
+
 - Batch vs streaming decision
 - Error handling patterns
 - Idempotency design
 
 ### Data Quality
+
 - Validation rules
 - Anomaly detection
 - Data contracts
 
 ### CDC Implementation
+
 - Log-based CDC
 - Timestamp-based CDC
 - Trigger-based CDC

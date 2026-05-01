@@ -56,7 +56,7 @@ ORDER BY category, name;
 
 ```sql
 -- Get pattern with variations
-SELECT 
+SELECT
     p.pattern_id,
     p.canonical_yaml,
     pv.name as variation,
@@ -78,7 +78,8 @@ When building healthcare analytics, consider:
 ## Pattern Location
 
 Pattern YAML files are in:
-```
+
+```text
 patterns/healthcare/
 ├── dimensional/
 │   ├── fct_claim_line.yaml
@@ -94,10 +95,11 @@ patterns/healthcare/
 
 Ask Claude:
 
-> "Use the fct_claim_line pattern with the bridge_table variation 
+> "Use the fct_claim_line pattern with the bridge_table variation
 > to generate a dimensional model for Medicare Advantage claims analysis."
 
 Claude will:
+
 1. Load the pattern and variation
 2. Apply the HCC extension (detected from "Medicare Advantage")
 3. Generate SQL DDL

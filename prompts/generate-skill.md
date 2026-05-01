@@ -1,21 +1,24 @@
 # Super Prompt: Generate Domain Skill
 
 ## Goal
+
 Generate a comprehensive SKILL.md file for a topic/domain based on knowledge base content.
 
 ## Prerequisites
+
 - Books covering the topic are indexed
 - Concepts have been extracted (recommended)
 - Target directory exists
 
 ## Variables
+
 - `{{TOPIC}}`: The topic/domain (e.g., "Change Data Capture", "HCC Risk Adjustment")
 - `{{DOMAIN}}`: Domain category (e.g., "data-engineering", "healthcare")
 - `{{OUTPUT_DIR}}`: Where to save (default: skills/generated/)
 
 ## Prompt
 
-```
+````text
 I need to generate a comprehensive Skill file for my knowledge base.
 
 **Topic:** {{TOPIC}}
@@ -27,6 +30,7 @@ Please:
 1. **Find all relevant content in the knowledge base:**
 
    ```sql
+
    -- Find by concept
    SELECT DISTINCT
        vcc.chapter_id,
@@ -38,15 +42,15 @@ Please:
    FROM v_concept_chapters vcc
    WHERE vcc.concept_name ILIKE '%{{TOPIC}}%'
       OR vcc.concept_name ILIKE '%{{TOPIC_SLUG}}%'
-   ORDER BY 
-       CASE vcc.treatment 
-           WHEN 'deep_dive' THEN 1 
-           WHEN 'explain' THEN 2 
-           ELSE 3 
+   ORDER BY
+       CASE vcc.treatment
+           WHEN 'deep_dive' THEN 1
+           WHEN 'explain' THEN 2
+           ELSE 3
        END;
-   
+
    -- Also search chapter titles/summaries
-   SELECT 
+   SELECT
        ch.chapter_id,
        ch.title,
        b.title AS book_title,
@@ -59,6 +63,7 @@ Please:
       OR ch.summary ILIKE '%{{TOPIC}}%'
    ORDER BY ch.token_count DESC
    LIMIT 15;
+
    ```
 
 2. **Load the top 3-5 chapters** (prioritize deep_dive and explain):
@@ -68,58 +73,72 @@ Please:
 3. **Synthesize into a SKILL.md with this structure:**
 
    ```markdown
+
    # {{TOPIC}} Skill
 
    ## Overview
+
    [Synthesize from sources - what is this, why does it matter]
 
    ## Key Concepts
+
    [List and explain core concepts with definitions]
    - **Concept 1**: Definition and significance
    - **Concept 2**: Definition and significance
 
    ## How It Works
+
    [Technical explanation synthesized from sources]
-   
+
    ## Common Patterns
+
    [Practical patterns and approaches]
-   
+
    ### Pattern 1: [Name]
+
    **When to use:** [Context]
    **Implementation:**
+
    ```sql
    -- Example code
    ```
 
    ## Best Practices
+
    [Synthesized from all sources]
    1. Practice with explanation
    2. Practice with explanation
 
    ## Common Pitfalls
+
    [What to avoid, synthesized from sources]
    - Pitfall: How to avoid
 
    ## When to Use / When Not to Use
+
    **Use when:**
    - Condition 1
-   
+
    **Avoid when:**
    - Condition 1
 
    ## Related Concepts
+
    [Link to related topics in the KB]
    - Related Topic 1: Brief connection explanation
    - Related Topic 2: Brief connection explanation
 
    ## Source Chapters
+
    [List all chapters used, with treatment indicators]
-   
+
    ### [Book Title]
+
    *by [Authors]*
    - 🔬 **[Chapter Title]** (~N tokens) - [brief note on what it covers]
-   
+
    ## Metadata
+
    - Generated: [timestamp]
    - Domain: {{DOMAIN}}
    - Source chapters: N
@@ -149,14 +168,17 @@ Please:
    - Number of source chapters used
    - Key insights synthesized
    - Suggested related skills to generate
-```
+
+````
 
 ## Expected Output
+
 - Complete SKILL.md file
 - SQL to register in catalog
 - Summary of what was synthesized
 
 ## Quality Checklist
+
 - [ ] Overview is clear and actionable
 - [ ] Key concepts are well-defined
 - [ ] Patterns include working code examples

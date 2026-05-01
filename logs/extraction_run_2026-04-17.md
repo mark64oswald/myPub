@@ -22,7 +22,7 @@ for 2.4" below.
 
 ## Results
 
-```
+```text
 concepts           117
 concept_embeddings 117
 relations          111
@@ -76,7 +76,7 @@ re-tune) — no prompt adjustment required before 2.4.
 Every item is a genuinely confusable pair the resolver correctly punted to
 human review rather than auto-merging:
 
-```
+```text
 sim=0.895  'CAP Theorem'                 ↔ 'Linearizability'
 sim=0.892  'KafkaProducer'               ↔ 'KafkaConsumer'
 sim=0.839  'Weak Isolation Levels'       ↔ 'Serializability'
@@ -140,7 +140,7 @@ post-processing (resolver + writes): ~30 seconds.
 
 ## Cumulative results (5 + 30 = 35 chapters across 7 books)
 
-```
+```text
 concepts           731  (+614 from first run)
 relations          617  (+506)
 review queue       85   (+71, all 'pending')
@@ -214,7 +214,7 @@ Ready for Phase 2.4 full-corpus use, which spans multiple sessions.
 
 ## Updated status
 
-```
+```text
 chapters w/ content  112,968
 chapters extracted        35  (0.03%)
 ```

@@ -4,7 +4,7 @@
 
 myPub is a Claude-native knowledge base that makes your technical ePub collection queryable and actionable. Unlike traditional RAG systems that chunk documents, myPub preserves author structure and enables native-first retrieval.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           User Interaction Layer                             │
 │                    Claude Desktop / Claude Code / API                        │
@@ -52,6 +52,7 @@ myPub is a Claude-native knowledge base that makes your technical ePub collectio
 Traditional RAG chunks documents into small pieces and retrieves by vector similarity. This loses context and structure.
 
 **myPub approach:**
+
 - Index metadata and structure, not content
 - Load full chapters into Claude's context (4K-17K tokens typical)
 - Preserve author's organization and flow
@@ -62,6 +63,7 @@ Traditional RAG chunks documents into small pieces and retrieves by vector simil
 ePub books have intentional structure: chapters, sections, hierarchies. This structure carries meaning.
 
 **myPub approach:**
+
 - Extract and preserve table of contents
 - Track chapter parent-child relationships
 - Maintain sequence and hierarchy
@@ -72,6 +74,7 @@ ePub books have intentional structure: chapters, sections, hierarchies. This str
 Concepts relate to each other in meaningful ways that vectors don't capture.
 
 **myPub approach:**
+
 - Store concepts as graph nodes
 - Define typed relationships (REQUIRES, EXTENDS, CONTRASTS_WITH)
 - Enable prerequisite discovery
@@ -82,6 +85,7 @@ Concepts relate to each other in meaningful ways that vectors don't capture.
 Knowledge should be actionable, not just retrievable.
 
 **myPub approach:**
+
 - Extract reusable patterns from books
 - Store with variations and extensions
 - Include decision frameworks
@@ -91,7 +95,7 @@ Knowledge should be actionable, not just retrievable.
 
 ### Indexing Flow
 
-```
+```text
 ePub File → Read Metadata → Parse TOC → Extract Chapters → Store in DuckDB
                 ↓                            ↓
            books table              chapters table
@@ -99,7 +103,7 @@ ePub File → Read Metadata → Parse TOC → Extract Chapters → Store in Duck
 
 ### Concept Extraction Flow
 
-```
+```text
 Chapter Content → Claude Analysis → Identify Concepts → Store Relationships
                                           ↓
                               concepts + chapter_concepts tables
@@ -107,7 +111,7 @@ Chapter Content → Claude Analysis → Identify Concepts → Store Relationship
 
 ### Query Flow
 
-```
+```text
 User Question → Skill Loaded → Query Catalog → Find Chapters → Load Content → Synthesize Response
                     ↓               ↓                              ↓
              kb-usage skill    DuckDB query         ebook-mcp:get_chapter
@@ -115,7 +119,7 @@ User Question → Skill Loaded → Query Catalog → Find Chapters → Load Cont
 
 ### Pattern Usage Flow
 
-```
+```text
 Build Request → Find Pattern → Load Variations → Apply Decision Framework → Generate Code
                     ↓               ↓                     ↓
             patterns table   pattern_variations    Context analysis
@@ -126,6 +130,7 @@ Build Request → Find Pattern → Load Variations → Apply Decision Framework 
 ### DuckDB Catalog
 
 **Why DuckDB:**
+
 - SQL you already know
 - Embedded (no server)
 - Fast analytical queries
@@ -133,6 +138,7 @@ Build Request → Find Pattern → Load Variations → Apply Decision Framework 
 - Recursive CTEs for graph traversal
 
 **Key Tables:**
+
 - `books` - Book metadata
 - `chapters` - TOC with summaries and key concepts
 - `concepts` - Canonical concept definitions
@@ -146,7 +152,7 @@ Build Request → Find Pattern → Load Variations → Apply Decision Framework 
 
 Skills encode domain expertise for Claude:
 
-```
+```text
 skills/
 ├── kb-usage/SKILL.md          # How to use the KB
 ├── domains/                    # Domain expertise
@@ -200,6 +206,7 @@ extensions:
 ### External Data Sources
 
 The architecture supports adding:
+
 - Web search for current information
 - Enterprise databases via MCP
 - Personal data sources

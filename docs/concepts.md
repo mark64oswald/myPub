@@ -20,7 +20,7 @@ Concepts can represent:
 
 One concept requires understanding another first.
 
-```
+```text
 Dimensional Modeling → REQUIRES → SQL Fundamentals
 SCD Type 2 → REQUIRES → Dimensional Modeling
 HCC Risk Adjustment → REQUIRES → Healthcare Claims
@@ -30,7 +30,7 @@ HCC Risk Adjustment → REQUIRES → Healthcare Claims
 
 Concepts frequently discussed together or in similar contexts.
 
-```
+```text
 CDC → RELATED_TO → Event Sourcing
 Kafka → RELATED_TO → Streaming
 Data Warehouse → RELATED_TO → Data Lake
@@ -40,7 +40,7 @@ Data Warehouse → RELATED_TO → Data Lake
 
 One concept extends or specializes another.
 
-```
+```text
 SCD Type 2 → EXTENDS → Slowly Changing Dimensions
 Data Lakehouse → EXTENDS → Data Lake
 ```
@@ -49,7 +49,7 @@ Data Lakehouse → EXTENDS → Data Lake
 
 Concepts that represent different approaches to similar problems.
 
-```
+```text
 Kimball → CONTRASTS_WITH → Inmon
 Batch Processing → CONTRASTS_WITH → Stream Processing
 Star Schema → CONTRASTS_WITH → Snowflake Schema
@@ -59,7 +59,7 @@ Star Schema → CONTRASTS_WITH → Snowflake Schema
 
 A technology implements a concept or pattern.
 
-```
+```text
 Delta Lake → IMPLEMENTS → ACID Transactions
 dbt → IMPLEMENTS → ELT Pattern
 ```
@@ -79,6 +79,7 @@ Each chapter can discuss multiple concepts with different levels of treatment:
 ### Relevance Score
 
 0.0 to 1.0 indicating how central the concept is to the chapter:
+
 - 1.0: Chapter is primarily about this concept
 - 0.5: Significant discussion
 - 0.2: Brief mention in context
@@ -107,18 +108,18 @@ WHERE concept_id = 'dimensional_modeling';
 ```sql
 WITH RECURSIVE prereq_chain AS (
     -- Base case: direct prerequisites
-    SELECT 
+    SELECT
         target_id AS concept_id,
         1 AS depth,
         ARRAY[source_id] AS path
     FROM concept_relationships
     WHERE source_id = 'dimensional_modeling'
       AND relationship = 'REQUIRES'
-    
+
     UNION ALL
-    
+
     -- Recursive case
-    SELECT 
+    SELECT
         cr.target_id,
         pc.depth + 1,
         array_append(pc.path, cr.source_id)
@@ -128,7 +129,7 @@ WITH RECURSIVE prereq_chain AS (
       AND pc.depth < 5
       AND NOT array_contains(pc.path, cr.target_id)  -- Prevent cycles
 )
-SELECT DISTINCT 
+SELECT DISTINCT
     c.name,
     MIN(pc.depth) AS depth
 FROM prereq_chain pc
@@ -141,11 +142,11 @@ ORDER BY depth;
 
 ```sql
 WITH my_chapters AS (
-    SELECT chapter_id 
-    FROM chapter_concepts 
+    SELECT chapter_id
+    FROM chapter_concepts
     WHERE concept_id = 'cdc'
 )
-SELECT 
+SELECT
     c.name,
     COUNT(*) AS shared_chapters,
     array_agg(DISTINCT cc.treatment) AS treatments
@@ -162,13 +163,13 @@ LIMIT 10;
 
 ```sql
 WITH RECURSIVE learning_path AS (
-    SELECT 
+    SELECT
         'target_concept' AS concept_id,
         0 AS level
-    
+
     UNION ALL
-    
-    SELECT 
+
+    SELECT
         cr.target_id,
         lp.level + 1
     FROM concept_relationships cr
@@ -176,7 +177,7 @@ WITH RECURSIVE learning_path AS (
     WHERE cr.relationship = 'REQUIRES'
       AND lp.level < 5
 )
-SELECT 
+SELECT
     c.name,
     lp.level AS learn_order,
     (SELECT vcc.book_title || ': ' || vcc.chapter_title
@@ -198,7 +199,7 @@ Start with core concepts from your domains:
 
 ```sql
 INSERT INTO concepts (concept_id, name, domain, description) VALUES
-('dimensional_modeling', 'Dimensional Modeling', 'data_engineering', 
+('dimensional_modeling', 'Dimensional Modeling', 'data_engineering',
  'Technique for organizing data warehouses around business processes'),
 ('kimball', 'Kimball Methodology', 'data_engineering',
  'Bottom-up approach to data warehouse design using conformed dimensions'),
@@ -220,6 +221,7 @@ Use Claude to analyze chapters and identify concepts:
 ### Phase 3: Build Relationships
 
 Relationships emerge from:
+
 - Explicit statements ("Before learning X, you should know Y")
 - Chapter structure (concepts in prerequisites section)
 - Co-occurrence analysis (concepts discussed together)
@@ -236,7 +238,7 @@ Relationships emerge from:
 
 For dynamic exploration during conversations, use the Memory MCP:
 
-```
+```text
 1. Create entities for concepts being discussed
 2. Create relations as you discover connections
 3. Search to find previously discussed concepts

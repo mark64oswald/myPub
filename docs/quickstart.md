@@ -27,6 +27,7 @@ pip install duckdb ebooklib beautifulsoup4 tiktoken
 ### 3. Set Up Your ePub Directory
 
 By default, scripts look for ePubs in `~/Documents/ebooks/`. Either:
+
 - Move/copy your ePubs there, OR
 - Use `--source` flag to specify your location
 
@@ -64,9 +65,9 @@ duckdb data/catalog.ddb
 SELECT title, authors, chapter_count FROM books ORDER BY title;
 
 -- Search chapters
-SELECT b.title, ch.title 
-FROM chapters ch 
-JOIN books b ON ch.book_id = b.book_id 
+SELECT b.title, ch.title
+FROM chapters ch
+JOIN books b ON ch.book_id = b.book_id
 WHERE ch.title ILIKE '%dimension%';
 ```
 
@@ -74,8 +75,8 @@ WHERE ch.title ILIKE '%dimension%';
 
 Load the kb-usage skill and ask:
 
-```
-Using my knowledge base, explain dimensional modeling and show me 
+```text
+Using my knowledge base, explain dimensional modeling and show me
 which books cover it.
 ```
 
@@ -96,16 +97,19 @@ which books cover it.
 
 ## Troubleshooting
 
-**"No module named duckdb"**
+### "No module named duckdb"
+
 ```bash
 pip install duckdb
 ```
 
-**"ePub file not found"**
+### "ePub file not found"
+
 - Check the filepath in the error
 - Verify the file exists and has .epub extension
 
-**"No chapters found"**
+### "No chapters found"
+
 - Some ePubs have non-standard TOC formats
 - Try opening in a reader to verify structure
 

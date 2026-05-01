@@ -19,7 +19,7 @@ This directory contains custom command definitions for use with Claude.
 
 Commands can be invoked in Claude conversations:
 
-```
+```text
 /kb-search dimensional modeling
 /kb-compare Kimball vs Inmon
 /kb-prereqs HCC Risk Adjustment

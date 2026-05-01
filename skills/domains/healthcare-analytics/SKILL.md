@@ -44,19 +44,25 @@ See `patterns/healthcare/` for:
 ## Common Tasks
 
 ### Cost Analysis
+
 *Query patterns and chapters for:*
+
 - PMPM trending
 - Cost by service category
 - High-cost member identification
 
 ### Utilization Analysis
+
 *Query patterns and chapters for:*
+
 - ER utilization rates
 - Inpatient admissions
 - Readmission rates
 
 ### Quality Measures
+
 *Query patterns and chapters for:*
+
 - HEDIS measure calculation
 - Stars ratings
 - Quality gaps in care

@@ -24,6 +24,7 @@ Alternatively, reference them as custom commands in Claude Desktop.
 ## Structure
 
 Each super prompt includes:
+
 - **Goal**: What the prompt accomplishes
 - **Prerequisites**: What needs to be in place
 - **Variables**: Parameters to customize

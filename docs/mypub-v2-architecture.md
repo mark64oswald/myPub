@@ -83,11 +83,13 @@ The essential shape: Claude Code at the top, MCP servers (KB + three doc sources
 ### 5.1 Sources
 
 #### ePub Collection *(existing, unchanged)*
+
 The corpus in `~/Documents/eBooks`. Each book has metadata (title, author, publication date, publisher), a table of contents, and structured XHTML content for each chapter.
 
 **Purpose:** Depth, author perspective, pedagogical sequencing. Books organize topics into curricula that decades of author experience have refined.
 
 #### Live Documentation Sources *(new)*
+
 Three complementary services, all reachable via MCP servers. They answer different questions and degrade gracefully as you move down the list.
 
 **Context7 MCP** *(primary source)* — Upstash's documentation index. Supports four source types: Git repositories, websites, OpenAPI specs, and `llms.txt` files. For Git repos, it parses Markdown files and documentation folders using an optional `context7.json` config for fine-grained control. Covers vendor docs (Databricks, PostgreSQL, AWS) and well-documented OSS libraries (LangChain, FastMCP, Prisma). Runs as a local stdio MCP via `npx`. Public libraries can be self-submitted via context7.com/add-library if not already indexed. Returns content already pre-chunked; each chunk becomes a `doc_section` on ingestion.
@@ -101,11 +103,13 @@ Three complementary services, all reachable via MCP servers. They answer differe
 **Purpose:** Addresses the currency gap at breadth and depth. Books teach foundational concepts; the three doc sources together cover the current state of nearly every technology in active use — vendor products, well-documented OSS, and obscure libraries alike.
 
 **Division of labor:**
+
 - Most vendor and popular OSS queries → Context7.
 - OSS queries where Context7 isn't indexed, or where architectural/intent grounding matters → DeepWiki.
 - Everything else → GitHub MCP direct fetch.
 
 **Integration:**
+
 - All three run as MCP servers reachable from Claude Code. Context7 and GitHub stdio locally, DeepWiki via its hosted HTTPS endpoint.
 - Invoked on-demand when a query touches a concept linked to a doc source, and proactively pre-refreshed on a schedule (§6.6) to minimize first-query latency.
 - Snapshots from all three cached in DuckDB with timestamps and source-type tags to enable deterministic retrieval and source-change tracking.
@@ -114,14 +118,17 @@ Three complementary services, all reachable via MCP servers. They answer differe
 ### 5.2 Extraction
 
 #### ePub Parser *(existing, unchanged)*
+
 Parses ePub files into the relational catalog. Captures book metadata, chapter hierarchy, section structure, and full chapter text.
 
 #### Entity/Concept Extractor *(new)*
+
 LLM-based schema-guided extraction applied to any text-bearing content — both ePub chapters **and** doc snapshots (Context7, DeepWiki, GitHub). The extractor is given a domain ontology (allowed entity types and relationship types) and returns structured entities and relations written into the graph tables.
 
 **Purpose:** Automate what v1 did manually. Extracts `Concept`, `Pattern`, `Tool`, `Author` and other domain entities, plus typed relationships (`REQUIRES`, `EXTENDS`, `CONTRASTS_WITH`, `IMPLEMENTS`, `CITES`).
 
 **Design notes:**
+
 - Adopts the pattern used by LlamaIndex's `SchemaLLMPathExtractor` but implemented directly against DuckDB rather than through the LlamaIndex framework.
 - **Runs via Claude Code sub-agents (Task tool), not as a standalone API-calling script.** A coordinator script handles I/O, DB reads/writes, and entity resolution; sub-agents handle the LLM reasoning. This keeps all LLM costs covered by the Max subscription. The coordinator dispatches chapters or doc sections in batches to sub-agents, which return structured JSON.
 - Applies uniformly to chapters and snapshots — the same schema and prompts. Differences in document style (book prose vs. reference docs vs. README) are handled by the LLM, not by separate pipelines.
@@ -130,11 +137,13 @@ LLM-based schema-guided extraction applied to any text-bearing content — both 
 - Critical consequence: concepts can enter the graph from live docs even when no book mentions them. A new library on DeepWiki or a new vendor feature on Context7 becomes a first-class, traversable, Skills-Factory-eligible concept on next refresh.
 
 #### Procedure Extractor *(new)*
+
 A specialized extractor that pulls step-by-step procedures, decision rules, and command examples out of text. Applies to both ePub chapters (which mix procedures with explanatory prose) and doc snapshots (which often contain procedures explicitly).
 
 **Purpose:** Supplies the action-oriented content Skills need. A `Procedure` entity captures pre-conditions, ordered steps, expected outcomes, and failure modes.
 
 **Design notes:**
+
 - Separate prompt template from the entity extractor because the extraction target is different.
 - **Uses the same sub-agent pattern as the entity extractor** — coordinator script handles I/O; sub-agents handle LLM reasoning. Subscription-covered.
 - Procedures link to the concepts they operate on and the patterns they implement — those concept references pass through Entity Resolution, same as entity extraction, so a Procedure extracted from Zippy's docs links to the same `CDC` concept that book chapters discuss.
@@ -201,6 +210,7 @@ CREATE TABLE concept_resolution_queue (
 Without this step — or with it tuned too loose — the graph fragments. Tuned too tight, distinct concepts get collapsed. Getting it right is an evaluation-driven iteration, not a one-shot design decision, which is why the review queue exists.
 
 #### Doc Snapshot Cache *(new)*
+
 Stores point-in-time captures of documentation from all live doc sources (Context7, DeepWiki, GitHub) with content hashes, retrieval timestamps, source type, and source URLs. Written by the doc-source integrations, queried by the ranking engine **and by the extractors**.
 
 **Purpose:** Enables deterministic retrieval during a session across mixed source types, detects when upstream docs change, and provides the artifact against which book content is compared for currency scoring. Snapshot source type is preserved so the ranking engine can weight them differently (e.g., an official Context7 snapshot ranks higher on authority than a DeepWiki AI-generated summary for the same concept).
@@ -214,28 +224,34 @@ Stores point-in-time captures of documentation from all live doc sources (Contex
 A single local DuckDB file — `data/catalog.ddb` — handling all three retrieval modalities plus the relational catalog. No separate vector DB, no separate graph DB.
 
 #### Relational Catalog *(existing, evolved)*
+
 Tables for `book`, `chapter`, `section`, `author`, `concept`, `pattern`, plus new v2 tables: `procedure`, `doc_source`, `doc_snapshot`, `doc_section`, `concept_alias`, `concept_resolution_queue`, `concept_query_log`, `skill_package`, `skill`, `skill_file`, `skill_source`, `skill_relation`.
 
 #### FTS Extension *(new)*
+
 DuckDB's full-text search extension. Inverted indexes with BM25 scoring over chapter text, Porter stemming, English stopword handling.
 
 **Purpose:** Fast keyword search. Best for exact-term queries.
 
 #### VSS Extension *(new)*
+
 Vector Similarity Search with HNSW indexes over embedding vectors stored in `ARRAY` columns.
 
 **Purpose:** Semantic search. Finds conceptually related content without keyword overlap.
 
 **Design notes:**
+
 - Embeddings generated via sentence-transformers, stored alongside chapter and concept tables.
 - HNSW persistence flagged experimental in DuckDB; if unstable, fall back to in-memory indexes rebuilt on KB MCP server startup.
 
 #### DuckPGQ Extension *(new)*
+
 Property graph queries via SQL/PGQ (SQL:2023 standard). Vertex and edge tables defined over existing relational tables; no data duplication.
 
 **Purpose:** Native graph traversal. Makes the concept graph a first-class citizen with standard graph algorithms (shortest paths, pattern matching, community detection).
 
 **Examples enabled:**
+
 - `ANY SHORTEST PATH` from a beginner concept to an advanced one → natural prerequisite ordering for learning paths.
 - Pattern match for `(chapter)-[DISCUSSES]->(concept)<-[DISCUSSES]-(chapter)` → cross-author comparisons.
 - Community detection over the concept graph → domain clustering for Skills Factory decomposition.
@@ -243,22 +259,27 @@ Property graph queries via SQL/PGQ (SQL:2023 standard). Vertex and edge tables d
 ### 5.4 Retrieval & Ranking
 
 #### Hybrid Retriever *(new)*
+
 Fans a query out to all three retrieval modalities in parallel and merges candidate sets. Different query shapes use different modality weightings.
 
 **Purpose:** No single retrieval modality is best for all queries. The hybrid retriever is modality-agnostic from the caller's perspective.
 
 #### Ranking Engine — Two Modes *(new)*
+
 Multi-criteria scoring with two distinct operating modes for different consumers. Detailed in §8.
 
 - **Interactive mode** (KB assistant): surface conflicts with scores, let the agent reason about them with the user.
 - **Generation mode** (Skills Factory): rank silently, apply a selection strategy, emit clean consolidated output.
 
 #### Source Merge Layer *(new)*
+
 Combines ranked results from books and doc snapshots. Behavior differs by mode:
+
 - **Interactive:** presents multiple perspectives with explicit scores and conflict flags.
 - **Generation:** applies the selected strategy (§8.3) and produces consolidated content with silent provenance.
 
 #### Auto-Discovery *(new)*
+
 When the hybrid retriever encounters a query term that doesn't resolve to any existing concept or doc source, auto-discovery probes the live doc source stack to find and ingest relevant content inline. This is how the knowledge base grows organically from actual use — you don't have to know in advance which technologies you'll ask about.
 
 **Mechanism:**
@@ -284,14 +305,17 @@ When the hybrid retriever encounters a query term that doesn't resolve to any ex
 ### 5.5 Applications
 
 #### Claude Code *(new — replaces v1 Claude Desktop setup)*
+
 The agent harness. Runs locally on the user's Mac, authenticated with their Claude Max subscription so API token costs do not apply. Loads skills from the project's `.claude/skills/` directory, commands from `.claude/commands/`, project instructions from `CLAUDE.md`, and connects to local MCP servers.
 
 **Purpose:** Interactive and agentic interface to the knowledge base and Skills Factory. Every v2 capability runs through Claude Code.
 
 #### Skills Factory *(new)*
+
 Generates coherent Claude Skills packages from the corpus on demand. Detailed in §6.3.
 
 #### Pattern Library *(existing, unchanged)*
+
 YAML-based reusable patterns with canonical implementations and variations. In v2, patterns are first-class graph citizens — Skills reference them rather than inlining content, and the entity extractor can identify when chapter content matches a pattern.
 
 ---
@@ -366,6 +390,7 @@ Parallel to book ingestion, but triggered by doc source refreshes rather than co
 9. **Compute alignment** — for each concept a section discusses (now unified via resolution), compare against existing book chapters on the same concept. Record `CORROBORATES` or `CONTRADICTS` edges at section granularity.
 
 Triggered four ways (see §6.6 for the proactive scheduling layer):
+
 - **On-demand** from Q&A flow when a query touches a concept whose snapshot is beyond its `refresh_ttl_days`.
 - **Proactively scheduled** via a LaunchAgent running nightly, refreshing sources in priority tiers (Hot daily, Warm weekly, Cool monthly).
 - **Before Skills Factory runs**, for all concepts in scope of the target package.
@@ -471,6 +496,7 @@ The script:
 5. Writes a summary to `logs/refresh.log`: sources checked, sources changed, sections added/updated, extraction pending flags.
 
 **Cost profile.** With ~50 registered doc sources across the tiers, realistic workload is roughly:
+
 - Hot tier (~5 sources, daily): 1–2 content-changed refreshes per night, a few seconds each for the non-LLM steps.
 - Warm tier (~15 sources, weekly): 2–5 content-changed refreshes per week.
 - Cool tier (~30 sources, monthly): ~5 per month.
@@ -478,6 +504,7 @@ The script:
 Total: under a minute of compute per night for the LaunchAgent. Deferred extraction adds 10–30 seconds per changed source on first interactive use — but only for sources that actually changed, which is a small fraction.
 
 **User-facing commands** (see §9.3 for full list):
+
 - `/kb-focus <domain>` — elevate a domain's sources to Hot for the duration of a project.
 - `/kb-pin-source <name>` / `/kb-unpin-source <name>` — lock or release individual sources.
 - `/kb-refresh-status` — show what's fresh, what's stale, when each tier refreshes next.
@@ -817,7 +844,7 @@ For a Databricks DE package, most Skills would use recent-doc anchored with cons
 
 For a candidate passage *p* relative to a query/Skill-scope *q*:
 
-```
+```text
 score(p, q) = w_rec  × recency(p)
             + w_doc  × doc_alignment(p)
             + w_rel  × relevance(p, q)
@@ -862,7 +889,7 @@ Local-first, zero cloud. Claude Code is the agent harness. User authenticates wi
 
 ### 9.2 Project Layout
 
-```
+```text
 mypub/
 ├── CLAUDE.md                   # Project instructions for Claude Code
 ├── README.md
@@ -1151,6 +1178,7 @@ The local-first architecture is the right answer today. If the requirements ever
 ### When to consider
 
 Concrete triggers:
+
 - You want to share myPub or specific Skills packages with collaborators who aren't comfortable with Claude Code.
 - You want scheduled runs (e.g., regenerate Skills packages weekly as docs change).
 - You want a web UI so non-technical users can invoke the Skills Factory.

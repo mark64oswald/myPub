@@ -36,7 +36,8 @@ duckdb data/catalog.ddb "SELECT name FROM sqlite_master WHERE type='table';"
 ```
 
 Expected output:
-```
+
+```text
 ┌──────────────────────┐
 │         name         │
 │       varchar        │
@@ -62,7 +63,8 @@ python scripts/index_books.py \
 ```
 
 Example output:
-```
+
+```text
 Connecting to catalog: ~/Developer/projects/myPub/data/catalog.ddb
 Found 345 ePub files to index (limiting to 10)
 --------------------------------------------------
@@ -82,11 +84,10 @@ python scripts/extract_concepts.py --all --verbose
 ```
 
 This will:
+
 - Scan chapter content for known concept keywords
 - Create concept records in the catalog
 - Link concepts to chapters with treatment levels
-
-
 
 ## Step 5: Configure Claude Desktop
 
@@ -117,7 +118,7 @@ duckdb data/catalog.ddb
 SELECT COUNT(*) AS book_count FROM books;
 
 -- Books by domain coverage
-SELECT 
+SELECT
     UNNEST(subjects) AS subject,
     COUNT(*) AS book_count
 FROM books
@@ -127,7 +128,7 @@ ORDER BY book_count DESC
 LIMIT 10;
 
 -- Chapters with most concepts
-SELECT 
+SELECT
     b.title AS book,
     ch.title AS chapter,
     array_length(ch.key_concepts) AS concept_count
@@ -149,17 +150,20 @@ ORDER BY concept_count DESC;
 Open Claude Desktop and try these queries:
 
 1. **Basic search:**
-   ```
+
+   ```text
    What books in my collection cover Change Data Capture?
    ```
 
 2. **Learning request:**
-   ```
+
+   ```text
    Explain dimensional modeling based on my knowledge base
    ```
 
 3. **Comparison:**
-   ```
+
+   ```text
    Compare how different authors approach data warehouse architecture
    ```
 
@@ -181,7 +185,7 @@ that you can enhance with Claude.
 
 Use Claude to improve concept extraction and add relationships:
 
-```
+```text
 Review the concepts in my knowledge base for "data engineering" domain.
 Suggest missing concepts and relationships between them.
 ```
@@ -190,7 +194,7 @@ Suggest missing concepts and relationships between them.
 
 Identify patterns in your books and create pattern files:
 
-```
+```text
 Find the dimensional modeling patterns described in my Kimball books.
 Create pattern YAML files for the key patterns.
 ```
@@ -199,7 +203,7 @@ Create pattern YAML files for the key patterns.
 
 Create a comprehensive skill for your primary domain:
 
-```
+```text
 Generate a detailed skill file for healthcare analytics using all
 relevant chapters from my knowledge base.
 ```
@@ -209,6 +213,7 @@ relevant chapters from my knowledge base.
 ### "No such table" errors
 
 Make sure you initialized the schema:
+
 ```bash
 duckdb data/catalog.ddb < schemas/catalog.sql
 ```
@@ -222,6 +227,7 @@ duckdb data/catalog.ddb < schemas/catalog.sql
 ### Concepts not linking
 
 The keyword-based extraction is basic. For better results:
+
 - Use Claude to enrich concepts after initial extraction
 - Manually add important concepts and relationships
 

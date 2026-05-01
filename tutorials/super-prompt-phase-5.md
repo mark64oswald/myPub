@@ -3,6 +3,7 @@
 ## Context
 
 You are completing the myPub knowledge base setup. This is Phase 5 of 5, focused on:
+
 - Indexing remaining books
 - Refining concept extraction
 - Completing documentation
@@ -20,9 +21,10 @@ python scripts/index_books.py --source ~/Documents/ebooks --verbose 2>&1 | tee i
 ```
 
 Review results:
+
 ```sql
 -- Summary
-SELECT 
+SELECT
     COUNT(*) AS total_books,
     SUM(chapter_count) AS total_chapters,
     SUM(total_tokens) AS total_tokens,
@@ -35,8 +37,8 @@ FROM books
 WHERE chapter_count = 0 OR chapter_count IS NULL;
 
 -- Token distribution
-SELECT 
-    CASE 
+SELECT
+    CASE
         WHEN total_tokens < 50000 THEN 'Small (<50K)'
         WHEN total_tokens < 200000 THEN 'Medium (50-200K)'
         WHEN total_tokens < 500000 THEN 'Large (200-500K)'
@@ -55,7 +57,7 @@ Identify gaps in concept coverage:
 
 ```sql
 -- Chapters without concept mappings
-SELECT 
+SELECT
     b.title AS book,
     COUNT(*) AS unmapped_chapters
 FROM chapters ch
@@ -67,7 +69,7 @@ ORDER BY unmapped_chapters DESC
 LIMIT 20;
 
 -- Concepts with few chapters
-SELECT 
+SELECT
     c.name,
     c.domain,
     COUNT(cc.chapter_id) AS chapter_count
@@ -87,7 +89,7 @@ FROM chapters ch
 JOIN books b ON ch.book_id = b.book_id
 LEFT JOIN chapter_concepts cc ON ch.chapter_id = cc.chapter_id
 WHERE cc.chapter_id IS NULL
-  AND (b.title ILIKE '%kimball%' 
+  AND (b.title ILIKE '%kimball%'
        OR b.title ILIKE '%warehouse%'
        OR b.title ILIKE '%healthcare%'
        OR b.title ILIKE '%spark%')
@@ -102,7 +104,7 @@ ORDER BY b.title, ch.sequence;
 -- Find concepts that might need REQUIRES relationships
 -- (co-occur frequently but no relationship defined)
 WITH concept_pairs AS (
-    SELECT 
+    SELECT
         cc1.concept_id AS concept_a,
         cc2.concept_id AS concept_b,
         COUNT(*) AS co_occurrences
@@ -112,7 +114,7 @@ WITH concept_pairs AS (
     GROUP BY cc1.concept_id, cc2.concept_id
     HAVING COUNT(*) >= 3
 )
-SELECT 
+SELECT
     c1.name AS concept_a,
     c2.name AS concept_b,
     cp.co_occurrences,
@@ -120,7 +122,7 @@ SELECT
 FROM concept_pairs cp
 JOIN concepts c1 ON cp.concept_a = c1.concept_id
 JOIN concepts c2 ON cp.concept_b = c2.concept_id
-LEFT JOIN concept_relationships cr 
+LEFT JOIN concept_relationships cr
     ON (cr.source_id = cp.concept_a AND cr.target_id = cp.concept_b)
     OR (cr.source_id = cp.concept_b AND cr.target_id = cp.concept_a)
 WHERE cr.relationship IS NULL
@@ -140,13 +142,14 @@ WHERE c1.name ILIKE '%' || c2.name || '%'
 ```
 
 For duplicates, merge by adding aliases:
+
 ```sql
-UPDATE concepts 
+UPDATE concepts
 SET aliases = array_append(aliases, 'duplicate_name')
 WHERE concept_id = 'canonical_id';
 
 -- Then reassign chapter_concepts
-UPDATE chapter_concepts 
+UPDATE chapter_concepts
 SET concept_id = 'canonical_id'
 WHERE concept_id = 'duplicate_id';
 
@@ -172,7 +175,8 @@ LIMIT 50;
 For each, load chapter and generate summary:
 
 **Prompt:**
-```
+
+```text
 Summarize this chapter in 2-3 sentences. Focus on:
 - What is the main topic?
 - What will the reader learn?
@@ -182,8 +186,9 @@ Keep it concise and informative.
 ```
 
 Update:
+
 ```sql
-UPDATE chapters 
+UPDATE chapters
 SET summary = '{generated_summary}'
 WHERE chapter_id = '{chapter_id}';
 ```
@@ -194,7 +199,7 @@ Ensure pattern coverage for key domains:
 
 ```sql
 -- Pattern coverage by domain
-SELECT 
+SELECT
     domain,
     category,
     COUNT(*) AS pattern_count
@@ -206,6 +211,7 @@ ORDER BY domain, category;
 Minimum target patterns:
 
 **Healthcare:**
+
 - [ ] fct_claim_line
 - [ ] fct_claim_header
 - [ ] dim_member
@@ -216,6 +222,7 @@ Minimum target patterns:
 - [ ] metrics/mlr
 
 **Dimensional Modeling:**
+
 - [ ] facts/transaction_fact
 - [ ] facts/periodic_snapshot
 - [ ] facts/accumulating_snapshot
@@ -226,6 +233,7 @@ Minimum target patterns:
 - [ ] common/surrogate_key
 
 **Data Engineering:**
+
 - [ ] ingestion/cdc_pattern
 - [ ] ingestion/batch_extract
 - [ ] transformation/medallion
@@ -242,7 +250,7 @@ Run these validation queries:
 ```sql
 -- 1. Can find content for major topics
 SELECT COUNT(*) > 0 AS dimensional_modeling_found
-FROM v_concept_chapters 
+FROM v_concept_chapters
 WHERE concept_name = 'Dimensional Modeling';
 
 -- 2. Prerequisites work
@@ -325,7 +333,7 @@ After initial setup, maintain with:
 3. **New patterns:** Extract from chapters, document variations
 4. **Skill updates:** Regenerate when new content added
 
-## Congratulations!
+## Congratulations
 
 Your myPub knowledge base is now ready for use. Key capabilities:
 
