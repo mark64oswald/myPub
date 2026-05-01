@@ -81,18 +81,20 @@ CREATE TABLE book_author (
 );
 
 CREATE TABLE chapter (
-    chapter_id        BIGINT     PRIMARY KEY DEFAULT nextval('seq_chapter_id'),
-    book_id           BIGINT     NOT NULL REFERENCES book(book_id),
-    chapter_num       INTEGER,
-    parent_chapter_id BIGINT,  -- logical self-ref; FK omitted (DuckDB 1.5 per-row
-                               -- checker mis-blocks UPDATE/DELETE even when the
-                               -- new value is NULL). Application enforces.
-    title             VARCHAR,
-    href              VARCHAR,
-    content           TEXT,
-    content_hash      VARCHAR,  -- SHA-256 of content, for chapter-level diffing during re-index
-    token_count       INTEGER,
-    indexed_at        TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+    chapter_id              BIGINT     PRIMARY KEY DEFAULT nextval('seq_chapter_id'),
+    book_id                 BIGINT     NOT NULL REFERENCES book(book_id),
+    chapter_num             INTEGER,
+    parent_chapter_id       BIGINT,  -- logical self-ref; FK omitted (DuckDB 1.5 per-row
+                                     -- checker mis-blocks UPDATE/DELETE even when the
+                                     -- new value is NULL). Application enforces.
+    title                   VARCHAR,
+    href                    VARCHAR,
+    content                 TEXT,
+    content_hash            VARCHAR,  -- SHA-256 of content, for chapter-level diffing during re-index
+    token_count             INTEGER,
+    indexed_at              TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    extraction_attempted_at TIMESTAMP, -- set after concept extraction has run; resumable sessions skip set rows
+    procedure_attempted_at  TIMESTAMP  -- set after procedure extraction has run; same purpose, separate from concept extraction
 );
 
 CREATE INDEX idx_chapter_book   ON chapter(book_id);
@@ -280,6 +282,17 @@ CREATE TABLE procedure (
 );
 
 CREATE INDEX idx_procedure_source ON procedure(source_type, source_id);
+
+-- Procedure → Concept link (operates_on). Concept references on extracted
+-- procedures pass through EntityResolver, then land here. The IMPLEMENTS edge
+-- (Procedure → Pattern) uses procedure.implements_pattern instead.
+CREATE TABLE procedure_concept (
+    procedure_id BIGINT NOT NULL REFERENCES procedure(procedure_id),
+    concept_id   BIGINT NOT NULL REFERENCES concept(concept_id),
+    PRIMARY KEY (procedure_id, concept_id)
+);
+
+CREATE INDEX idx_procedure_concept_concept ON procedure_concept(concept_id);
 
 
 -- ============================================================================
