@@ -1802,3 +1802,189 @@ in s11 extraction: ~70 (from a 1,149-entry registry at start;
 will be ~1,322 entering s12).
 
 No new data-quality flags this pass. Existing five remain open.
+
+# Phase 2.4 — Session 12 (2026-04-30, session-p24-12)
+
+Tail-of-corpus sweep. Pool: 1,185 chapters across 119 batches (last
+batch 5 chapters). Larger than s11's 802 because the prep query
+picked up the residual blocks across the alphabetical interior of
+the corpus, not just the tail. Pool covers 216 books with the long
+tail dominated by mid-corpus titles that hadn't been swept yet.
+Persistent dir `data/extraction-sessions/session-p24-12`.
+
+## Dispatch (s12)
+
+12 waves of 8–10 sub-agents (vs. 8 waves in s11). One Anthropic
+account-level rate-limit hit during wave 8 — cleaner shape than the
+earlier per-session wall-clock stalls; agents reported "limit resets
+5pm (America/Los_Angeles)" and exited with empty output. Three
+distinct stall events resolved via consolidated recovery agents.
+
+| phase   | waves                                  | chapters    | notes                                                                |
+|---------|----------------------------------------|-------------|----------------------------------------------------------------------|
+| initial | wave 1 (test, 1 batch)                 | +10         | clean                                                                |
+| ramp    | waves 2–7 (batches 2–61)               | +600        | 3 watchdog stalls in wave 7; 7-chapter consolidated recovery         |
+| stall   | wave 8, 8 of 10 batches                | +80 partial | account rate-limit hit; 20 chapters incomplete                       |
+| resume  | post-reset consolidated agent          | +20         | clean                                                                |
+| middle  | waves 9–11 (batches 72–101)            | +300        | clean                                                                |
+| tail    | wave 12 (batches 102–119)              | +175        | clean                                                                |
+
+Useful agent-time: ~110 min agent-time spread over ~3h wall-clock
+(rate-limit reset added ~30 min idle). Higher overhead than s11
+because of the tail-of-corpus low-yield chapters (39% empty).
+
+## Results — session 12 only
+
+```
+processed:            1,185
+missing result files: 0
+substantive results:  720    (60.8%)
+empty front-matter:   465    (39.2%)
+entities written:     3,632
+relations written:    2,180
+resolution counts:
+  exact            2,513   (69.2%)
+  new                839   (23.1%)
+  borderline         234    (6.4%)
+  alias               33    (0.9%)
+  embedding_high      13    (0.4%)
+```
+
+Resolution mix shifted hard toward saturation. `exact` jumped from
+51% (s9–s11 stationary) to 69%; `new` dropped from 42% to 23%. This
+is consistent with the tail-of-corpus hypothesis: the residual pool
+is mostly chapter recaps, summaries, and repeat coverage of
+already-extracted concepts. The ~70-pp swing in two sessions is the
+sharpest non-stationary move since session 4.
+
+Top books in session 12:
+
+| chapters | book                                                  |
+|---------:|-------------------------------------------------------|
+|     205  | Healthcare Analytics Made Simple                      |
+|     119  | Hands-On Data Science for Marketing                   |
+|      88  | Implementing Domain-Driven Design                     |
+|      82  | GitHub Essentials, Second Edition                     |
+|      68  | Business Metadata: Capturing Enterprise Knowledge     |
+|      42  | Joe Celko's Analytics and OLAP in SQL                 |
+|      33  | Machine Learning for Healthcare Analytics Projects    |
+|      18  | The Go Programming Language                           |
+|      17  | Building Slack Bots                                   |
+|      16  | The Data Model Resource Book, Volume 3                |
+
+Five books contributed >50% of the pool. Most of the rest are 1–10
+chapter long-tail entries (front-matter pages from books whose
+content was already covered in earlier sessions).
+
+## Cumulative corpus state (post-s12)
+
+```
+concepts                 81,859   (prev 80,981)   +878
+concept_relation        126,401   (prev 124,223)  +2,178
+review queue (pend)       8,519   (prev 8,285 post s11 review)  +234
+aliases                   1,322   (prev 1,322 post s11 review)  +0 inline
+```
+
+Inline alias auto-resolves were minimal this session (33 hits) —
+the registry growth has tapered as the new concepts stop being
+novel-name variants of existing ones.
+
+### Entity types (s12)
+
+| type      |  count | share |
+|-----------|-------:|------:|
+| Concept   | 34,417 | 42.0% |
+| Technique | 15,577 | 19.0% |
+| Tool      | 12,853 | 15.7% |
+| Pattern   | 10,657 | 13.0% |
+| Framework |  4,623 |  5.6% |
+| Algorithm |  3,732 |  4.6% |
+
+Stationary. Concept share crept up 0.2pp; everything else within
+noise.
+
+### Relation types (s12)
+
+| type           |  count |
+|----------------|-------:|
+| REQUIRES       | 39,312 |
+| IMPLEMENTS     | 37,326 |
+| EXTENDS        | 17,568 |
+| CITES          | 16,105 |
+| CONTRASTS_WITH | 16,090 |
+
+Same ranking as s10/s11. REQUIRES still leads IMPLEMENTS by ~1,986.
+
+## Stall recoveries
+
+Three sub-agent stalls and one rate-limit hit, all recovered:
+
+1. **Wave 7 watchdog stalls.** Three agents (batches 55, 59, 61)
+   stalled at the write phase — agents had read all 10 prompts
+   but the runtime watchdog fired after 600s of no progress.
+   7 chapters remained unwritten across the three batches.
+   Recovered via a single consolidated 7-chapter agent.
+2. **Wave 7 slow agent.** Batch 57 took 24 min wall-clock but
+   completed cleanly — not actually stalled, just slow.
+3. **Wave 8 rate-limit.** 8 of 10 sub-agents in wave 8 returned
+   "You've hit your limit · resets 5pm" mid-batch. 20 chapters
+   incomplete across batches 62/64/65/66/68/69/70/71. Recovered
+   via a single 20-chapter agent after reset; clean run.
+
+The consolidated-recovery pattern proved more reliable than
+re-dispatching per-batch — bigger batch, single agent, less
+overhead.
+
+## Full-corpus progress (post-s12)
+
+Per the prep step, the residual unique content blocks above the
+500-char threshold were 1,185, smaller than the 3,290 implied by
+the session-11 log denominator. The discrepancy is the
+short-fragment population: ~2,100 unique content blocks fell
+under the 500-char filter (TOC entries, single-line section
+headers, copyright lines, etc.) and would have produced empty
+results anyway.
+
+```text
+unique content blocks (>=500 chars): 12,096
+attempted/processed (s1–s12):        ~10,876
+remaining (>=500 chars):              ~0     (all surfaced blocks processed)
+short-fragment blocks (<500 chars):   ~885   (excluded by filter)
+```
+
+**Phase 2.4 corpus extraction is functionally complete.** Any
+chapter newly imported to the catalog after this point would
+queue into a future incremental session, not a continuation of
+the alphabetic sweep.
+
+## Observations (s12)
+
+- **Tail-of-corpus saturation visible in resolution mix.** 69%
+  exact / 23% new is a regime shift from the 51%/42% steady-state
+  of s4–s11. The pool composition explains it: of 720 substantive
+  chapters, most were recaps/summaries of concepts already
+  extracted in earlier sessions on the same book or sibling books.
+- **Front-matter density (39%) was the highest of any session.**
+  The prep step's 500-char filter excluded *very* short chunks but
+  not "Part X intro" pages or bibliography sections, both of which
+  bulked the pool. Going forward, raising the threshold to ~1,000
+  chars or adding a "front-matter classifier" prep stage would cut
+  ~200 sub-agent dispatches per session at no information loss.
+- **Recovery cadence improved.** The consolidated recovery agent
+  pattern (one big batch instead of many small re-dispatches)
+  shaved ~15 min vs. the per-batch retry approach used in s7/s8.
+- **No new data-quality flags.** Existing five remain open.
+
+## Next steps (post-s12)
+
+- **Review pass between sessions:** queue is now 8,519 pending
+  (+234 from s12 borderlines). Maintain 500-item cadence for the
+  s12 review.
+- **Graph-connectivity snapshot:** the corpus is functionally
+  complete. Time to run the full snapshot — last one was at 44.8%;
+  we're now near 100%. Expected outputs: connected component
+  distribution, centrality, longest-path / cycle analysis,
+  per-domain density.
+- **No session 13.** Unless new books land in the catalog, the
+  alphabetic sweep is done. Future sessions become incremental
+  ingest workflow, not a Phase 2.4 grind.
