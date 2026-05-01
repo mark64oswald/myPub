@@ -1988,3 +1988,90 @@ the alphabetic sweep.
 - **No session 13.** Unless new books land in the catalog, the
   alphabetic sweep is done. Future sessions become incremental
   ingest workflow, not a Phase 2.4 grind.
+
+## Post-session-12 review pass (2026-04-30)
+
+500-item pass — sim range 0.899 → 0.821. Final review pass against
+the s12 borderlines plus residual queue.
+
+```text
+keep-separate  298  (59.6%)
+alias          202  (40.4%)
+queue pending  8,519 → 8,019
+aliases        1,322 → 1,522   (+200 net; ~2 collisions)
+```
+
+Alias share rebounded slightly (39% → 40%) versus s11. The s12
+contribution was healthcare-heavy (HCAHPS communication topics,
+HVBP/HRRP program acronyms, ICD/CPT code variants) and TypeScript
+generic-helper variants; both produce more aliases than the
+contrast-pair-dominated s11 tail.
+
+### Patterns (s12 review)
+
+- **Healthcare program acronym/expansion pairs** dominated alias
+  hits: `HCPCS` ↔ `Healthcare Common Procedure Coding System`,
+  `BCNF` ↔ `Boyce-Codd Normal Form`, `BNF` ↔ `Backus Normal Form`,
+  `VLDB` ↔ `Very Large Database`, `MTU` (kept separate vs Jumbo
+  Frames), `HVBP` ↔ `Hospital Value-Based Purchasing (HVBP)`,
+  `PSI 90` ↔ `AHRQ Composite (PSI-90)`, `RB` ↔ `Retinoblastoma
+  Gene (RB1)`. Standard expansion-form alias pattern.
+- **Hay's data-model entity-name distinctions** surfaced again
+  (s11 saw the same): `CONTACT MECHANISM CATEGORY CLASSIFICATION`
+  vs `CONTACT MECHANISM CATEGORY`, `Postal Address Part Type` vs
+  `Postal Address Part`, `TRAVEL PARTNERSHIP` vs `TRAVEL PARTNER`,
+  `INVESTOR` vs `CUSTOMER`. All keep-separate — Hay's `_TYPE` and
+  `_CATEGORY` suffixes are load-bearing.
+- **HCAHPS communication subscales** all kept-separate as
+  expected: `Communication with Doctors` vs
+  `Communication with Nurses` vs `Communication About Medicines`.
+  These are distinct survey dimensions in the CMS HCAHPS survey.
+- **TypeScript generic-helper paren variants** continued aliasing:
+  `ReturnType` ↔ `Function Return Type`, `Partial` ↔ `Partial<T>`,
+  `Type alias declaration` ↔ `Type Aliases`. Same family as
+  s10/s11 picked up.
+- **AWS regional/version variants**: `Amazon Timestream` ↔
+  `AWS Timestream`, `GCP Dataproc` ↔ `Google Dataproc`,
+  `GovCloud` ↔ `AWS GovCloud`, `AWS SageMaker` ↔
+  `Amazon SageMaker`, `AWS Lake Formation Blueprints` ↔
+  `Lake Formation Blueprints`. All alias.
+- **Contrast pairs dominated keep-separates** (~70 items): same
+  shape as s11 — Forward/Backward Recovery, Forward/Backward-
+  Stepwise Logistic Regression, RHS/LHS Reduction, FIRSTCHILD/
+  LASTCHILD, Manual/Automated Tracing, Online/Offline Observer,
+  Multivariate/Univariate Outlier, Spot/Reserved Instance, Host
+  Number / Network Number, etc.
+
+### Notable judgement calls
+
+- `'Logit function' ↔ 'Log-Odds'` — alias. Mathematically
+  identical: logit(p) = ln(p/(1-p)) = log-odds.
+- `'Coefficient of Determination'` already aliased to `R-squared`
+  in s11; this session encountered no further variants of that.
+- `'PEP 572' ↔ 'Walrus Operator'` — alias. PEP 572 is the proposal
+  that introduced `:=`, which the language community calls walrus.
+- `'Five Lines Rule' ↔ 'Five Lines of Code Rule'` — alias.
+- `'Phase IV Trial' ↔ 'Phase IV Clinical Trial'` was aliased in
+  s11; s12 picked up the parallel `Phase IV` vs `Phase III` pair
+  which is correctly keep-separate (different trial phases).
+
+Cumulative aliases across all reviews: 1,522. Auto-resolve hits
+in s12 extraction: 33 (down from ~70 in s11) — registry growth
+has tapered as the corpus saturated.
+
+No new data-quality flags this pass. Existing five remain open.
+
+### Phase 2.4 review-pass totals
+
+| pass | items | alias | keep-separate | rename | aliases added |
+|------|------:|------:|--------------:|-------:|--------------:|
+| s7   | 380   | 160   | 220           | 0      | ~160          |
+| s8   | 500   | 226   | 274           | 0      | ~218          |
+| s9   | 500   | 208   | 292           | 0      | ~200          |
+| s10  | 500   | 229   | 271           | 0      | ~224          |
+| s11  | 500   | 195   | 305           | 0      | +173 net      |
+| s12  | 500   | 202   | 298           | 0      | +200 net      |
+| **total** | **2,880** | **1,220** | **1,660** | **0**  | **~1,175 added** |
+
+42% alias / 58% keep-separate over 6 review passes. Roughly
+stationary across the corpus saturation curve.
