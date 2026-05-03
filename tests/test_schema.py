@@ -180,6 +180,9 @@ def test_not_yet_populated_tables_are_empty(conn):
         "concept_alias", "concept_resolution_queue", "concept_query_log",
         # Phase 3
         "procedure", "procedure_concept",
+        # Phase 4.2 — doc_source seeded with Context7/DeepWiki/GitHub entries.
+        # doc_snapshot/doc_section and their embeddings still empty until 4.4.
+        "doc_source",
     }
     for table in EXPECTED_TABLES - populated_so_far:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
