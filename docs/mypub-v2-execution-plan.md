@@ -631,7 +631,20 @@ Test /kb-retire-book:
 Build the KB MCP server at mcp-servers/kb-mcp/server.py using FastMCP.
 
 Use Context7 to check the current FastMCP API for tool registration and stdio
-transport setup.
+transport setup. Import as `from fastmcp import FastMCP` (the standalone
+package, pinned in pyproject as fastmcp>=3.0,<4) — NOT
+`from mcp.server.fastmcp import FastMCP`, which is the legacy bundled-SDK form.
+
+DuckDB extension contract: on connection init, the server must explicitly LOAD
+vss, fts, and duckpgq before any query. None of the three auto-load. The
+"mypub" property graph is already registered on the catalog (see
+scripts/build_property_graph.py:48 for the existing load pattern). The
+concept_relates_to edge is what find_prerequisites traverses.
+
+Reuse the EntityResolver in mcp-servers/kb-mcp/resolution.py — it's caller-conn,
+no-commit, and importable as `from resolution import EntityResolver`. The
+resolver lazy-loads sentence-transformers on first .resolve() call (~1–3s),
+so either pre-warm at server startup or document the cold-start.
 
 Start with three tools:
 - search_chapters(query, mode='interactive') — fans out to FTS + VSS + DuckPGQ
