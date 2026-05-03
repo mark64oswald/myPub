@@ -462,9 +462,12 @@ class Manifest:
 # Target selection
 # ----------------------------------------------------------------------------
 
-# Front-matter titles that aren't worth dispatching; same list used by
-# extract_batch.py. Procedures are even less likely to live here, so we keep
-# the same filter.
+# Front-matter titles that aren't worth dispatching. Two layers:
+#   1) FRONT_MATTER_FILTER — exact-match list (kept for extract_batch.py parity)
+#   2) FRONT_MATTER_REGEX — regex of patterns we observed in s7-s9 producing
+#      consistent zero-procedure dispatches (Part N intros, Glossary, References,
+#      Epilogue, Packt-style back-matter, etc.). Adding this layer lets each
+#      session reach more real procedural content within the same dispatch budget.
 FRONT_MATTER_FILTER = (
     "  'copyright', 'contents', 'table of contents', 'foreword', 'preface',"
     "  'acknowledgments', 'acknowledgements', 'dedication', 'colophon',"
@@ -474,6 +477,35 @@ FRONT_MATTER_FILTER = (
     "  'disclaimer', 'legal notice', 'notice', 'errata',"
     "  'contact us', 'o''reilly online learning', 'using the examples',"
     "  'conventions used in this book'"
+)
+
+# Anchored regex patterns matched against LOWER(TRIM(title)). Single combined
+# pattern alternation; DuckDB's REGEXP_MATCHES treats it as a partial-match
+# search, so we anchor each alternative with ^ where appropriate.
+FRONT_MATTER_REGEX = (
+    r'^(part [ivxlcdm0-9]'         # "Part 1", "Part I", "Part II", ...
+    r'|appendix [a-z]:.*(reference|glossary|bibliography|acronym)'  # ref/gloss appendices
+    r'|glossary'                   # "Glossary", "Glossary of ..."
+    r'|.*\bglossary$'              # "Acronyms Glossary", "Key Terms Glossary"
+    r'|references$'                # exact
+    r'|bibliography'
+    r'|webliography'
+    r'|epilogue'
+    r'|other books'                # "Other Books You May Enjoy"
+    r'|free benefits'
+    r'|why subscribe'
+    r'|unlock your'                # "Unlock Your Exclusive Benefits"
+    r'|series editor'              # "Series Editor Foreword"
+    r'|forewords?$'                # bare "Foreword" / "Forewords" (already in exact list, defensive)
+    r'|audience and prerequisite'
+    r'|who.*this book.*for'        # "Who this book is for", "Who's this book for?"
+    r'|how to use this book'
+    r'|^acronyms'
+    r'|^key terms'
+    r'|^brief table of contents'
+    r'|^objective and approach'
+    r'|^audience'
+    r')'
 )
 
 
@@ -507,6 +539,7 @@ def _select_chapters(
         "ch.content_hash IS NOT NULL",
         f"LENGTH(ch.content) >= {int(min_content_chars)}",
         f"LOWER(TRIM(ch.title)) NOT IN ({FRONT_MATTER_FILTER})",
+        f"NOT REGEXP_MATCHES(LOWER(TRIM(ch.title)), '{FRONT_MATTER_REGEX}')",
     ]
     params: list = []
     if chapter_ids:
