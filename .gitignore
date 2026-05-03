@@ -4,6 +4,7 @@
 data/*.ddb
 data/*.db
 data/*.duckdb
+data/*.wal
 
 # Python
 __pycache__/

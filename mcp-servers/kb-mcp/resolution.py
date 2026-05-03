@@ -340,6 +340,28 @@ class EntityResolver:
         return row[0]
 
     # ------------------------------------------------------------------
+    # Read-only lookup (callers that must never create a new concept)
+    # ------------------------------------------------------------------
+
+    def resolve_lookup_only(
+        self, candidate_name: str, concept_type: Optional[str] = None
+    ) -> Optional[int]:
+        """Return an existing concept_id for `candidate_name`, or None.
+
+        Runs the exact-name and alias stages only — never embeds, never
+        creates, never enqueues. Used by read-only retrieval tools that
+        want a name → concept_id lookup without polluting the graph with
+        provisional concepts.
+        """
+        if not candidate_name or not candidate_name.strip():
+            return None
+        candidate_name = candidate_name.strip()
+        exact = self._exact_match(candidate_name, concept_type)
+        if exact is not None:
+            return exact
+        return self._alias_match(candidate_name)
+
+    # ------------------------------------------------------------------
     # Alias registration (used by resolve() and by seed_aliases.py)
     # ------------------------------------------------------------------
 

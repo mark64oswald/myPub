@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mypub-kb": {
+      "command": ".venv/bin/python3",
+      "args": ["mcp-servers/kb-mcp/server.py"]
+    }
+  }
+}
