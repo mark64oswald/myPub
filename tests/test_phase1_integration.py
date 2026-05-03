@@ -35,17 +35,24 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 
 @pytest.fixture(scope="module")
 def conn() -> Iterable[duckdb.DuckDBPyConnection]:
-    """Open the catalog once per test module with all extensions ready."""
+    """Open the catalog read-only with FTS and VSS loaded.
+
+    Read-only on purpose: this lets the integration tests run while the
+    KB MCP server (also read-only) is up, instead of blocking on an
+    exclusive RW lock. DuckDB allows multiple RO processes; an RW
+    process blocks all of them.
+
+    DuckPGQ + property graph DDL are intentionally not loaded here. The
+    third modality below uses a SQL JOIN (author→book→chapter is plain
+    FK navigation), which is what the production server's traversal
+    paths do too. Live MATCH coverage stays in
+    scripts/build_property_graph.py and scripts/install_extensions.py.
+    """
     assert CATALOG.exists(), f"catalog not found at {CATALOG}"
-    c = duckdb.connect(str(CATALOG))
+    c = duckdb.connect(str(CATALOG), read_only=True)
     c.execute("LOAD fts")
     c.execute("LOAD vss")
     c.execute("SET hnsw_enable_experimental_persistence = true")
-    c.execute("LOAD duckpgq")
-
-    import re  # pylint: disable=import-outside-toplevel
-    graph_ddl = (PROJECT_ROOT / "schemas" / "property_graph.sql").read_text()
-    c.execute(re.sub(r"--[^\n]*", "", graph_ddl))
 
     yield c
     c.close()
@@ -101,22 +108,32 @@ def _graph_chapter_ids(
 ) -> list[int]:
     """Chapters reachable from the seed author via wrote → book_contains.
 
-    DuckPGQ's GRAPH_TABLE doesn't bind `?` placeholders, so the author name
-    is substituted with single-quote escaping. Inputs are trusted eval-set
-    fixtures, not user-supplied — in production code this would still be
-    validated or bound via a CTE.
+    Implemented as a SQL JOIN over the book_author / book / chapter FK
+    structure rather than a DuckPGQ MATCH. Reasons:
+      * The production retrieval server uses recursive CTEs and JOINs;
+        the test should mirror that path, not a parallel one.
+      * MATCH requires per-connection ``CREATE PROPERTY GRAPH``, which
+        is a write — forcing the test to open RW and lock everything
+        else out. The JOIN runs read-only.
+      * Live MATCH coverage already exists in
+        scripts/build_property_graph.py (graph-build verification) and
+        scripts/install_extensions.py (post-install smoke test).
+
+    The schema assumes book_author as the wrote-edge join table; if it
+    diverges, the FTS/VSS modality assertions still hold and this one
+    will fail loudly with the right pointer.
     """
-    safe_author = seed_author.replace("'", "''")
     rows = conn.execute(
-        f"""
-        SELECT cid
-          FROM GRAPH_TABLE (mypub
-              MATCH (a:author)-[w:wrote]->(b:book)-[c:book_contains]->(ch:chapter)
-              WHERE a.name = '{safe_author}'
-              COLUMNS (ch.chapter_id AS cid)
-          )
-         LIMIT {int(k)}
         """
+        SELECT ch.chapter_id
+          FROM author    a
+          JOIN book_author ba ON ba.author_id = a.author_id
+          JOIN book      b   ON b.book_id     = ba.book_id
+          JOIN chapter   ch  ON ch.book_id    = b.book_id
+         WHERE a.name = ?
+         LIMIT ?
+        """,
+        [seed_author, k],
     ).fetchall()
     return [r[0] for r in rows]
 

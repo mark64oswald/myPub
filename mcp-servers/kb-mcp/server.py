@@ -69,7 +69,10 @@ def _bootstrap() -> None:
     catalog_env = os.environ.get("MYPUB_CATALOG")
     catalog_path = Path(catalog_env) if catalog_env else None
     LOG.info("opening catalog (%s)", catalog_path or "default")
-    _CONN = open_catalog(catalog_path)
+    # Explicit read-only at the call site: server.py only issues SELECTs.
+    # Holding an RW lock blocks every other process (other Claude Code
+    # sessions, test suite, refresh scripts) — see db.py module docstring.
+    _CONN = open_catalog(catalog_path, read_only=True)
 
     # pylint: disable=import-outside-toplevel
     from sentence_transformers import SentenceTransformer
