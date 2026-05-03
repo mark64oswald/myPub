@@ -3,6 +3,14 @@
     "mypub-kb": {
       "command": ".venv/bin/python3",
       "args": ["mcp-servers/kb-mcp/server.py"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "deepwiki": {
+      "type": "http",
+      "url": "https://mcp.deepwiki.com/mcp"
     }
   }
 }
