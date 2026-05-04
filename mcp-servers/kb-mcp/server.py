@@ -159,8 +159,22 @@ def _dedupe_by_content(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Collapse chapter results that share book + content prefix.
 
     Doc_section rows are passed through unchanged (the sectionizer doesn't
-    have this bug). For chapters, the highest-scored representative per
+    have this bug). For chapters, the most representative row per
     (book_title, excerpt[:160]) cluster is kept; other rows are dropped.
+
+    Tie-break order (most → least important):
+      1. **Higher title_coverage** — if 5 chapters share the same content
+         (Phase 1 splitter bug), prefer the one whose chapter_title most
+         closely matches the query. This way "What Is Terraform State?"
+         beats "Limitations with Terraform's Backends" for a Terraform
+         state-locking query, even though they share the dup'd content.
+      2. **Higher rrf_score** — tie-broken on retrieval rank.
+
+    Without the title_coverage tie-break, the kept representative was
+    arbitrary (first-seen wins) and Pattern A's title-boost benefit was
+    randomized — a chapter with title_cov=0.67 might get dropped in
+    favor of a sibling with title_cov=0.33 just because of bucket
+    iteration order.
     """
     seen_chapter_keys: dict[tuple[Any, str], int] = {}
     out: list[dict[str, Any]] = []
@@ -175,9 +189,14 @@ def _dedupe_by_content(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             seen_chapter_keys[key] = len(out)
             out.append(r)
             continue
-        # Duplicate cluster — keep whichever scored higher.
         existing = out[existing_idx]
-        if (r.get("rrf_score") or 0.0) > (existing.get("rrf_score") or 0.0):
+        new_tc = float(r.get("title_coverage") or 0.0)
+        old_tc = float(existing.get("title_coverage") or 0.0)
+        # Primary tie-break: title coverage. Secondary: RRF score.
+        if new_tc > old_tc or (
+            new_tc == old_tc
+            and (r.get("rrf_score") or 0.0) > (existing.get("rrf_score") or 0.0)
+        ):
             out[existing_idx] = r
     return out
 
@@ -304,6 +323,60 @@ _ACRONYM_BLOCKLIST = {"AND", "OR", "OF", "TO", "IN", "AT", "BY", "IS",
                       "THE", "FOR", "NEW", "THIS", "WITH"}
 
 
+# Common stop words excluded from query-token-coverage matching.
+_QUERY_TOKEN_STOPWORDS = frozenset({
+    "a", "an", "and", "as", "at", "be", "by", "do", "for", "from",
+    "how", "in", "is", "it", "its", "of", "on", "or", "that", "the",
+    "this", "to", "vs", "what", "when", "where", "why", "with", "your",
+})
+_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]+")
+
+
+def _query_significant_tokens(query: str) -> list[str]:
+    """Significant tokens for title-coverage matching: drop short tokens
+    and common stop words; preserve order; lowercase."""
+    out: list[str] = []
+    for tok in _TOKEN_RE.findall(query):
+        if len(tok) < 2:
+            continue
+        low = tok.lower()
+        if low in _QUERY_TOKEN_STOPWORDS:
+            continue
+        out.append(low)
+    return out
+
+
+def _title_token_coverage(query: str, title: Optional[str]) -> float:
+    """Fraction of significant query tokens that appear in the title.
+
+    Strong signal for ranking: a chapter titled "What Is Terraform State?"
+    has coverage 0.67 against query "Terraform state locking", while a
+    tangential doc_section with heading "Delta Lake bench" has coverage
+    0.0. Title coverage rewards results that are ABOUT the topic over
+    results that just BM25-match individual tokens of generic content.
+
+    URL-shaped "titles" return 0.0: the doc_section sectionizer falls back
+    to GitHub URLs when the source markdown lacks clean headings, and
+    URL-path substrings (e.g., "/terraform/README.md") shouldn't earn a
+    title-match boost — they're filesystem artifacts, not meaningful
+    section labels.
+
+    Returns 0.0 if title is None/empty or if the query has no significant
+    tokens.
+    """
+    if not title:
+        return 0.0
+    title_stripped = title.strip()
+    if title_stripped.lower().startswith(("http://", "https://", "www.")):
+        return 0.0
+    tokens = _query_significant_tokens(query)
+    if not tokens:
+        return 0.0
+    title_lower = title_stripped.lower()
+    hits = sum(1 for t in tokens if t in title_lower)
+    return hits / len(tokens)
+
+
 def _required_acronyms(query: str) -> list[str]:
     """Return uppercase technical-acronym tokens from the query.
 
@@ -382,6 +455,7 @@ def _fts_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
             "book_title": _clean_book_title(r[2]),
             "chapter_title": r[3],
             "excerpt": _clean_excerpt(r[4]),
+            "title_coverage": _title_token_coverage(query, r[3]),
         }
         for r in rows
     ]
@@ -426,6 +500,7 @@ def _vss_chapter_search(
             "book_title": _clean_book_title(r[2]),
             "chapter_title": r[3],
             "excerpt": _clean_excerpt(r[4]),
+            "title_coverage": _title_token_coverage(query, r[3]),
         }
         for r in rows
     ]
@@ -511,6 +586,7 @@ def _graph_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
             "excerpt": _clean_excerpt(r[5]),
             # A normalized score for the merge step. Real scoring lands in 4.5.
             "score": float(r[1]) + 0.1 * float(r[2]),
+            "title_coverage": _title_token_coverage(query, r[4]),
         }
         for r in rows
     ]
@@ -558,6 +634,7 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "doc_source_name": r[2],
             "heading_text": r[3],
             "excerpt": _clean_excerpt(r[4]),
+            "title_coverage": _title_token_coverage(query, r[3]),
         }
         for r in rows
     ]
@@ -603,6 +680,7 @@ def _vss_doc_section_search(
             "doc_source_name": r[2],
             "heading_text": r[3],
             "excerpt": _clean_excerpt(r[4]),
+            "title_coverage": _title_token_coverage(query, r[3]),
         }
         for r in rows
     ]
@@ -663,6 +741,7 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "heading_text": r[4],
             "excerpt": _clean_excerpt(r[5]),
             "score": float(r[1]) + 0.1 * float(r[2]),
+            "title_coverage": _title_token_coverage(query, r[4]),
         }
         for r in rows
     ]
@@ -717,11 +796,18 @@ def _rrf_merge(
                     "doc_source_name": row.get("doc_source_name"),
                     "heading_text": row.get("heading_text"),
                     "excerpt": row.get("excerpt"),
+                    "title_coverage": float(row.get("title_coverage") or 0.0),
                     "rrf_score": 0.0,
                     "modalities": [],
                     "modality_scores": {},
                 }
                 fused[key] = entry
+            else:
+                # Same result hit by multiple modalities — keep the highest
+                # title_coverage observed (any modality might compute it).
+                tc = float(row.get("title_coverage") or 0.0)
+                if tc > entry["title_coverage"]:
+                    entry["title_coverage"] = tc
             entry["rrf_score"] += contribution
             entry["modalities"].append(modality)
             entry["modality_scores"][modality] = row.get("score")
@@ -860,6 +946,7 @@ def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
         "rrf_score": s.result.get("rrf_score"),
         "modalities": s.result.get("modalities"),
         "modality_scores": s.result.get("modality_scores"),
+        "title_coverage": s.result.get("title_coverage"),
         "combined_score": s.combined,
         "components": {
             "recency": s.components.recency,

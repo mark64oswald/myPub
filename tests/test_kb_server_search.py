@@ -78,6 +78,75 @@ def server_state(fresh_catalog, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _title_token_coverage — fraction of significant query tokens in the title
+# ---------------------------------------------------------------------------
+
+
+def test_title_coverage_perfect_match_returns_one():
+    """Title containing every significant query token → coverage 1.0."""
+    out = server._title_token_coverage("Terraform state locking",
+                                        "What Is Terraform State Locking")
+    assert out == 1.0
+
+
+def test_title_coverage_partial_match_returns_fraction():
+    """2 of 3 significant tokens present → 0.67."""
+    out = server._title_token_coverage("Terraform state locking",
+                                        "What Is Terraform State?")
+    assert out == pytest.approx(2 / 3, abs=1e-6)
+
+
+def test_title_coverage_no_match_returns_zero():
+    out = server._title_token_coverage("Terraform state locking",
+                                        "Delta Lake benchmark notes")
+    assert out == 0.0
+
+
+def test_title_coverage_strips_stop_words():
+    """Stop words don't count in either query or title; the coverage is
+    fraction of NON-STOP query tokens that appear in the title."""
+    # query → ["circuit", "breaker", "pattern"], title → "circuit breaker"
+    out = server._title_token_coverage("a circuit breaker for the pattern",
+                                        "Circuit Breaker")
+    assert out == pytest.approx(2 / 3)
+
+
+def test_title_coverage_handles_none_or_empty_title():
+    assert server._title_token_coverage("anything", None) == 0.0
+    assert server._title_token_coverage("anything", "") == 0.0
+
+
+def test_title_coverage_handles_empty_query():
+    assert server._title_token_coverage("", "anything") == 0.0
+    # All-stopwords query → no significant tokens → coverage is 0
+    assert server._title_token_coverage("the and or", "Title Here") == 0.0
+
+
+def test_title_coverage_case_insensitive():
+    out = server._title_token_coverage("CQRS read model", "cqrs Read Model")
+    assert out == 1.0
+
+
+def test_title_coverage_substring_match_for_partial_tokens():
+    """Substring matching: 'compaction' in 'LSM Tree Compaction Strategies' counts."""
+    out = server._title_token_coverage("LSM tree compaction",
+                                        "LSM Tree Compaction Strategies")
+    assert out == 1.0
+
+
+def test_title_coverage_url_headings_score_zero():
+    """Doc_section sectionizer falls back to GitHub URLs when source markdown
+    lacks clean headings. URL-path substrings (.../terraform/README.md)
+    shouldn't earn title boost — that's a filesystem artifact, not a
+    meaningful section label."""
+    url = "https://github.com/delta-io/delta/blob/master/benchmarks/infrastructure/gcp/terraform/README.md"
+    assert server._title_token_coverage("Terraform state locking", url) == 0.0
+    # http and www variants too
+    assert server._title_token_coverage("kafka", "http://example.com/kafka") == 0.0
+    assert server._title_token_coverage("kafka", "www.kafka.org") == 0.0
+
+
+# ---------------------------------------------------------------------------
 # _required_acronyms — detects technical-acronym tokens in a query
 # ---------------------------------------------------------------------------
 

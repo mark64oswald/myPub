@@ -278,9 +278,19 @@ def doc_alignment_score(*, corroborates: int, contradicts: int) -> float:
 # VSS similarity is already in [0, 1] (cosine), so it passes through.
 FTS_SATURATION_SCORE = 5.0
 GRAPH_SATURATION_HITS = 3.0
+# Multiplicative boost applied per unit of title_coverage. coverage=1.0 →
+# relevance × 1.5 (capped at 1.0). coverage=0.0 → relevance unchanged.
+# Calibrated so a perfect title match overcomes a 50% weaker BM25 score:
+# e.g., a chapter titled "What Is Terraform State?" (coverage=0.67, BM25=5.75)
+# beats a tangential doc heading (coverage=0.0, BM25=4.29) on a query for
+# "Terraform state locking".
+TITLE_COVERAGE_BOOST = 0.5
 
 
-def relevance_score(modality_scores: Optional[dict[str, Any]] = None) -> float:
+def relevance_score(
+    modality_scores: Optional[dict[str, Any]] = None,
+    *, title_coverage: float = 0.0,
+) -> float:
     """Compose relevance from absolute per-modality signal strength.
 
     The previous formulation normalized RRF against the result set's max,
@@ -301,7 +311,18 @@ def relevance_score(modality_scores: Optional[dict[str, Any]] = None) -> float:
     and vice versa. A candidate that hits both gets the better of the two,
     not a watered-down average.
 
-    None / missing modality_scores ⇒ 0.0 (no signal known).
+    Title-coverage boost: when ``title_coverage`` is provided (the fraction
+    of significant query tokens present in the result's chapter_title /
+    heading_text), the base relevance is multiplied by
+    ``1 + TITLE_COVERAGE_BOOST × coverage`` and clamped to [0, 1]. This
+    rewards results whose TITLE matches the query intent over results
+    that BM25-match on individual content tokens — a chapter titled
+    "What Is Terraform State?" should win for "Terraform state locking"
+    queries even if a tangential doc snippet has slightly higher BM25.
+
+    None / missing modality_scores ⇒ 0.0 (no signal known), regardless of
+    title_coverage. The boost is multiplicative; nothing × 1.5 is still
+    nothing.
     """
     if not modality_scores:
         return 0.0
@@ -325,7 +346,11 @@ def relevance_score(modality_scores: Optional[dict[str, Any]] = None) -> float:
         1.0 - math.exp(-graph_raw / GRAPH_SATURATION_HITS) if graph_raw > 0 else 0.0
     )
 
-    return max(fts_norm, vss_norm, graph_norm)
+    base = max(fts_norm, vss_norm, graph_norm)
+    if base <= 0.0:
+        return 0.0
+    cov = max(0.0, min(1.0, float(title_coverage)))
+    return min(1.0, base * (1.0 + TITLE_COVERAGE_BOOST * cov))
 
 
 def corroboration_score(*, corroborator_count: int,
@@ -518,7 +543,10 @@ def compute_components_for_result(
         doc_alignment=doc_alignment_score(
             corroborates=corr_n, contradicts=contr_n,
         ),
-        relevance=relevance_score(modality_scores),
+        relevance=relevance_score(
+            modality_scores,
+            title_coverage=float(result.get("title_coverage") or 0.0),
+        ),
         corroboration=corroboration_score(corroborator_count=corr_n),
         authority=authority_score_from_raw(auth_raw),
     )

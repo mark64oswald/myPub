@@ -153,6 +153,69 @@ def test_relevance_score_addresses_doc_section_dominance_regression():
     )
 
 
+def test_relevance_score_title_coverage_boost_amplifies():
+    """A perfect title match (coverage=1.0) amplifies relevance by ×1.5,
+    capped at 1.0. coverage=0.0 leaves relevance unchanged."""
+    base = ranking.relevance_score({"fts_chapter": 5.0})
+    boosted = ranking.relevance_score({"fts_chapter": 5.0}, title_coverage=1.0)
+    no_boost = ranking.relevance_score({"fts_chapter": 5.0}, title_coverage=0.0)
+
+    assert no_boost == base
+    assert boosted > base
+    # Mathematical sanity: 1.5 × base, clipped.
+    assert boosted == pytest.approx(min(1.0, 1.5 * base), abs=1e-6)
+
+
+def test_relevance_score_title_coverage_caps_at_one():
+    """Even with full coverage on a strong base, relevance can't exceed 1.0."""
+    out = ranking.relevance_score({"fts_chapter": 10.0}, title_coverage=1.0)
+    assert out == 1.0
+
+
+def test_relevance_score_title_coverage_partial():
+    """Partial coverage (0.5) → 25% boost (TITLE_COVERAGE_BOOST × 0.5)."""
+    base = ranking.relevance_score({"fts_chapter": 4.0})
+    half = ranking.relevance_score({"fts_chapter": 4.0}, title_coverage=0.5)
+    assert half > base
+    assert half < ranking.relevance_score({"fts_chapter": 4.0}, title_coverage=1.0)
+
+
+def test_relevance_score_title_coverage_clamped_to_unit():
+    """title_coverage outside [0, 1] is clamped — defensive against caller
+    errors (e.g., a forgotten division)."""
+    a = ranking.relevance_score({"fts_chapter": 4.0}, title_coverage=2.0)
+    b = ranking.relevance_score({"fts_chapter": 4.0}, title_coverage=1.0)
+    assert a == b
+    c = ranking.relevance_score({"fts_chapter": 4.0}, title_coverage=-0.5)
+    d = ranking.relevance_score({"fts_chapter": 4.0}, title_coverage=0.0)
+    assert c == d
+
+
+def test_relevance_score_title_coverage_does_not_create_signal_from_nothing():
+    """Coverage boost is multiplicative: zero modality signal stays zero
+    even with perfect title coverage. (We don't reward a result with NO
+    BM25/VSS/graph signal just because the title happens to contain the
+    query tokens — the corpus might not actually have content for it.)"""
+    out = ranking.relevance_score({}, title_coverage=1.0)
+    assert out == 0.0
+
+
+def test_relevance_score_title_coverage_addresses_pattern_a():
+    """Regression for Pattern A: chapter with strong title match (coverage
+    0.67, BM25 5.75) should beat tangential doc_section (coverage 0.0,
+    BM25 4.29) — exactly the Terraform state locking case."""
+    chapter_rel = ranking.relevance_score(
+        {"fts_chapter": 5.75}, title_coverage=2 / 3,
+    )
+    doc_rel = ranking.relevance_score(
+        {"fts_doc_section": 4.29}, title_coverage=0.0,
+    )
+    assert chapter_rel > doc_rel + 0.05, (
+        f"chapter with title match ({chapter_rel:.3f}) should clearly beat "
+        f"doc with no title match ({doc_rel:.3f})"
+    )
+
+
 def test_corroboration_score_is_zero_at_zero():
     assert ranking.corroboration_score(corroborator_count=0) == 0.0
 
