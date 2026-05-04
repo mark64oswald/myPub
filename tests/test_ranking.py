@@ -154,7 +154,7 @@ def test_relevance_score_addresses_doc_section_dominance_regression():
 
 
 def test_relevance_score_title_coverage_boost_amplifies():
-    """A perfect title match (coverage=1.0) amplifies relevance by ×1.5,
+    """Perfect title match amplifies relevance by ``1 + TITLE_COVERAGE_BOOST``,
     capped at 1.0. coverage=0.0 leaves relevance unchanged."""
     base = ranking.relevance_score({"fts_chapter": 5.0})
     boosted = ranking.relevance_score({"fts_chapter": 5.0}, title_coverage=1.0)
@@ -162,8 +162,8 @@ def test_relevance_score_title_coverage_boost_amplifies():
 
     assert no_boost == base
     assert boosted > base
-    # Mathematical sanity: 1.5 × base, clipped.
-    assert boosted == pytest.approx(min(1.0, 1.5 * base), abs=1e-6)
+    expected_multiplier = 1.0 + ranking.TITLE_COVERAGE_BOOST
+    assert boosted == pytest.approx(min(1.0, expected_multiplier * base), abs=1e-6)
 
 
 def test_relevance_score_title_coverage_caps_at_one():

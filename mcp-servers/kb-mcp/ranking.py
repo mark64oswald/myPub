@@ -230,7 +230,11 @@ class Weights:
 #
 #   skill_* profiles drive the Skills Factory generation modes (§8.3).
 WEIGHT_PROFILES: dict[str, Weights] = {
-    "balanced_interactive":          Weights(0.15, 0.10, 0.40, 0.15, 0.20),
+    # Default profile — relevance leads (0.45). Recency intentionally low
+    # (0.10): in a default search, freshness shouldn't be allowed to tip a
+    # foundational topical query toward a tangential-but-recent doc. The
+    # currency_critical profile is the right tool for current-API queries.
+    "balanced_interactive":          Weights(0.10, 0.10, 0.45, 0.15, 0.20),
     "currency_critical_interactive": Weights(0.40, 0.25, 0.20, 0.10, 0.05),
     "foundational_interactive":      Weights(0.05, 0.10, 0.35, 0.30, 0.20),
     "skill_recent_doc":              Weights(0.30, 0.30, 0.25, 0.05, 0.10),
@@ -279,12 +283,15 @@ def doc_alignment_score(*, corroborates: int, contradicts: int) -> float:
 FTS_SATURATION_SCORE = 5.0
 GRAPH_SATURATION_HITS = 3.0
 # Multiplicative boost applied per unit of title_coverage. coverage=1.0 →
-# relevance × 1.5 (capped at 1.0). coverage=0.0 → relevance unchanged.
-# Calibrated so a perfect title match overcomes a 50% weaker BM25 score:
-# e.g., a chapter titled "What Is Terraform State?" (coverage=0.67, BM25=5.75)
-# beats a tangential doc heading (coverage=0.0, BM25=4.29) on a query for
-# "Terraform state locking".
-TITLE_COVERAGE_BOOST = 0.5
+# relevance × 1.8 (capped at 1.0). coverage=0.0 → relevance unchanged.
+#
+# Title coverage is the strongest available "this result is ABOUT the
+# topic" signal — a chapter titled "B-Trees as Database Indexes" is more
+# likely on-topic for a B-tree query than a doc page that happens to
+# BM25-match individual tokens. Calibrated so a partial-coverage chapter
+# (e.g., 0.67) overcomes the recency × authority margin that fresh docs
+# carry by default.
+TITLE_COVERAGE_BOOST = 0.8
 
 
 def relevance_score(
