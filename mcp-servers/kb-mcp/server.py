@@ -44,6 +44,7 @@ if str(_HERE) not in sys.path:
 
 from db import open_catalog  # noqa: E402
 from resolution import EntityResolver  # noqa: E402
+import ranking  # noqa: E402
 
 LOG = logging.getLogger("mypub-kb")
 
@@ -439,23 +440,58 @@ mcp = FastMCP(
 )
 
 
+DEFAULT_INTERACTIVE_PROFILE = "currency_critical_interactive"
+
+
+def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
+    """Flatten a ScoredResult into a JSON-friendly dict for the MCP envelope."""
+    return {
+        "kind": s.result.get("kind"),
+        "result_id": s.result.get("result_id"),
+        "chapter_id": s.result.get("chapter_id"),
+        "doc_section_id": s.result.get("doc_section_id"),
+        "book_title": s.result.get("book_title"),
+        "chapter_title": s.result.get("chapter_title"),
+        "doc_source_name": s.result.get("doc_source_name"),
+        "heading_text": s.result.get("heading_text"),
+        "excerpt": s.result.get("excerpt"),
+        "rrf_score": s.result.get("rrf_score"),
+        "modalities": s.result.get("modalities"),
+        "modality_scores": s.result.get("modality_scores"),
+        "combined_score": s.combined,
+        "components": {
+            "recency": s.components.recency,
+            "doc_alignment": s.components.doc_alignment,
+            "relevance": s.components.relevance,
+            "corroboration": s.components.corroboration,
+            "authority": s.components.authority,
+        },
+    }
+
+
 @mcp.tool
 def search_chapters(
-    query: str, mode: str = "interactive", limit: int = 10
+    query: str, mode: str = "interactive", limit: int = 10,
+    weight_profile: str = DEFAULT_INTERACTIVE_PROFILE,
 ) -> dict[str, Any]:
-    """Hybrid chapter search across FTS, VSS, and the concept graph.
+    """Hybrid search across book chapters and live doc sections.
 
     Args:
         query: Free-text search query.
-        mode: 'interactive' returns per-modality buckets alongside the
-            merged ranking so callers can see provenance. 'generation'
-            returns only the merged ranking.
-        limit: Maximum number of merged results to return.
+        mode: 'interactive' returns the §8.1 {primary, corroborations,
+            conflicts} shape with per-modality buckets and full component
+            scores. 'generation' returns just the merged ranking, sorted by
+            combined score.
+        limit: Maximum number of merged results to consider for scoring;
+            corroborations and conflicts each cap at 5 (in interactive mode).
+        weight_profile: Name of a profile in ranking.WEIGHT_PROFILES.
+            Defaults to ``currency_critical_interactive``. Use
+            ``foundational_interactive`` for queries about timeless concepts
+            where authority and corroboration matter more than recency.
 
     Returns:
-        Dict with the merged ranked results and (in interactive mode) the
-        raw per-modality top hits. The merged 'rrf_score' is a Phase 4.1
-        placeholder; the full scoring formula lands in Prompt 4.5.
+        Dict per the §8.1 spec for interactive mode, or a flat
+        ``{query, mode, results: [...]}`` for generation mode.
     """
     _bootstrap()
     if mode not in ("interactive", "generation"):
@@ -464,6 +500,11 @@ def search_chapters(
         )
     if limit <= 0:
         raise ValueError("limit must be positive")
+    if weight_profile not in ranking.WEIGHT_PROFILES:
+        raise ValueError(
+            f"weight_profile must be one of {sorted(ranking.WEIGHT_PROFILES)}; "
+            f"got {weight_profile!r}"
+        )
 
     qvec = _embed(query)
     # Chapter modalities (book corpus)
@@ -491,21 +532,50 @@ def search_chapters(
         limit=limit,
     )
 
-    payload: dict[str, Any] = {
+    # Phase 4.5: feed the merged set through the ranking engine. RRF score
+    # becomes the relevance component; recency / doc_alignment / corroboration
+    # / authority are looked up per-result and combined under the chosen
+    # weight profile.
+    weights = ranking.WEIGHT_PROFILES[weight_profile]
+
+    if mode == "generation":
+        gen_ranker = ranking.GenerationRanker(_CONN, weights, top_k=limit)
+        # Generation mode here exposes the ranked-by-combined-score view;
+        # selection-strategy gating lives in the Skills Factory (Phase 5).
+        max_rrf = max((float(r.get("rrf_score") or 0.0) for r in merged), default=1.0) or 1.0
+        scored = []
+        for r in merged:
+            comps = ranking.compute_components_for_result(_CONN, r, max_rrf_score=max_rrf)
+            scored.append(ranking.ScoredResult(
+                result=r, components=comps, combined=comps.combine(weights),
+            ))
+        scored.sort(key=lambda s: s.combined, reverse=True)
+        return {
+            "query": query,
+            "mode": mode,
+            "weight_profile": weight_profile,
+            "results": [_scored_to_dict(s) for s in scored[:limit]],
+        }
+
+    # Interactive mode (§8.1): primary + corroborations + conflicts.
+    interactive = ranking.InteractiveRanker(_CONN, weights).rank(merged)
+    return {
         "query": query,
         "mode": mode,
-        "results": merged,
-    }
-    if mode == "interactive":
-        payload["by_modality"] = {
+        "weight_profile": weight_profile,
+        "primary": _scored_to_dict(interactive.primary) if interactive.primary else None,
+        "corroborations": [_scored_to_dict(s) for s in interactive.corroborations],
+        "conflicts": [_scored_to_dict(s) for s in interactive.conflicts],
+        "all_scored": [_scored_to_dict(s) for s in interactive.all_scored[:limit]],
+        "by_modality": {
             "fts_chapter": fts_chapter[:limit],
             "vss_chapter": vss_chapter[:limit],
             "graph_chapter": graph_chapter[:limit],
             "fts_doc_section": fts_section[:limit],
             "vss_doc_section": vss_section[:limit],
             "graph_doc_section": graph_section[:limit],
-        }
-    return payload
+        },
+    }
 
 
 @mcp.tool
