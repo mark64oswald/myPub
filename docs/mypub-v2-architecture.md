@@ -594,8 +594,8 @@ CREATE TABLE doc_source (
 -- Example:
 -- INSERT INTO doc_source VALUES
 --   (1, 'Databricks docs',    'context7', 'context7',  '/databricks/docs',   0.95, 30, 'hot',  true,  ...),
---   (2, 'FastMCP repo',       'context7', 'context7',  '/jlowin/fastmcp',    0.90, 14, 'warm', false, ...),
---   (3, 'FastMCP architecture','deepwiki','deepwiki',  'jlowin/fastmcp',     0.75, 30, 'warm', false, ...),
+--   (2, 'FastMCP repo',       'context7', 'context7',  '/prefecthq/fastmcp', 0.90, 14, 'warm', false, ...),
+--   (3, 'FastMCP architecture','deepwiki','deepwiki',  'PrefectHQ/fastmcp',  0.75, 30, 'warm', false, ...),
 --   (4, 'LangGraph repo',     'github',   'github-mcp','langchain-ai/langgraph', 0.65, 7, 'cool', false, ...);
 
 CREATE TABLE doc_snapshot (

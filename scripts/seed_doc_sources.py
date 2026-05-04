@@ -114,7 +114,7 @@ SEEDS: list[dict[str, Any]] = [
     {
         "name": "FastMCP",
         "source_type": "deepwiki",
-        "identifier": "jlowin/fastmcp",
+        "identifier": "PrefectHQ/fastmcp",
         "refresh_ttl_days": 14,  # mypub itself depends on it
     },
     {

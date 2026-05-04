@@ -671,7 +671,7 @@ architecture doc §9.3 (Context7 stdio, DeepWiki HTTPS, GitHub stdio).
 
 Test each:
 - Context7: resolve-library-id for "databricks", then query-docs for a topic
-- DeepWiki: read_wiki_structure for a known repo (e.g., "jlowin/fastmcp")
+- DeepWiki: read_wiki_structure for a known repo (e.g., "PrefectHQ/fastmcp")
 - GitHub: get_file_contents for a README
 
 Build the doc_source registry: write scripts/seed_doc_sources.py that populates
@@ -1209,7 +1209,7 @@ or any other library:
 
 ```text
 use library /duckdb/duckdb — verify extension syntax
-use library /jlowin/fastmcp — verify tool registration API
+use library /prefecthq/fastmcp — verify tool registration API
 use library /upstash/context7 — verify MCP query patterns
 ```
 
