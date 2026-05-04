@@ -289,6 +289,65 @@ def _embed(query: str) -> list[float]:
     return vec.astype("float32").tolist()
 
 
+# Tokens preserved as ALL-CAPS in the original query that are likely
+# technical acronyms (e.g., CQRS, FHIR, HL7, EHR, REST, JSON, SQL). When
+# present, candidates that do NOT contain the acronym verbatim are highly
+# unlikely to be on-topic — even if they BM25-match other tokens. This
+# strips the long tail of "MLflow page mentions 'model' + 'projection'
+# but has nothing to do with CQRS" results.
+# Starts with an uppercase letter, followed by 1-5 uppercase letters or
+# digits — catches CQRS, FHIR, REST, JSON, but also HL7, OAuth2, K8s.
+_ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,5}\b")
+# Common short uppercase tokens that aren't technical acronyms.
+_ACRONYM_BLOCKLIST = {"AND", "OR", "OF", "TO", "IN", "AT", "BY", "IS",
+                      "IT", "AS", "ON", "AN", "DO", "BE", "GO", "I", "A",
+                      "THE", "FOR", "NEW", "THIS", "WITH"}
+
+
+def _required_acronyms(query: str) -> list[str]:
+    """Return uppercase technical-acronym tokens from the query.
+
+    Empty list when the query has no all-caps technical tokens — most
+    natural-language queries fall here, so the post-filter is a no-op.
+    """
+    out = []
+    for tok in _ACRONYM_RE.findall(query):
+        if tok in _ACRONYM_BLOCKLIST:
+            continue
+        out.append(tok)
+    # Dedup while preserving order.
+    seen = set()
+    return [t for t in out if not (t in seen or seen.add(t))]
+
+
+def _acronym_filter_clauses(
+    acronyms: list[str], col: str,
+    *, fts_schema: Optional[str] = None, fts_id_col: Optional[str] = None,
+) -> tuple[str, list[str]]:
+    """Build the SQL fragment that requires each acronym to be present.
+
+    Two modes:
+      * ``fts_schema``+``fts_id_col`` set → use the FTS index for the check
+        (``AND fts_main_X.match_bm25(id, ?) IS NOT NULL``). 20x faster than
+        ILIKE on a large content column because the index already tokenizes.
+      * Otherwise → fall back to ``AND col ILIKE '%X%'``. Used when no FTS
+        index is available for the table being filtered.
+
+    Returns (sql_fragment, parameters) — empty when ``acronyms`` is empty.
+    """
+    if not acronyms:
+        return "", []
+    if fts_schema and fts_id_col:
+        fragment = " ".join(
+            f" AND {fts_schema}.match_bm25({fts_id_col}, ?) IS NOT NULL"
+            for _ in acronyms
+        )
+        return fragment, list(acronyms)
+    fragment = " ".join(f" AND {col} ILIKE ?" for _ in acronyms)
+    params = [f"%{a}%" for a in acronyms]
+    return fragment, params
+
+
 # ---------------------------------------------------------------------------
 # Modality queries
 # ---------------------------------------------------------------------------
@@ -296,8 +355,12 @@ def _embed(query: str) -> list[float]:
 
 def _fts_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
     """BM25 search over chapter.content via the fts_main_chapter schema."""
+    acro_clause, acro_params = _acronym_filter_clauses(
+        _required_acronyms(query), "c.content",
+        fts_schema="fts_main_chapter", fts_id_col="c.chapter_id",
+    )
     rows = _CONN.execute(
-        """
+        f"""
         SELECT c.chapter_id,
                fts_main_chapter.match_bm25(c.chapter_id, ?) AS score,
                b.title AS book_title,
@@ -306,10 +369,11 @@ def _fts_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
           FROM chapter c
           JOIN book b ON c.book_id = b.book_id
          WHERE fts_main_chapter.match_bm25(c.chapter_id, ?) IS NOT NULL
+           {acro_clause}
          ORDER BY score DESC
          LIMIT ?
         """,
-        [query, EXCERPT_FETCH_CHARS, query, limit],
+        [query, EXCERPT_FETCH_CHARS, query, *acro_params, limit],
     ).fetchall()
     return [
         {
@@ -323,10 +387,22 @@ def _fts_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
     ]
 
 
-def _vss_chapter_search(qvec: list[float], limit: int) -> list[dict[str, Any]]:
-    """Cosine-distance search over chapter_embedding (HNSW-accelerated)."""
+def _vss_chapter_search(
+    qvec: list[float], limit: int, *, query: str = "",
+) -> list[dict[str, Any]]:
+    """Cosine-distance search over chapter_embedding (HNSW-accelerated).
+
+    ``query`` is the original free-text — used to extract acronym tokens
+    that we then require in the candidate's content (post-filter, since
+    embedding-only similarity will surface MLflow for 'CQRS' even though
+    MLflow has no 'CQRS' string).
+    """
+    acro_clause, acro_params = _acronym_filter_clauses(
+        _required_acronyms(query), "c.content",
+        fts_schema="fts_main_chapter", fts_id_col="c.chapter_id",
+    )
     rows = _CONN.execute(
-        """
+        f"""
         SELECT c.chapter_id,
                array_cosine_distance(e.embedding, ?::FLOAT[384]) AS distance,
                b.title AS book_title,
@@ -335,10 +411,12 @@ def _vss_chapter_search(qvec: list[float], limit: int) -> list[dict[str, Any]]:
           FROM chapter_embedding e
           JOIN chapter c USING (chapter_id)
           JOIN book    b ON c.book_id = b.book_id
+         WHERE 1=1
+           {acro_clause}
          ORDER BY distance ASC
          LIMIT ?
         """,
-        [qvec, EXCERPT_FETCH_CHARS, limit],
+        [qvec, EXCERPT_FETCH_CHARS, *acro_params, limit],
     ).fetchall()
     return [
         {
@@ -383,6 +461,10 @@ def _graph_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
     cids = _query_concept_ids(query)
     if not cids:
         return []
+    acro_clause, acro_params = _acronym_filter_clauses(
+        _required_acronyms(query), "c.content",
+        fts_schema="fts_main_chapter", fts_id_col="c.chapter_id",
+    )
 
     placeholders = ",".join(["?"] * len(cids))
     rows = _CONN.execute(
@@ -412,10 +494,12 @@ def _graph_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
           FROM chapter_hits h
           JOIN chapter c ON c.chapter_id = h.chapter_id
           JOIN book    b ON c.book_id    = b.book_id
+         WHERE 1=1
+           {acro_clause}
          ORDER BY h.concept_hits DESC, h.mention_count DESC
          LIMIT ?
         """,
-        [*cids, *cids, *cids, *cids, EXCERPT_FETCH_CHARS, limit],
+        [*cids, *cids, *cids, *cids, EXCERPT_FETCH_CHARS, *acro_params, limit],
     ).fetchall()
     return [
         {
@@ -443,8 +527,12 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
     """
     if not _doc_section_fts_index_exists():
         return []
+    acro_clause, acro_params = _acronym_filter_clauses(
+        _required_acronyms(query), "s.content",
+        fts_schema="fts_main_doc_section", fts_id_col="s.doc_section_id",
+    )
     rows = _CONN.execute(
-        """
+        f"""
         SELECT s.doc_section_id,
                fts_main_doc_section.match_bm25(s.doc_section_id, ?) AS score,
                src.name AS doc_source_name,
@@ -454,10 +542,11 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
           JOIN doc_snapshot sn ON s.snapshot_id = sn.snapshot_id
           JOIN doc_source   src ON sn.doc_source_id = src.doc_source_id
          WHERE fts_main_doc_section.match_bm25(s.doc_section_id, ?) IS NOT NULL
+           {acro_clause}
          ORDER BY score DESC
          LIMIT ?
         """,
-        [query, EXCERPT_FETCH_CHARS, query, limit],
+        [query, EXCERPT_FETCH_CHARS, query, *acro_params, limit],
     ).fetchall()
     return [
         {
@@ -474,10 +563,20 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
     ]
 
 
-def _vss_doc_section_search(qvec: list[float], limit: int) -> list[dict[str, Any]]:
-    """Cosine-distance search over doc_section_embedding."""
+def _vss_doc_section_search(
+    qvec: list[float], limit: int, *, query: str = "",
+) -> list[dict[str, Any]]:
+    """Cosine-distance search over doc_section_embedding.
+
+    ``query`` is the original free-text — used for acronym post-filter so
+    semantic matches that don't contain required tokens (e.g., 'CQRS')
+    don't surface."""
+    acro_clause, acro_params = _acronym_filter_clauses(
+        _required_acronyms(query), "s.content",
+        fts_schema="fts_main_doc_section", fts_id_col="s.doc_section_id",
+    )
     rows = _CONN.execute(
-        """
+        f"""
         SELECT s.doc_section_id,
                array_cosine_distance(e.embedding, ?::FLOAT[384]) AS distance,
                src.name AS doc_source_name,
@@ -487,10 +586,12 @@ def _vss_doc_section_search(qvec: list[float], limit: int) -> list[dict[str, Any
           JOIN doc_section s     USING (doc_section_id)
           JOIN doc_snapshot sn   ON s.snapshot_id = sn.snapshot_id
           JOIN doc_source   src  ON sn.doc_source_id = src.doc_source_id
+         WHERE 1=1
+           {acro_clause}
          ORDER BY distance ASC
          LIMIT ?
         """,
-        [qvec, EXCERPT_FETCH_CHARS, limit],
+        [qvec, EXCERPT_FETCH_CHARS, *acro_params, limit],
     ).fetchall()
     return [
         {
@@ -512,6 +613,10 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
     cids = _query_concept_ids(query)
     if not cids:
         return []
+    acro_clause, acro_params = _acronym_filter_clauses(
+        _required_acronyms(query), "s.content",
+        fts_schema="fts_main_doc_section", fts_id_col="s.doc_section_id",
+    )
 
     placeholders = ",".join(["?"] * len(cids))
     rows = _CONN.execute(
@@ -539,10 +644,12 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
           JOIN doc_section  s    ON s.doc_section_id = h.doc_section_id
           JOIN doc_snapshot sn   ON s.snapshot_id = sn.snapshot_id
           JOIN doc_source   src  ON sn.doc_source_id = src.doc_source_id
+         WHERE 1=1
+           {acro_clause}
          ORDER BY h.concept_hits DESC, h.mention_count DESC
          LIMIT ?
         """,
-        [*cids, *cids, *cids, *cids, EXCERPT_FETCH_CHARS, limit],
+        [*cids, *cids, *cids, *cids, EXCERPT_FETCH_CHARS, *acro_params, limit],
     ).fetchall()
     return [
         {
@@ -670,11 +777,11 @@ def _run_modality_fanout(query: str, qvec: list[float]):
     fts_chapter = [_normalize_chapter_row(r)
                    for r in _fts_chapter_search(query, PER_MODALITY_LIMIT)]
     vss_chapter = [_normalize_chapter_row(r)
-                   for r in _vss_chapter_search(qvec, PER_MODALITY_LIMIT)]
+                   for r in _vss_chapter_search(qvec, PER_MODALITY_LIMIT, query=query)]
     graph_chapter = [_normalize_chapter_row(r)
                      for r in _graph_chapter_search(query, PER_MODALITY_LIMIT)]
     fts_section = _fts_doc_section_search(query, PER_MODALITY_LIMIT)
-    vss_section = _vss_doc_section_search(qvec, PER_MODALITY_LIMIT)
+    vss_section = _vss_doc_section_search(qvec, PER_MODALITY_LIMIT, query=query)
     graph_section = _graph_doc_section_search(query, PER_MODALITY_LIMIT)
     return (fts_chapter, vss_chapter, graph_chapter,
             fts_section, vss_section, graph_section)

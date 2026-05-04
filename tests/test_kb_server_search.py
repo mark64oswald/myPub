@@ -78,6 +78,63 @@ def server_state(fresh_catalog, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _required_acronyms — detects technical-acronym tokens in a query
+# ---------------------------------------------------------------------------
+
+
+def test_required_acronyms_finds_uppercase_tokens():
+    assert server._required_acronyms("CQRS read model projection") == ["CQRS"]
+    assert server._required_acronyms("FHIR resource versioning") == ["FHIR"]
+    assert server._required_acronyms("Kafka HL7 v2 ingestion") == ["HL7"]
+
+
+def test_required_acronyms_handles_multiple():
+    """Multiple acronyms in one query — both must be present in candidates."""
+    out = server._required_acronyms("REST API for FHIR")
+    assert "REST" in out and "FHIR" in out
+    # API is in the blocklist? No — API is a legitimate acronym, must be kept.
+    assert "API" in out
+
+
+def test_required_acronyms_filters_blocklist():
+    """Common all-caps stop words must not be treated as acronyms."""
+    assert server._required_acronyms("THE OR AND") == []
+    # Mixed: real acronym + blocklist word
+    assert server._required_acronyms("FOR CQRS THE design") == ["CQRS"]
+
+
+def test_required_acronyms_natural_language_returns_empty():
+    """Most queries have no acronyms — filter is a no-op."""
+    assert server._required_acronyms("event sourcing") == []
+    assert server._required_acronyms("circuit breaker pattern") == []
+    assert server._required_acronyms("kafka consumer group rebalancing") == []
+
+
+def test_required_acronyms_dedups_preserving_order():
+    assert server._required_acronyms("CQRS for REST and CQRS again") == ["CQRS", "REST"]
+
+
+def test_required_acronyms_ignores_lowercase_tokens():
+    """Case matters: 'cqrs' (lowercase) should not be flagged. The user
+    must explicitly capitalize for the constraint to apply."""
+    assert server._required_acronyms("cqrs read model") == []
+
+
+def test_acronym_filter_clauses_no_acronyms():
+    sql, params = server._acronym_filter_clauses([], "c.content")
+    assert sql == ""
+    assert params == []
+
+
+def test_acronym_filter_clauses_builds_ilike_per_acronym():
+    sql, params = server._acronym_filter_clauses(["CQRS", "FHIR"], "x.content")
+    # One AND clause per acronym, each parameterized
+    assert sql.count("ILIKE ?") == 2
+    assert "x.content" in sql
+    assert params == ["%CQRS%", "%FHIR%"]
+
+
+# ---------------------------------------------------------------------------
 # _clean_excerpt — strips chapter heading boilerplate
 # ---------------------------------------------------------------------------
 
