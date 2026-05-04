@@ -429,19 +429,54 @@ def _parse_context7_libraries(text: str) -> list[ProbeMatch]:
 # A "clear winner" needs to outscore the runner-up by this much (0..1 fraction).
 DEFAULT_DOMINANCE_MARGIN = 0.20
 
+# Per-source minimum score for the single-match auto-ingest path. Source
+# scores are not on a comparable scale:
+#   Context7 — 0–100 relevance score (vendor-curated; below 65 = weak match)
+#   DeepWiki — 1.0 indicator (presence = high confidence by construction)
+#   GitHub   — stargazer count (1000 stars ≈ established project)
+# When the SOLE match returned by a probe falls below the source's floor,
+# we downgrade to ``ambiguous`` rather than auto-ingest. The asked_user
+# path lets the human override and accept the weak match deliberately.
+#
+# Why this exists: a nonsense query ("xyzzy_qwerty_nonsense_42") once
+# triggered a Context7 single-match return of score 53.3, which the gate
+# accepted blindly and ingested into the catalog. A score floor makes
+# the single-match rule honest about what counts as confident.
+SINGLE_MATCH_SCORE_FLOOR: dict[str, float] = {
+    "context7": 65.0,
+    "deepwiki": 0.5,
+    "github":   1000.0,
+}
+
+
+def _meets_single_match_floor(match: "ProbeMatch", source: str) -> bool:
+    """True if the single-match score clears the source's confidence floor."""
+    floor = SINGLE_MATCH_SCORE_FLOOR.get(source)
+    if floor is None:
+        # Unknown source — accept (don't block on missing config).
+        return True
+    if match.score is None:
+        # No score from the source — can't verify, defer to user.
+        return False
+    return float(match.score) >= floor
+
 
 class ConfidenceGate:
     """Decides whether a ProbeResult warrants auto-ingest, ask-user, or discard.
 
-    Rules (per arch §5.4 step 3):
+    Rules (per arch §5.4 step 3, updated 2026-05):
       * Zero matches → not_found.
-      * Exactly one match → match (auto-ingest).
-      * Multiple matches but the top one dominates by ≥ ``dominance_margin``
-        of the top score → match (auto-ingest the dominant one).
-      * Multiple matches with similar scores → ambiguous (ask the user).
+      * Exactly one match clearing the source's confidence floor → match
+        (auto-ingest). Below the floor → ambiguous (ask the user).
+      * Multiple matches, top dominates by ≥ ``dominance_margin`` → match
+        (auto-ingest the dominant one). Same floor applies — a dominant-
+        but-weak match is still ambiguous.
+      * Multiple matches with similar scores → ambiguous.
 
-    Ambiguity gives the user agency. The §5.4 spec is explicit: "The default
-    for ambiguity is to ask, not to ingest. This keeps the knowledge base clean."
+    The score-floor was added after a nonsense query inadvertently
+    ingested a low-scoring single-match (Context7 score 53.3). The §5.4
+    spec is explicit: "The default for ambiguity is to ask, not to
+    ingest. This keeps the knowledge base clean."
     """
 
     def __init__(self, *, dominance_margin: float = DEFAULT_DOMINANCE_MARGIN):
@@ -454,7 +489,18 @@ class ConfidenceGate:
         if not probe.matches:
             return GateDecision(decision="not_found", reason="no matches")
         if len(probe.matches) == 1:
-            return GateDecision(decision="match", chosen_match=probe.matches[0],
+            only = probe.matches[0]
+            if not _meets_single_match_floor(only, probe.source):
+                return GateDecision(
+                    decision="ambiguous", chosen_match=None,
+                    reason=(
+                        f"single match but score "
+                        f"{only.score!r} below "
+                        f"{probe.source} floor "
+                        f"{SINGLE_MATCH_SCORE_FLOOR.get(probe.source)!r}"
+                    ),
+                )
+            return GateDecision(decision="match", chosen_match=only,
                                 reason="single match")
 
         # Multiple matches: rank by score (None scores tie at -inf).
@@ -471,6 +517,18 @@ class ConfidenceGate:
             return GateDecision(decision="ambiguous", reason="top score not positive")
         margin = (top.score - runner_up.score) / top.score
         if margin >= self.dominance_margin:
+            # Dominant — but the absolute score still has to clear the floor.
+            # Otherwise we'd auto-ingest "the best of a bad lot" for a query
+            # the corpus simply doesn't have.
+            if not _meets_single_match_floor(top, probe.source):
+                return GateDecision(
+                    decision="ambiguous", chosen_match=None,
+                    reason=(
+                        f"dominant (margin={margin:.2f}) but top score "
+                        f"{top.score!r} below {probe.source} floor "
+                        f"{SINGLE_MATCH_SCORE_FLOOR.get(probe.source)!r}"
+                    ),
+                )
             return GateDecision(decision="match", chosen_match=top,
                                 reason=f"dominant (margin={margin:.2f})")
         return GateDecision(

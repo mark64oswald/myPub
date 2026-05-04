@@ -190,10 +190,13 @@ def test_not_yet_populated_tables_are_empty(conn):
         # Phase 4.4 — refresh_docs.py refresh --all populates these.
         # doc_snapshot_embedding still empty (snapshot-level embeddings are a
         # later optimization; section-level embeddings are what retrieval uses).
-        # discovery_log fills only when auto-discovery probes have run.
         # concept_doc_link / alignment_edge fill only after section-level
         # entity extraction + alignment subagent runs (Phase 4.4b extraction).
         "doc_snapshot", "doc_section", "doc_section_embedding",
+        # Phase 4.5b — discovery_log accumulates audit rows whenever an
+        # auto-discovery probe runs (search_chapters with auto_discover=True
+        # against a thin-retrieval or unknown-library query).
+        "discovery_log",
     }
     for table in EXPECTED_TABLES - populated_so_far:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]

@@ -147,6 +147,53 @@ def test_title_coverage_url_headings_score_zero():
 
 
 # ---------------------------------------------------------------------------
+# _full_significant_title_match — exact-title-match floor signal
+# ---------------------------------------------------------------------------
+
+
+def test_full_title_match_true_when_all_significant_tokens_in_title():
+    """Title contains every significant query token AND query has ≥2 → True."""
+    assert server._full_significant_title_match(
+        "circuit breaker pattern", "Circuit Breaker Pattern"
+    ) is True
+
+
+def test_full_title_match_partial_coverage_returns_false():
+    """Missing one query token → no full match."""
+    assert server._full_significant_title_match(
+        "Terraform state locking", "What Is Terraform State?"  # missing 'locking'
+    ) is False
+
+
+def test_full_title_match_single_token_query_returns_false():
+    """Generic single-word queries don't count: a chapter titled 'Data' shouldn't
+    win every query that happens to be the word 'data' alone — too unspecific."""
+    assert server._full_significant_title_match("data", "Data") is False
+    assert server._full_significant_title_match("introduction", "Introduction") is False
+
+
+def test_full_title_match_url_heading_returns_false():
+    """URL-shaped headings can't earn the floor — filesystem-artifact substrings."""
+    url = "https://github.com/delta-io/delta/blob/master/terraform/README.md"
+    assert server._full_significant_title_match("Terraform state locking", url) is False
+
+
+def test_full_title_match_strips_stop_words_from_query():
+    """Stop words don't count — a query like 'a circuit breaker for the pattern'
+    requires the title to contain 'circuit', 'breaker', 'pattern' (the
+    significant tokens) but not 'a', 'for', 'the'."""
+    assert server._full_significant_title_match(
+        "a circuit breaker for the pattern", "Circuit Breaker Pattern"
+    ) is True
+
+
+def test_full_title_match_handles_none_or_empty():
+    assert server._full_significant_title_match("anything two", None) is False
+    assert server._full_significant_title_match("anything two", "") is False
+    assert server._full_significant_title_match("", "Anything Title") is False
+
+
+# ---------------------------------------------------------------------------
 # _required_acronyms — detects technical-acronym tokens in a query
 # ---------------------------------------------------------------------------
 

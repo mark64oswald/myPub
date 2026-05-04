@@ -346,6 +346,31 @@ def _query_significant_tokens(query: str) -> list[str]:
     return out
 
 
+def _full_significant_title_match(query: str, title: Optional[str]) -> bool:
+    """True iff the title contains EVERY significant query token AND the
+    query has ≥2 such tokens.
+
+    The 2-token minimum guards against generic single-word queries (e.g.,
+    'data', 'introduction') matching every chapter that happens to use
+    that word as its title — coverage of 1.0 there is meaningless. With
+    ≥2 tokens, full coverage is a strong "this chapter is the topic"
+    signal that should win regardless of FTS strength.
+
+    URL-shaped headings always return False (filesystem-artifact substrings
+    don't earn this signal).
+    """
+    if not title:
+        return False
+    title_stripped = title.strip()
+    if title_stripped.lower().startswith(("http://", "https://", "www.")):
+        return False
+    tokens = _query_significant_tokens(query)
+    if len(tokens) < 2:
+        return False
+    title_lower = title_stripped.lower()
+    return all(t in title_lower for t in tokens)
+
+
 def _title_token_coverage(query: str, title: Optional[str]) -> float:
     """Fraction of significant query tokens that appear in the title.
 
@@ -456,6 +481,7 @@ def _fts_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
             "chapter_title": r[3],
             "excerpt": _clean_excerpt(r[4]),
             "title_coverage": _title_token_coverage(query, r[3]),
+            "full_title_match": _full_significant_title_match(query, r[3]),
         }
         for r in rows
     ]
@@ -501,6 +527,7 @@ def _vss_chapter_search(
             "chapter_title": r[3],
             "excerpt": _clean_excerpt(r[4]),
             "title_coverage": _title_token_coverage(query, r[3]),
+            "full_title_match": _full_significant_title_match(query, r[3]),
         }
         for r in rows
     ]
@@ -587,6 +614,7 @@ def _graph_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
             # A normalized score for the merge step. Real scoring lands in 4.5.
             "score": float(r[1]) + 0.1 * float(r[2]),
             "title_coverage": _title_token_coverage(query, r[4]),
+            "full_title_match": _full_significant_title_match(query, r[4]),
         }
         for r in rows
     ]
@@ -635,6 +663,7 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "heading_text": r[3],
             "excerpt": _clean_excerpt(r[4]),
             "title_coverage": _title_token_coverage(query, r[3]),
+            "full_title_match": _full_significant_title_match(query, r[3]),
         }
         for r in rows
     ]
@@ -681,6 +710,7 @@ def _vss_doc_section_search(
             "heading_text": r[3],
             "excerpt": _clean_excerpt(r[4]),
             "title_coverage": _title_token_coverage(query, r[3]),
+            "full_title_match": _full_significant_title_match(query, r[3]),
         }
         for r in rows
     ]
@@ -742,6 +772,7 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "excerpt": _clean_excerpt(r[5]),
             "score": float(r[1]) + 0.1 * float(r[2]),
             "title_coverage": _title_token_coverage(query, r[4]),
+            "full_title_match": _full_significant_title_match(query, r[4]),
         }
         for r in rows
     ]
@@ -797,6 +828,7 @@ def _rrf_merge(
                     "heading_text": row.get("heading_text"),
                     "excerpt": row.get("excerpt"),
                     "title_coverage": float(row.get("title_coverage") or 0.0),
+                    "full_title_match": bool(row.get("full_title_match")),
                     "rrf_score": 0.0,
                     "modalities": [],
                     "modality_scores": {},
@@ -808,6 +840,10 @@ def _rrf_merge(
                 tc = float(row.get("title_coverage") or 0.0)
                 if tc > entry["title_coverage"]:
                     entry["title_coverage"] = tc
+                # full_title_match is OR'd across modalities (any modality
+                # spotting a full match means the result has one).
+                if row.get("full_title_match"):
+                    entry["full_title_match"] = True
             entry["rrf_score"] += contribution
             entry["modalities"].append(modality)
             entry["modality_scores"][modality] = row.get("score")
@@ -947,6 +983,7 @@ def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
         "modalities": s.result.get("modalities"),
         "modality_scores": s.result.get("modality_scores"),
         "title_coverage": s.result.get("title_coverage"),
+        "full_title_match": s.result.get("full_title_match"),
         "combined_score": s.combined,
         "components": {
             "recency": s.components.recency,

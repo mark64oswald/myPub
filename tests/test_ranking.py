@@ -216,6 +216,66 @@ def test_relevance_score_title_coverage_addresses_pattern_a():
     )
 
 
+def test_relevance_score_full_title_match_floors_relevance():
+    """A chapter title that contains every significant query token gets
+    a floor of FULL_TITLE_MATCH_FLOOR — even if FTS/VSS are weak.
+
+    Real case: a chapter literally titled 'Circuit Breaker Pattern' must
+    win a 'circuit breaker pattern' query, even if its content is short
+    and BM25 returns a low score."""
+    weak_signal = {"vss_chapter": 0.36}  # weak base relevance ~0.36
+    rel_no_match = ranking.relevance_score(weak_signal, title_coverage=1.0,
+                                            full_title_match=False)
+    rel_full_match = ranking.relevance_score(weak_signal, title_coverage=1.0,
+                                              full_title_match=True)
+    # Without the floor, weak base × 1.8 boost still hits ~0.65 (capped at 1.0).
+    # With the floor, full_title_match=True forces it to at least 0.95.
+    assert rel_full_match >= ranking.FULL_TITLE_MATCH_FLOOR
+    assert rel_full_match > rel_no_match
+
+
+def test_relevance_score_full_title_match_does_not_lower_strong_signal():
+    """Floor doesn't drop a strong signal — it floors but never caps."""
+    strong = ranking.relevance_score(
+        {"fts_chapter": 10.0}, title_coverage=1.0, full_title_match=True,
+    )
+    assert strong == 1.0
+
+
+def test_relevance_score_full_title_match_cant_revive_zero_base():
+    """Even with full title match, zero modality signal stays zero. The floor
+    is multiplicative-after-base, not a free pass to 0.95 with no signal."""
+    out = ranking.relevance_score({}, title_coverage=1.0, full_title_match=True)
+    assert out == 0.0
+
+
+def test_recency_score_floors_at_minimum():
+    """Very old material (10+ years past half-life) can't drop below RECENCY_FLOOR."""
+    out = ranking.recency_score(age_days=365 * 20)  # 20 years old
+    assert out == ranking.RECENCY_FLOOR
+
+
+def test_recency_score_recent_material_unaffected():
+    """Floor doesn't change behavior for recent material."""
+    out = ranking.recency_score(age_days=365)  # 1 year old
+    # exp(-ln(2) * 365 / 730) = exp(-0.5) ≈ 0.707
+    assert 0.6 < out < 0.8
+    # And the floor doesn't help/hurt today's material either
+    assert ranking.recency_score(age_days=0) == 1.0
+    assert ranking.recency_score(age_days=-5) == 1.0
+
+
+def test_recency_score_at_half_life_unchanged():
+    """At exactly half-life, score is 0.5 (above the floor)."""
+    out = ranking.recency_score(age_days=ranking.DEFAULT_HALF_LIFE_DAYS)
+    assert out == pytest.approx(0.5, abs=0.01)
+
+
+def test_recency_score_unknown_age_neutral_unchanged():
+    """None age stays at neutral 0.5."""
+    assert ranking.recency_score(age_days=None) == ranking.DEFAULT_NEUTRAL_FACTOR
+
+
 def test_corroboration_score_is_zero_at_zero():
     assert ranking.corroboration_score(corroborator_count=0) == 0.0
 

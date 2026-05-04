@@ -147,21 +147,88 @@ def test_gate_no_matches_returns_not_found():
     assert decision.decision == "not_found"
 
 
-def test_gate_single_match_returns_match():
+def test_gate_single_match_above_floor_returns_match():
+    """Single match clearing the source floor (Context7 ≥ 65.0) auto-ingests."""
     decision = discovery.ConfidenceGate().evaluate(
-        _probe(matches=[_match("only", 1.0)]),
+        _probe(matches=[_match("only", 80.0)]),
     )
     assert decision.decision == "match"
     assert decision.chosen_match.name == "only"
 
 
+def test_gate_single_match_below_floor_returns_ambiguous():
+    """Regression for the 'xyzzy_qwerty_nonsense_42' false-positive ingestion:
+    Context7 returned a single match at score 53.3 for a nonsense query, and
+    the gate accepted it blindly. With the floor (65.0), that match now
+    downgrades to ambiguous so the user can decide."""
+    decision = discovery.ConfidenceGate().evaluate(
+        _probe(matches=[_match("nonsensical", 53.3)]),
+    )
+    assert decision.decision == "ambiguous"
+    assert "below" in decision.reason
+
+
+def test_gate_single_match_no_score_returns_ambiguous():
+    """A single match with no score can't be verified against the floor —
+    defer to user judgement."""
+    decision = discovery.ConfidenceGate().evaluate(
+        _probe(matches=[_match("unscored", None)]),
+    )
+    assert decision.decision == "ambiguous"
+
+
 def test_gate_dominant_top_returns_match_with_winner():
-    """Top score 90, runner-up 30 → margin 0.67 ≥ 0.20 → auto-ingest top."""
+    """Top score 90, runner-up 30 → margin 0.67 ≥ 0.20 → auto-ingest top.
+
+    Top score also clears the Context7 floor (65.0), so the match is
+    fully confident."""
     decision = discovery.ConfidenceGate().evaluate(
         _probe(matches=[_match("a", 90.0), _match("b", 30.0)]),
     )
     assert decision.decision == "match"
     assert decision.chosen_match.name == "a"
+
+
+def test_gate_dominant_top_below_floor_returns_ambiguous():
+    """Even a dominant winner needs to clear the source floor — otherwise
+    we'd auto-ingest 'best of a bad lot' for a query the corpus simply
+    doesn't have."""
+    decision = discovery.ConfidenceGate().evaluate(
+        _probe(matches=[_match("a", 50.0), _match("b", 10.0)]),
+    )
+    # Margin (50-10)/50 = 0.80 ≥ 0.20, but score 50.0 < context7 floor 65.0
+    assert decision.decision == "ambiguous"
+
+
+def test_gate_floor_per_source():
+    """Different sources have different score scales and floors. GitHub uses
+    stargazer counts (floor 1000), so a 200-star single match is ambiguous."""
+    probe_github = discovery.ProbeResult(
+        source="github", query_term="X",
+        matches=[_match("a", 200.0)],
+    )
+    decision = discovery.ConfidenceGate().evaluate(probe_github)
+    assert decision.decision == "ambiguous"
+
+    # 5000 stars clears the GitHub floor.
+    probe_github_strong = discovery.ProbeResult(
+        source="github", query_term="X",
+        matches=[_match("a", 5000.0)],
+    )
+    decision = discovery.ConfidenceGate().evaluate(probe_github_strong)
+    assert decision.decision == "match"
+
+
+def test_gate_floor_unknown_source_does_not_block():
+    """An unknown source (not in SINGLE_MATCH_SCORE_FLOOR) is allowed
+    through — we don't have a floor configured, so don't fail-closed
+    on the only available signal."""
+    probe_unknown = discovery.ProbeResult(
+        source="custom_source", query_term="X",
+        matches=[_match("a", 10.0)],
+    )
+    decision = discovery.ConfidenceGate().evaluate(probe_unknown)
+    assert decision.decision == "match"
 
 
 def test_gate_close_top_returns_ambiguous():

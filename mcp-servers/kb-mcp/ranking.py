@@ -48,6 +48,7 @@ import duckdb
 
 
 DEFAULT_HALF_LIFE_DAYS = 365 * 2          # ~2-year half-life for recency decay
+RECENCY_FLOOR = 0.20                      # very old material still has non-zero recency
 DEFAULT_AUTHORITY_BOOK = 0.6              # fallback when book.publisher isn't a known anchor
 DEFAULT_NEUTRAL_FACTOR = 0.5              # used when a factor is genuinely unknown
 CORROBORATION_SATURATION = 3              # ~1.0 once 3+ corroborators exist
@@ -255,12 +256,23 @@ def recency_score(*, age_days: Optional[float],
     None ⇒ neutral 0.5 (we don't know how recent it is, neither penalize
     nor reward). Negative ages (e.g., snapshot retrieved a few seconds in
     the future due to clock skew) clamp to 1.0.
+
+    Floored at ``RECENCY_FLOOR`` (0.20) so very old foundational books
+    (10+ years past the half-life) don't drop to effectively-zero
+    recency. Without the floor, a 7-year-old book scores rec=0.09; a
+    20-year-old book scores rec=0.001 — both effectively eliminating
+    the recency component for that result. With the floor, recency is
+    a "modest tilt" rather than an "effective veto" for old material.
+    Currency-critical queries (rec weight 0.40) still strongly favor
+    fresh content; the floor just prevents the rec component from
+    becoming a near-zero-multiplier on chapters that are otherwise
+    excellent matches.
     """
     if age_days is None:
         return DEFAULT_NEUTRAL_FACTOR
     if age_days <= 0:
         return 1.0
-    return math.exp(-math.log(2) * age_days / half_life_days)
+    return max(RECENCY_FLOOR, math.exp(-math.log(2) * age_days / half_life_days))
 
 
 def doc_alignment_score(*, corroborates: int, contradicts: int) -> float:
@@ -293,10 +305,20 @@ GRAPH_SATURATION_HITS = 3.0
 # carry by default.
 TITLE_COVERAGE_BOOST = 0.8
 
+# When the chapter title matches EVERY significant query token (and the
+# query has ≥2 tokens — generic single-word queries are excluded by the
+# caller), relevance is floored at this value regardless of FTS/VSS
+# strength. A chapter literally titled "Circuit Breaker Pattern" should
+# win a "circuit breaker pattern" query even if its content is short and
+# BM25 is low — a fully-matched title is the strongest available
+# "this result is the topic" signal.
+FULL_TITLE_MATCH_FLOOR = 0.95
+
 
 def relevance_score(
     modality_scores: Optional[dict[str, Any]] = None,
     *, title_coverage: float = 0.0,
+    full_title_match: bool = False,
 ) -> float:
     """Compose relevance from absolute per-modality signal strength.
 
@@ -357,7 +379,13 @@ def relevance_score(
     if base <= 0.0:
         return 0.0
     cov = max(0.0, min(1.0, float(title_coverage)))
-    return min(1.0, base * (1.0 + TITLE_COVERAGE_BOOST * cov))
+    boosted = min(1.0, base * (1.0 + TITLE_COVERAGE_BOOST * cov))
+    # Full title match (caller-asserted: every significant query token in
+    # title AND ≥2 tokens) floors relevance at FULL_TITLE_MATCH_FLOOR.
+    # This decisively rewards chapters whose title IS the query topic.
+    if full_title_match:
+        return max(boosted, FULL_TITLE_MATCH_FLOOR)
+    return boosted
 
 
 def corroboration_score(*, corroborator_count: int,
@@ -553,6 +581,7 @@ def compute_components_for_result(
         relevance=relevance_score(
             modality_scores,
             title_coverage=float(result.get("title_coverage") or 0.0),
+            full_title_match=bool(result.get("full_title_match")),
         ),
         corroboration=corroboration_score(corroborator_count=corr_n),
         authority=authority_score_from_raw(auth_raw),
