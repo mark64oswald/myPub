@@ -39,6 +39,7 @@ Scope notes
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
@@ -58,41 +59,123 @@ CORROBORATION_SATURATION = 3              # ~1.0 once 3+ corroborators exist
 # publishers (Packt) or self-published material. Numbers here are starting points;
 # Phase 4.6 eval can drive empirical tuning.
 PUBLISHER_AUTHORITY: dict[str, float] = {
-    "o'reilly":           0.85,
-    "o'reilly media":     0.85,
-    "manning":            0.85,
-    "manning publications": 0.85,
-    "pragmatic bookshelf": 0.80,
-    "the pragmatic programmers": 0.80,
-    "addison-wesley":     0.80,
+    "o'reilly":                    0.85,
+    "o'reilly media":              0.85,
+    "manning":                     0.85,
+    "manning publications":        0.85,
+    "pragmatic bookshelf":         0.80,
+    "pragmatic programmers":       0.80,
+    "addison-wesley":              0.80,
     "addison-wesley professional": 0.80,
-    "pearson":            0.78,
-    "morgan kaufmann":    0.80,
-    "mit press":          0.85,
-    "no starch press":    0.78,
-    "apress":             0.72,
-    "wiley":              0.72,
-    "wrox":               0.68,
-    "packt":              0.65,
-    "packt publishing":   0.65,
+    "pearson":                     0.78,
+    "pearson education":           0.78,
+    "morgan kaufmann":             0.80,
+    "mit press":                   0.85,
+    "no starch press":             0.78,
+    "apress":                      0.72,
+    "wiley":                       0.72,
+    "john wiley & sons":           0.72,
+    "wiley & sons":                0.72,
+    "wrox":                        0.68,
+    "packt":                       0.65,
+    "elsevier":                    0.78,
+    "ft press":                    0.70,
+    "morgan kaufmann publishers":  0.80,
+    "academic press":              0.78,
+    "mcgraw-hill":                 0.78,
+    "mcgraw hill":                 0.78,
+    "mcgraw-hill education":       0.78,
+    "mcgraw-hill companies":       0.78,
+    "crc press":                   0.75,
+    "taylor & francis":            0.75,
+    "taylor & francis group":      0.75,
+    "sas institute":               0.70,
+    "sas press":                   0.70,
+    "jossey-bass":                 0.72,
+    "pearson education india":     0.74,
+    "pearson india education services": 0.74,
 }
+
+
+# Corporate-form suffixes — always safe to strip (no signal, no semantic
+# overlap with legitimate publisher names).
+_CORP_SUFFIX_RE = re.compile(
+    r"[,\s]*\b("
+    r"inc(?:orporated)?|co|company|"
+    r"ltd|limited|llc|llp|"
+    r"pvt(?:\.?\s*ltd\.?)?|private\s+limited|"
+    r"plc|gmbh|sa|s\.a\.|s\.a\.r\.l\."
+    r")\.?\b\.?",
+    re.IGNORECASE,
+)
+# Publisher-type words — strip ONLY if a corp-stripped form didn't match.
+# Reason: "no starch press" is itself a table key (0.78), so we mustn't
+# strip "Press" before lookup or "No Starch Press, Inc." would misroute.
+_PUBTYPE_SUFFIX_RE = re.compile(
+    r"[,\s]*\b(publishing|publishers?|publications|press|books|media)\b\.?",
+    re.IGNORECASE,
+)
+
+
+def _normalize_basic(publisher: str) -> str:
+    """Lowercase, normalize apostrophes, strip leading article."""
+    norm = publisher.strip().lower()
+    norm = norm.translate(str.maketrans({"’": "'", "‘": "'",
+                                          "“": '"', "”": '"'}))
+    if norm.startswith("the "):
+        norm = norm[4:]
+    return norm
+
+
+def _strip_iter(norm: str, pattern: "re.Pattern[str]") -> str:
+    """Apply suffix-stripping regex repeatedly until stable."""
+    prev = None
+    while prev != norm:
+        prev = norm
+        norm = pattern.sub("", norm).strip(" ,.")
+    return norm
 
 
 def authority_score_from_publisher(publisher: Optional[str]) -> float:
     """Map a free-form publisher string to an authority value.
 
-    Match is case- and whitespace-tolerant; unknown / missing publisher
-    falls back to ``DEFAULT_AUTHORITY_BOOK``. Common compound names
-    ("O'Reilly Media", "Addison-Wesley Professional") are handled by
-    explicit table entries rather than fuzzy matching, which would risk
-    false positives like "Wiley-VCH" hitting the Wiley score.
+    Tiered matching, returning the most specific hit:
+
+      1. Match the case-/apostrophe-normalized name directly.
+      2. Strip corporate suffixes ("Inc.", "Co.", "Pvt Ltd", "LLC") and retry.
+         This catches "O'Reilly Media, Inc." → "o'reilly media".
+      3. Strip publisher-type words ("Publishing", "Press", "Media") and
+         retry. This catches "Packt Publishing Pvt Ltd" → "packt".
+
+    Tiered (vs single-pass) so that "No Starch Press, Inc." matches
+    ``no starch press`` instead of being over-stripped to "no starch".
+
+    Why robust matching matters: the catalog ships with values like
+    "O'Reilly Media, Inc." and "Manning Publications Co." that exact-match
+    silently misses, leaving ~370 high-authority books at the default 0.6.
+
+    Suffix stripping does not introduce false positives like "Wiley-VCH"
+    matching "Wiley" — only trailing corporate-form words are removed.
     """
     if not publisher:
         return DEFAULT_AUTHORITY_BOOK
-    norm = publisher.strip().lower()
+    norm = _normalize_basic(publisher)
     if not norm:
         return DEFAULT_AUTHORITY_BOOK
-    return PUBLISHER_AUTHORITY.get(norm, DEFAULT_AUTHORITY_BOOK)
+
+    # Tier 1: direct match.
+    if norm in PUBLISHER_AUTHORITY:
+        return PUBLISHER_AUTHORITY[norm]
+    # Tier 2: strip corporate suffix.
+    norm_corp = _strip_iter(norm, _CORP_SUFFIX_RE)
+    if norm_corp and norm_corp in PUBLISHER_AUTHORITY:
+        return PUBLISHER_AUTHORITY[norm_corp]
+    # Tier 3: also strip publisher-type words.
+    norm_full = _strip_iter(norm_corp, _PUBTYPE_SUFFIX_RE)
+    if norm_full and norm_full in PUBLISHER_AUTHORITY:
+        return PUBLISHER_AUTHORITY[norm_full]
+
+    return DEFAULT_AUTHORITY_BOOK
 
 
 # ---------------------------------------------------------------------------

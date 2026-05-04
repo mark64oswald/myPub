@@ -13,8 +13,9 @@ Source-type contract (per arch §6.1, §5.4):
   - github_raw — raw file fetching from a public repo (last-resort)
 
 Authority scores (explicit, not auto-discovered):
-  - context7   : 0.90
-  - deepwiki   : 0.75
+  - context7   : 0.85   (parity with top-imprint books — vendor docs are
+                         current but auto-fetched, not curated like a book)
+  - deepwiki   : 0.70   (AI-generated; current but uneven quality)
   - github_raw : 0.65
 
 Idempotent: re-runs UPDATE name/authority/refresh_ttl_days but preserve
@@ -54,8 +55,8 @@ VALID_SOURCE_TYPES = {"context7", "deepwiki", "github_raw"}
 # Per arch §5.4. Auto-discovered sources (Phase 4.5b) get lower scores;
 # these are the explicit/curated ceilings.
 DEFAULT_AUTHORITY = {
-    "context7": 0.90,
-    "deepwiki": 0.75,
+    "context7": 0.85,
+    "deepwiki": 0.70,
     "github_raw": 0.65,
 }
 

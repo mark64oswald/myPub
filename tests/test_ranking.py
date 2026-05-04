@@ -206,9 +206,51 @@ def test_publisher_authority_none_or_empty_falls_back_to_default():
 
 def test_publisher_authority_no_fuzzy_false_positives():
     """A publisher containing a known substring (e.g., 'Wiley-VCH') must NOT
-    accidentally match the known 'Wiley' score — exact strings only."""
+    accidentally match the known 'Wiley' score — only trailing corporate-form
+    suffixes are stripped."""
     assert ranking.authority_score_from_publisher("Wiley-VCH") == \
            ranking.DEFAULT_AUTHORITY_BOOK
+
+
+def test_publisher_authority_strips_corporate_suffixes():
+    """Real catalog values like 'O'Reilly Media, Inc.' / 'Manning Publications Co.'
+    must match the same imprint scores as the bare names — these are >300
+    books in the catalog combined that were silently falling to default."""
+    base = ranking.authority_score_from_publisher("O'Reilly Media")
+    assert base > ranking.DEFAULT_AUTHORITY_BOOK  # sanity
+    assert ranking.authority_score_from_publisher("O'Reilly Media, Inc.") == base
+    assert ranking.authority_score_from_publisher("O'Reilly Media Inc.") == base
+    assert ranking.authority_score_from_publisher("O'Reilly Media, Inc") == base
+
+    manning = ranking.authority_score_from_publisher("Manning Publications")
+    assert manning > ranking.DEFAULT_AUTHORITY_BOOK
+    assert ranking.authority_score_from_publisher("Manning Publications Co.") == manning
+    assert ranking.authority_score_from_publisher("Manning Publications, Inc.") == manning
+
+
+def test_publisher_authority_normalizes_curly_apostrophes():
+    """ePub metadata sometimes carries U+2019 (right single quote) instead of
+    ASCII apostrophe. Both forms must hit the same imprint."""
+    straight = ranking.authority_score_from_publisher("O'Reilly Media")
+    curly = ranking.authority_score_from_publisher("O’Reilly Media")
+    assert straight == curly
+    assert curly > ranking.DEFAULT_AUTHORITY_BOOK
+
+
+def test_publisher_authority_strips_packt_variants():
+    """Packt Publishing has many corporate-form variants in the catalog."""
+    base = ranking.authority_score_from_publisher("Packt")
+    assert ranking.authority_score_from_publisher("Packt Publishing") == base
+    assert ranking.authority_score_from_publisher("Packt Publishing Pvt Ltd") == base
+    assert ranking.authority_score_from_publisher("Packt Publishing Pvt. Ltd.") == base
+    assert ranking.authority_score_from_publisher("Packt Publishing Limited") == base
+
+
+def test_publisher_authority_pragmatic_bookshelf_with_llc():
+    """'The Pragmatic Bookshelf, LLC' must match the bare imprint name."""
+    base = ranking.authority_score_from_publisher("Pragmatic Bookshelf")
+    assert base > ranking.DEFAULT_AUTHORITY_BOOK
+    assert ranking.authority_score_from_publisher("The Pragmatic Bookshelf, LLC") == base
 
 
 def test_combined_score_zero_inputs_zero_output():
