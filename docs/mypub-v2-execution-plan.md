@@ -766,6 +766,80 @@ Test with a single doc_source (e.g., DuckDB docs via Context7). Inspect:
 
 🔀 Commit: `feat(phase4): snapshot ingestion pipeline with section-level extraction`
 
+### Prompt 4.4b — Phase 4.4 follow-on: complete steps 8–9 + cross-corpus search
+
+```text
+Phase 4.4 landed the snapshot ingestion pipeline through step 7 (entity
+extraction). This prompt finishes the architecture §6.2 work:
+
+1. Step 8 — Procedure extraction at section level.
+   Mirror scripts/extract_procedures.py at doc_section granularity:
+     * Add a procedure prompt builder in scripts/refresh_docs.py
+       (alongside build_section_extraction_prompt) that emits the
+       SYSTEM_PROMPT from extract_procedures.py with section content as
+       payload.
+     * prep_extraction emits a second prompt file per section
+       (prompt_section_<id>_proc.txt + result_section_<id>_proc.json) in
+       the manifest.
+     * process_extraction reads the procedure result JSONs, validates,
+       and writes procedure + procedure_concept rows with
+       source_type='doc_section'.
+   Tests: mirror the entity-extraction prep/process tests but for the
+   procedure pathway. Also a regression test confirming the original
+   entity extraction still runs (procedures are additive, not a
+   replacement).
+
+2. Step 9 — Alignment edges (CORROBORATES / CONTRADICTS).
+   For each concept a doc_section discusses, compare against existing
+   book chapter content for the same concept. Emit concept_relation
+   rows with relation_type IN ('CORROBORATES', 'CONTRADICTS') and
+   source_type='doc_section'. Design choice to make in this prompt:
+     a) Single-shot prompt that includes book snippets per concept
+        (simple but token-heavy if a concept has many references), OR
+     b) Two-phase: prep emits a "concepts touched" JSON per section;
+        a second prep generates per-(section, concept) alignment
+        prompts that include the relevant book snippet; process
+        ingests the alignment classifications.
+   Recommendation: start with (a); migrate to (b) only if token cost
+   becomes a problem. Either way, alignment prompt template lives next
+   to the entity/procedure prompt builders.
+   Tests: synthetic section + synthetic book content + canned
+   sub-agent responses to drive both classification paths.
+
+3. Cross-corpus retrieval — kb-mcp/server.py search_chapters mixes
+   doc_section results alongside chapter results.
+   Today search_chapters fans out three modalities (FTS, VSS, graph)
+   keyed on chapter_id. Broaden to a unified result identifier:
+     * Each result row carries kind ∈ {'chapter', 'doc_section'} and
+       a single result_id (chapter_id or doc_section_id).
+     * Add three parallel doc_section modality functions:
+       _fts_doc_section_search, _vss_doc_section_search,
+       _graph_doc_section_search (the graph variant filters
+       concept_relation on source_type='doc_section').
+     * RRF merging operates on (kind, result_id) pairs; doc and chapter
+       rows compete in the same ranked list.
+   Tests: extend test_phase1_integration with mixed-corpus topics where
+   doc content is known to exist. Verify both kinds appear in a single
+   result list, RRF ordering is sensible, and existing chapter-only
+   topics still rank correctly (no regression).
+
+Validate:
+  * pytest tests/ — 202 baseline + new tests, all green
+  * search_chapters returns mixed (chapter, doc_section) results for
+    queries where both corpuses have signal
+  * doc_section procedure rows + alignment edges visible in DB after a
+    full refresh + extraction pass
+
+🔀 Commit: `feat(phase4): complete steps 8-9 + cross-corpus search`
+```
+
+**Why a separate prompt rather than rolling into 4.4:** Phase 4.4 was
+already a large deliverable (1300-line script, 65 tests). Steps 8 and 9
+each warrant their own design pass — alignment in particular has a real
+prompt-architecture choice (single-shot vs two-phase). Cross-corpus
+search changes the search_chapters result shape, which deserves its own
+review against the ranking engine work in 4.5.
+
 ### Prompt 4.5 — Ranking engine
 
 ```text
