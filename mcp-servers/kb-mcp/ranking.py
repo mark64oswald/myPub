@@ -125,12 +125,34 @@ class Weights:
             )
 
 
+# Weight profiles
+# ---------------
+# These were originally calibrated against a relevance signal that always
+# saturated at 1.0 (RRF rank-normalized), so other components had to
+# differentiate. With absolute relevance (BM25/VSS-saturated, real range
+# 0.1–0.9), the profiles are rebalanced to give relevance its proper share
+# while keeping each profile's intent intact:
+#
+#   balanced_interactive — sane default: relevance leads, modest
+#       recency + authority tilt, no extreme bias toward freshness.
+#       Right for "what does my library know about X" queries.
+#
+#   currency_critical_interactive — when the user genuinely cares about
+#       the latest API/spec ("what's the current way to X"). Recency +
+#       doc_alignment dominate; relevance still meaningful.
+#
+#   foundational_interactive — timeless concepts (algorithms, design
+#       patterns, classical CS). Authority + corroboration + relevance
+#       lead; recency barely matters.
+#
+#   skill_* profiles drive the Skills Factory generation modes (§8.3).
 WEIGHT_PROFILES: dict[str, Weights] = {
-    "currency_critical_interactive": Weights(0.30, 0.35, 0.20, 0.10, 0.05),
-    "foundational_interactive":      Weights(0.05, 0.05, 0.30, 0.30, 0.30),
-    "skill_recent_doc":              Weights(0.35, 0.40, 0.15, 0.05, 0.05),
-    "skill_consensus":               Weights(0.10, 0.05, 0.25, 0.40, 0.20),
-    "skill_authority":               Weights(0.05, 0.10, 0.20, 0.10, 0.55),
+    "balanced_interactive":          Weights(0.15, 0.10, 0.40, 0.15, 0.20),
+    "currency_critical_interactive": Weights(0.40, 0.25, 0.20, 0.10, 0.05),
+    "foundational_interactive":      Weights(0.05, 0.10, 0.35, 0.30, 0.20),
+    "skill_recent_doc":              Weights(0.30, 0.30, 0.25, 0.05, 0.10),
+    "skill_consensus":               Weights(0.05, 0.10, 0.30, 0.35, 0.20),
+    "skill_authority":               Weights(0.05, 0.10, 0.25, 0.10, 0.50),
 }
 
 
@@ -166,16 +188,61 @@ def doc_alignment_score(*, corroborates: int, contradicts: int) -> float:
     return corroborates / total
 
 
-def relevance_score(*, rrf_score: float, max_rrf_score: float) -> float:
-    """Normalize this candidate's RRF contribution against the result set's max.
+# Saturation constants for the absolute relevance components.
+# Picked so a "strong" raw signal lands near 1.0 and a "weak" one near 0.2:
+#   BM25=10  → 1 - exp(-2.0) ≈ 0.86          BM25=1   → 1 - exp(-0.2) ≈ 0.18
+#   concept_hits=3 → 1 - exp(-1.0) ≈ 0.63    concept_hits=1 → ≈ 0.28
+# VSS similarity is already in [0, 1] (cosine), so it passes through.
+FTS_SATURATION_SCORE = 5.0
+GRAPH_SATURATION_HITS = 3.0
 
-    The result set's max RRF score becomes 1.0; everything else scales
-    proportionally. Empty result set or all-zero scores ⇒ 0.0 to keep
-    relevance a non-amplifier when nothing's relevant.
+
+def relevance_score(modality_scores: Optional[dict[str, Any]] = None) -> float:
+    """Compose relevance from absolute per-modality signal strength.
+
+    The previous formulation normalized RRF against the result set's max,
+    which collapsed ALL "top of bucket" results to 1.0 — a low-quality
+    BM25=1.4 match scored as relevant as a strong BM25=10 match. This made
+    the combined score blind to actual match quality and let
+    recency × authority pick the winner.
+
+    The new formulation looks at the actual per-modality scores carried
+    forward by ``_rrf_merge`` and saturates each independently:
+
+      * FTS (BM25)             → ``1 - exp(-bm25 / FTS_SATURATION_SCORE)``
+      * VSS (cosine similarity) → already in [0, 1], pass through
+      * Graph (concept hits)    → ``1 - exp(-hits / GRAPH_SATURATION_HITS)``
+
+    The candidate's relevance is the MAX of these three — best signal across
+    modalities wins, so a strong FTS match isn't penalized by missing VSS,
+    and vice versa. A candidate that hits both gets the better of the two,
+    not a watered-down average.
+
+    None / missing modality_scores ⇒ 0.0 (no signal known).
     """
-    if max_rrf_score <= 0:
+    if not modality_scores:
         return 0.0
-    return min(1.0, max(0.0, rrf_score / max_rrf_score))
+
+    fts_raw = max(
+        float(modality_scores.get("fts_chapter") or 0.0),
+        float(modality_scores.get("fts_doc_section") or 0.0),
+    )
+    vss_raw = max(
+        float(modality_scores.get("vss_chapter") or 0.0),
+        float(modality_scores.get("vss_doc_section") or 0.0),
+    )
+    graph_raw = max(
+        float(modality_scores.get("graph_chapter") or 0.0),
+        float(modality_scores.get("graph_doc_section") or 0.0),
+    )
+
+    fts_norm = 1.0 - math.exp(-fts_raw / FTS_SATURATION_SCORE) if fts_raw > 0 else 0.0
+    vss_norm = max(0.0, min(1.0, vss_raw))
+    graph_norm = (
+        1.0 - math.exp(-graph_raw / GRAPH_SATURATION_HITS) if graph_raw > 0 else 0.0
+    )
+
+    return max(fts_norm, vss_norm, graph_norm)
 
 
 def corroboration_score(*, corroborator_count: int,
@@ -338,17 +405,19 @@ class ComponentScores:
 
 def compute_components_for_result(
     conn: duckdb.DuckDBPyConnection, result: dict[str, Any],
-    *, max_rrf_score: float, now: Optional[datetime] = None,
+    *, now: Optional[datetime] = None,
 ) -> ComponentScores:
     """Compute the 5 component scores for one search-result row.
 
     The ``result`` dict is the per-result shape produced by
     kb-mcp/server.py:_rrf_merge — must carry ``kind``, ``result_id``, and
-    ``rrf_score``. Other fields are looked up from the catalog.
+    ``modality_scores`` (the absolute per-modality scores carried forward
+    from FTS/VSS/graph). ``rrf_score`` is no longer used for the relevance
+    component; see relevance_score() for the rationale.
     """
     kind = result.get("kind", "chapter")
     rid = int(result["result_id"])
-    rrf = float(result.get("rrf_score") or 0.0)
+    modality_scores = result.get("modality_scores") or {}
 
     if kind == "chapter":
         age = chapter_age_days(conn, rid, now=now)
@@ -366,7 +435,7 @@ def compute_components_for_result(
         doc_alignment=doc_alignment_score(
             corroborates=corr_n, contradicts=contr_n,
         ),
-        relevance=relevance_score(rrf_score=rrf, max_rrf_score=max_rrf_score),
+        relevance=relevance_score(modality_scores),
         corroboration=corroboration_score(corroborator_count=corr_n),
         authority=authority_score_from_raw(auth_raw),
     )
@@ -420,12 +489,9 @@ class InteractiveRanker:
         if not results:
             return InteractiveOutput(primary=None)
 
-        max_rrf = max(float(r.get("rrf_score") or 0.0) for r in results) or 1.0
         scored: list[ScoredResult] = []
         for r in results:
-            comps = compute_components_for_result(
-                self.conn, r, max_rrf_score=max_rrf, now=now,
-            )
+            comps = compute_components_for_result(self.conn, r, now=now)
             scored.append(ScoredResult(
                 result=r, components=comps, combined=comps.combine(self.weights),
             ))
@@ -530,12 +596,9 @@ class GenerationRanker:
         if not results:
             return GenerationOutput(strategy=strategy)
 
-        max_rrf = max(float(r.get("rrf_score") or 0.0) for r in results) or 1.0
         scored: list[ScoredResult] = []
         for r in results:
-            comps = compute_components_for_result(
-                self.conn, r, max_rrf_score=max_rrf, now=now,
-            )
+            comps = compute_components_for_result(self.conn, r, now=now)
             scored.append(ScoredResult(
                 result=r, components=comps, combined=comps.combine(self.weights),
             ))

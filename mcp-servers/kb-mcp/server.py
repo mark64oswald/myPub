@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 from contextlib import contextmanager
@@ -52,10 +53,133 @@ import discovery  # noqa: E402
 LOG = logging.getLogger("mypub-kb")
 
 EXCERPT_CHARS = 240
+EXCERPT_FETCH_CHARS = 1200     # pulled from DB; cleaned + truncated to EXCERPT_CHARS
 RRF_K = 60                     # reciprocal-rank-fusion smoothing constant
 PER_MODALITY_LIMIT = 20        # candidates pulled from each modality before merge
 SCORING_POOL_MULTIPLIER = 5    # ranker sees limit * this many candidates before truncation
 WRITER_GRACE_SECONDS = 0.05    # OS lock-release breathing room (Topology A)
+
+
+# Patterns that mark a leading boilerplate line in book chapter content.
+# ePub-to-text extraction typically dumps the chapter heading at the top of
+# c.content as one or two short lines, then the actual body. The chapter
+# title is already in chapter.title, so showing it again in the excerpt is
+# noise that pushes real content out of the 240-char window.
+_HEADING_LINE_RE = re.compile(
+    r"^(?:Chapter|Section|Part|Appendix|Preface|Foreword|Introduction|Epilogue)"
+    r"\s*\d*(?:[.:]\d+)*[.:]?\s*$",
+    re.IGNORECASE,
+)
+_DIGIT_OR_ROMAN_LINE_RE = re.compile(r"^\s*(?:\d+|[IVXLCDM]+)[.:]?\s*$")
+_EARLY_RELEASE_PREAMBLE_RE = re.compile(
+    r"^a\s+note\s+for\s+early\s+release\s+readers", re.IGNORECASE,
+)
+# Markdown horizontal-rule / leading section dashes that the doc_section
+# sectionizer leaves at the start of section content, e.g. "--\n\n### Heading".
+_LEADING_MD_HR_RE = re.compile(r"^-{2,}\s*$")
+
+
+def _clean_excerpt(content: Optional[str], *, max_chars: int = EXCERPT_CHARS) -> str:
+    """Strip leading chapter-heading boilerplate and return a readable excerpt.
+
+    Common patterns we trim:
+      "Chapter 2.\\nFundamentals of Events…"   → drop the first two lines
+      "Preface\\nDomain-Driven Design in PHP…" → drop the first two lines
+      "II\\nFrom Circuits to Networks…"        → drop digit/roman + title
+      "Chapter 1.\\nTitle\\nA Note for Early Release Readers…"
+                                              → also strip the early-release blurb
+
+    If the cleaning would leave less than half the target excerpt length,
+    fall back to the raw prefix so we never return a useless sliver.
+    """
+    if not content:
+        return ""
+    lines = content.splitlines()
+    # Drop leading blank lines + markdown horizontal-rule markers ("--", "---").
+    while lines and (not lines[0].strip() or _LEADING_MD_HR_RE.match(lines[0].strip())):
+        lines.pop(0)
+    if not lines:
+        return ""
+
+    # Strip "Chapter N." / "Preface" / digit / roman heading line.
+    if (_HEADING_LINE_RE.match(lines[0].strip())
+            or _DIGIT_OR_ROMAN_LINE_RE.match(lines[0])):
+        lines.pop(0)
+        # The heading is usually followed by the chapter title on its own
+        # line — short, no terminal period. Drop one such line.
+        if lines and lines[0].strip() and len(lines[0]) < 100 \
+                and not lines[0].rstrip().endswith("."):
+            lines.pop(0)
+
+    # Strip the "A Note for Early Release Readers" preamble — it's always 3-6
+    # lines of disclaimer before the real content starts.
+    if lines and _EARLY_RELEASE_PREAMBLE_RE.match(lines[0].strip()):
+        lines.pop(0)
+        # Drop until we find a blank line or a sentence-ending line, capping at
+        # 8 dropped lines so we don't accidentally consume an entire chapter.
+        dropped = 0
+        while lines and dropped < 8 and lines[0].strip() \
+                and not lines[0].rstrip().endswith("."):
+            lines.pop(0)
+            dropped += 1
+        # Drop one more if the preamble closes with a period.
+        if lines and lines[0].rstrip().endswith(".") and dropped < 8:
+            lines.pop(0)
+
+    text = "\n".join(lines).lstrip()
+    # Fallback only if cleaning ate everything substantive — a short but
+    # non-trivial cleaned excerpt is still better than the raw prefix with
+    # heading boilerplate.
+    if len(text) < 40:
+        return content.lstrip()[:max_chars]
+    return text[:max_chars]
+
+
+# "(for <name>)" personalization suffix added to book titles by the ePub
+# vendor (e.g., "Building Event-Driven Microservices (for Mark Oswald)").
+# Strip from titles at query time so responses don't carry the watermark.
+_PERSONALIZATION_RE = re.compile(r"\s*\(for [^)]+\)\s*$")
+
+
+def _clean_book_title(title: Optional[str]) -> Optional[str]:
+    """Strip the trailing '(for <name>)' personalization watermark."""
+    if title is None:
+        return None
+    return _PERSONALIZATION_RE.sub("", title).strip() or title
+
+
+# Phase 1 splitter bug: ePub TOC entries that point at the same xhtml file
+# with different anchor fragments all get the FULL file's content, so 94.8%
+# of chapters share their content with at least one sibling. Until the
+# splitter is reworked to honor fragments (tracked as Phase 1 follow-up),
+# we collapse duplicate-content chapters at retrieval time. Keys on
+# (book_title, excerpt[:160]) — the cleaned excerpts of duplicate chapters
+# match exactly because the underlying content is byte-identical.
+def _dedupe_by_content(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse chapter results that share book + content prefix.
+
+    Doc_section rows are passed through unchanged (the sectionizer doesn't
+    have this bug). For chapters, the highest-scored representative per
+    (book_title, excerpt[:160]) cluster is kept; other rows are dropped.
+    """
+    seen_chapter_keys: dict[tuple[Any, str], int] = {}
+    out: list[dict[str, Any]] = []
+    for r in results:
+        if r.get("kind") != "chapter":
+            out.append(r)
+            continue
+        excerpt = (r.get("excerpt") or "")[:160]
+        key = (r.get("book_title"), excerpt)
+        existing_idx = seen_chapter_keys.get(key)
+        if existing_idx is None:
+            seen_chapter_keys[key] = len(out)
+            out.append(r)
+            continue
+        # Duplicate cluster — keep whichever scored higher.
+        existing = out[existing_idx]
+        if (r.get("rrf_score") or 0.0) > (existing.get("rrf_score") or 0.0):
+            out[existing_idx] = r
+    return out
 
 # ---------------------------------------------------------------------------
 # Connection + model lifecycle
@@ -178,22 +302,22 @@ def _fts_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
                fts_main_chapter.match_bm25(c.chapter_id, ?) AS score,
                b.title AS book_title,
                c.title AS chapter_title,
-               substring(c.content, 1, ?) AS excerpt
+               substring(c.content, 1, ?) AS raw_prefix
           FROM chapter c
           JOIN book b ON c.book_id = b.book_id
          WHERE fts_main_chapter.match_bm25(c.chapter_id, ?) IS NOT NULL
          ORDER BY score DESC
          LIMIT ?
         """,
-        [query, EXCERPT_CHARS, query, limit],
+        [query, EXCERPT_FETCH_CHARS, query, limit],
     ).fetchall()
     return [
         {
             "chapter_id": r[0],
             "score": float(r[1]),
-            "book_title": r[2],
+            "book_title": _clean_book_title(r[2]),
             "chapter_title": r[3],
-            "excerpt": r[4],
+            "excerpt": _clean_excerpt(r[4]),
         }
         for r in rows
     ]
@@ -207,23 +331,23 @@ def _vss_chapter_search(qvec: list[float], limit: int) -> list[dict[str, Any]]:
                array_cosine_distance(e.embedding, ?::FLOAT[384]) AS distance,
                b.title AS book_title,
                c.title AS chapter_title,
-               substring(c.content, 1, ?) AS excerpt
+               substring(c.content, 1, ?) AS raw_prefix
           FROM chapter_embedding e
           JOIN chapter c USING (chapter_id)
           JOIN book    b ON c.book_id = b.book_id
          ORDER BY distance ASC
          LIMIT ?
         """,
-        [qvec, EXCERPT_CHARS, limit],
+        [qvec, EXCERPT_FETCH_CHARS, limit],
     ).fetchall()
     return [
         {
             "chapter_id": r[0],
             # Convert distance → similarity for a uniform "higher is better" view.
             "score": 1.0 - float(r[1]),
-            "book_title": r[2],
+            "book_title": _clean_book_title(r[2]),
             "chapter_title": r[3],
-            "excerpt": r[4],
+            "excerpt": _clean_excerpt(r[4]),
         }
         for r in rows
     ]
@@ -284,23 +408,23 @@ def _graph_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
                h.mention_count,
                b.title AS book_title,
                c.title AS chapter_title,
-               substring(c.content, 1, ?) AS excerpt
+               substring(c.content, 1, ?) AS raw_prefix
           FROM chapter_hits h
           JOIN chapter c ON c.chapter_id = h.chapter_id
           JOIN book    b ON c.book_id    = b.book_id
          ORDER BY h.concept_hits DESC, h.mention_count DESC
          LIMIT ?
         """,
-        [*cids, *cids, *cids, *cids, EXCERPT_CHARS, limit],
+        [*cids, *cids, *cids, *cids, EXCERPT_FETCH_CHARS, limit],
     ).fetchall()
     return [
         {
             "chapter_id": r[0],
             "concept_hits": int(r[1]),
             "mention_count": int(r[2]),
-            "book_title": r[3],
+            "book_title": _clean_book_title(r[3]),
             "chapter_title": r[4],
-            "excerpt": r[5],
+            "excerpt": _clean_excerpt(r[5]),
             # A normalized score for the merge step. Real scoring lands in 4.5.
             "score": float(r[1]) + 0.1 * float(r[2]),
         }
@@ -325,7 +449,7 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
                fts_main_doc_section.match_bm25(s.doc_section_id, ?) AS score,
                src.name AS doc_source_name,
                s.heading_text,
-               substring(s.content, 1, ?) AS excerpt
+               substring(s.content, 1, ?) AS raw_prefix
           FROM doc_section s
           JOIN doc_snapshot sn ON s.snapshot_id = sn.snapshot_id
           JOIN doc_source   src ON sn.doc_source_id = src.doc_source_id
@@ -333,7 +457,7 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
          ORDER BY score DESC
          LIMIT ?
         """,
-        [query, EXCERPT_CHARS, query, limit],
+        [query, EXCERPT_FETCH_CHARS, query, limit],
     ).fetchall()
     return [
         {
@@ -344,7 +468,7 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "score": float(r[1]),
             "doc_source_name": r[2],
             "heading_text": r[3],
-            "excerpt": r[4],
+            "excerpt": _clean_excerpt(r[4]),
         }
         for r in rows
     ]
@@ -358,7 +482,7 @@ def _vss_doc_section_search(qvec: list[float], limit: int) -> list[dict[str, Any
                array_cosine_distance(e.embedding, ?::FLOAT[384]) AS distance,
                src.name AS doc_source_name,
                s.heading_text,
-               substring(s.content, 1, ?) AS excerpt
+               substring(s.content, 1, ?) AS raw_prefix
           FROM doc_section_embedding e
           JOIN doc_section s     USING (doc_section_id)
           JOIN doc_snapshot sn   ON s.snapshot_id = sn.snapshot_id
@@ -366,7 +490,7 @@ def _vss_doc_section_search(qvec: list[float], limit: int) -> list[dict[str, Any
          ORDER BY distance ASC
          LIMIT ?
         """,
-        [qvec, EXCERPT_CHARS, limit],
+        [qvec, EXCERPT_FETCH_CHARS, limit],
     ).fetchall()
     return [
         {
@@ -377,7 +501,7 @@ def _vss_doc_section_search(qvec: list[float], limit: int) -> list[dict[str, Any
             "score": 1.0 - float(r[1]),  # convert distance → similarity
             "doc_source_name": r[2],
             "heading_text": r[3],
-            "excerpt": r[4],
+            "excerpt": _clean_excerpt(r[4]),
         }
         for r in rows
     ]
@@ -410,7 +534,7 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
         )
         SELECT h.doc_section_id, h.concept_hits, h.mention_count,
                src.name AS doc_source_name, s.heading_text,
-               substring(s.content, 1, ?) AS excerpt
+               substring(s.content, 1, ?) AS raw_prefix
           FROM section_hits h
           JOIN doc_section  s    ON s.doc_section_id = h.doc_section_id
           JOIN doc_snapshot sn   ON s.snapshot_id = sn.snapshot_id
@@ -418,7 +542,7 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
          ORDER BY h.concept_hits DESC, h.mention_count DESC
          LIMIT ?
         """,
-        [*cids, *cids, *cids, *cids, EXCERPT_CHARS, limit],
+        [*cids, *cids, *cids, *cids, EXCERPT_FETCH_CHARS, limit],
     ).fetchall()
     return [
         {
@@ -430,7 +554,7 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "mention_count": int(r[2]),
             "doc_source_name": r[3],
             "heading_text": r[4],
-            "excerpt": r[5],
+            "excerpt": _clean_excerpt(r[5]),
             "score": float(r[1]) + 0.1 * float(r[2]),
         }
         for r in rows
@@ -514,7 +638,7 @@ mcp = FastMCP(
 )
 
 
-DEFAULT_INTERACTIVE_PROFILE = "currency_critical_interactive"
+DEFAULT_INTERACTIVE_PROFILE = "balanced_interactive"
 
 
 def _is_thin_retrieval(
@@ -677,6 +801,9 @@ def search_chapters(
         },
         limit=scoring_pool,
     )
+    # Collapse chapter rows that share book + content prefix (Phase 1 splitter
+    # bug — see _dedupe_by_content). Doc_section rows pass through unchanged.
+    merged = _dedupe_by_content(merged)
 
     # Phase 4.5: feed the merged set through the ranking engine. RRF score
     # becomes the relevance component; recency / doc_alignment / corroboration
@@ -690,14 +817,9 @@ def search_chapters(
             # No strategy specified — return the combined-score-sorted view
             # so downstream callers can pick their own filter. Same shape as
             # before to keep API compatibility for the no-strategy case.
-            max_rrf = max(
-                (float(r.get("rrf_score") or 0.0) for r in merged), default=1.0
-            ) or 1.0
             scored = []
             for r in merged:
-                comps = ranking.compute_components_for_result(
-                    _CONN, r, max_rrf_score=max_rrf,
-                )
+                comps = ranking.compute_components_for_result(_CONN, r)
                 scored.append(ranking.ScoredResult(
                     result=r, components=comps, combined=comps.combine(weights),
                 ))
@@ -963,7 +1085,7 @@ def compare_concept_across_authors(
                  b.title AS book_title,
                  ch.chapter_id,
                  ch.title AS chapter_title,
-                 substring(ch.content, 1, ?) AS excerpt,
+                 substring(ch.content, 1, ?) AS raw_prefix,
                  ROW_NUMBER() OVER (
                      PARTITION BY a.author_id ORDER BY b.book_id, ch.chapter_id
                  ) AS rn
@@ -974,16 +1096,18 @@ def compare_concept_across_authors(
             JOIN author    a  ON a.author_id  = ba.author_id
         )
         SELECT author_id, author_name, book_id, book_title,
-               chapter_id, chapter_title, excerpt
+               chapter_id, chapter_title, raw_prefix
           FROM ranked
          WHERE rn <= ?
          ORDER BY author_name, book_title, chapter_id
         """,
-        [cid, cid, EXCERPT_CHARS, limit_per_author],
+        [cid, cid, EXCERPT_FETCH_CHARS, limit_per_author],
     ).fetchall()
 
     by_author: dict[int, dict[str, Any]] = {}
-    for author_id, author_name, book_id, book_title, ch_id, ch_title, excerpt in rows:
+    for author_id, author_name, book_id, book_title, ch_id, ch_title, raw_prefix in rows:
+        excerpt = _clean_excerpt(raw_prefix)
+        book_title = _clean_book_title(book_title)
         author_entry = by_author.setdefault(
             author_id,
             {"author_id": author_id, "author": author_name, "books": {}},

@@ -78,6 +78,187 @@ def server_state(fresh_catalog, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _clean_excerpt — strips chapter heading boilerplate
+# ---------------------------------------------------------------------------
+
+
+def test_clean_excerpt_strips_chapter_n_heading():
+    raw = "Chapter 2.\nFundamentals of Events and Event Streams\nEvent streams are the dominant mode for powerful event-driven systems and are served by an event broker."
+    out = server._clean_excerpt(raw)
+    assert out.startswith("Event streams")
+    assert "Chapter 2." not in out
+    assert "Fundamentals of Events" not in out
+
+
+def test_clean_excerpt_strips_preface_heading():
+    raw = "Preface\nDomain-Driven Design in PHP\nIn 2014, after two years of working with DDD, the authors decided to consolidate their learnings."
+    out = server._clean_excerpt(raw)
+    assert out.startswith("In 2014")
+
+
+def test_clean_excerpt_strips_digit_only_heading():
+    raw = "7\nPrompt Types\nThis chapter covers how systems process structured conversations with distinct message types."
+    out = server._clean_excerpt(raw)
+    assert out.startswith("This chapter covers")
+
+
+def test_clean_excerpt_strips_roman_numeral_heading():
+    raw = "II\nFrom Circuits to Networks\nIn this section we examine the topology and dynamics of biological circuits as networks."
+    out = server._clean_excerpt(raw)
+    assert out.startswith("In this section")
+
+
+def test_clean_excerpt_strips_early_release_preamble():
+    raw = (
+        "Chapter 1.\nIntroduction: Fundamental Patterns\n"
+        "A Note for Early Release Readers\n"
+        "With Early Release ebooks, you get books in their earliest form\n"
+        "the author's raw and unedited content as they write\n"
+        "so you can take advantage of these technologies long before the official release of these titles.\n"
+        "Architecture is fundamentally about tradeoffs between competing concerns."
+    )
+    out = server._clean_excerpt(raw)
+    assert out.startswith("Architecture is fundamentally"), \
+        f"expected to skip early-release preamble, got: {out[:80]!r}"
+
+
+def test_clean_excerpt_falls_back_when_cleaning_eats_too_much():
+    """If after stripping there's almost nothing left, return the raw prefix.
+    Better to show messy content than a useless sliver."""
+    raw = "Chapter 1.\nFoo"  # only 2 lines, both heading-shaped
+    out = server._clean_excerpt(raw)
+    # Cleaning would leave "" — fallback returns the raw prefix.
+    assert out  # non-empty
+    assert "Chapter 1" in out or "Foo" in out
+
+
+def test_clean_excerpt_handles_empty_input():
+    assert server._clean_excerpt(None) == ""
+    assert server._clean_excerpt("") == ""
+
+
+def test_clean_excerpt_truncates_to_max_chars():
+    long = "X" * 5000
+    raw = "Chapter 1.\nTitle\n" + long
+    out = server._clean_excerpt(raw, max_chars=100)
+    assert len(out) == 100
+
+
+def test_clean_excerpt_passthrough_when_no_heading():
+    """Doc sections from the sectionizer don't have chapter headings — the
+    cleaner should be a near-no-op for them."""
+    raw = "Watermarks track the progress of event time and are used to handle late-arriving data in stream processing systems."
+    out = server._clean_excerpt(raw)
+    assert out.startswith("Watermarks track")
+
+
+# ---------------------------------------------------------------------------
+# _clean_book_title — strips '(for <name>)' personalization suffix
+# ---------------------------------------------------------------------------
+
+
+def test_clean_book_title_strips_for_name_suffix():
+    assert server._clean_book_title("Building Event-Driven Microservices (for Mark Oswald)") \
+        == "Building Event-Driven Microservices"
+
+
+def test_clean_book_title_handles_unsuffixed():
+    assert server._clean_book_title("Designing Data-Intensive Applications") \
+        == "Designing Data-Intensive Applications"
+
+
+def test_clean_book_title_handles_none_and_empty():
+    assert server._clean_book_title(None) is None
+    # Empty string passes through (no-op)
+    assert server._clean_book_title("") == ""
+
+
+def test_clean_book_title_only_strips_personalization_pattern():
+    """Don't strip arbitrary parenthetical content — only the '(for <name>)' marker."""
+    assert server._clean_book_title("Refactoring (2nd Edition)") \
+        == "Refactoring (2nd Edition)"
+
+
+# ---------------------------------------------------------------------------
+# _dedupe_by_content — Phase 1 splitter bug mitigation
+# ---------------------------------------------------------------------------
+
+
+def test_dedupe_by_content_collapses_same_book_same_excerpt():
+    """Multiple chapter rows with identical (book_title, excerpt) — symptom of
+    the Phase 1 splitter bug — should collapse to one representative."""
+    results = [
+        {"kind": "chapter", "result_id": 1, "book_title": "B",
+         "chapter_title": "Preface", "excerpt": "Lorem ipsum dolor sit amet…",
+         "rrf_score": 0.020},
+        {"kind": "chapter", "result_id": 2, "book_title": "B",
+         "chapter_title": "Why This Book", "excerpt": "Lorem ipsum dolor sit amet…",
+         "rrf_score": 0.025},
+        {"kind": "chapter", "result_id": 3, "book_title": "B",
+         "chapter_title": "Goals", "excerpt": "Lorem ipsum dolor sit amet…",
+         "rrf_score": 0.018},
+    ]
+    out = server._dedupe_by_content(results)
+    assert len(out) == 1
+    # Highest-rrf representative wins.
+    assert out[0]["result_id"] == 2
+
+
+def test_dedupe_by_content_keeps_different_books_separate():
+    results = [
+        {"kind": "chapter", "result_id": 1, "book_title": "A",
+         "chapter_title": "Intro", "excerpt": "shared text",
+         "rrf_score": 0.020},
+        {"kind": "chapter", "result_id": 2, "book_title": "B",
+         "chapter_title": "Intro", "excerpt": "shared text",
+         "rrf_score": 0.018},
+    ]
+    out = server._dedupe_by_content(results)
+    # Two different books, same excerpt — both kept.
+    assert len(out) == 2
+
+
+def test_dedupe_by_content_keeps_different_excerpts():
+    results = [
+        {"kind": "chapter", "result_id": 1, "book_title": "B",
+         "chapter_title": "Intro", "excerpt": "alpha content",
+         "rrf_score": 0.020},
+        {"kind": "chapter", "result_id": 2, "book_title": "B",
+         "chapter_title": "Methods", "excerpt": "beta content",
+         "rrf_score": 0.018},
+    ]
+    out = server._dedupe_by_content(results)
+    assert len(out) == 2
+
+
+def test_dedupe_by_content_passes_doc_sections_through():
+    """Doc sections come from the sectionizer which doesn't have the splitter
+    bug — they should pass through unchanged even with identical excerpts."""
+    results = [
+        {"kind": "doc_section", "result_id": 1, "doc_source_name": "DuckDB",
+         "excerpt": "same text", "rrf_score": 0.020},
+        {"kind": "doc_section", "result_id": 2, "doc_source_name": "DuckDB",
+         "excerpt": "same text", "rrf_score": 0.018},
+    ]
+    out = server._dedupe_by_content(results)
+    assert len(out) == 2
+
+
+def test_dedupe_by_content_preserves_order():
+    """Non-dup rows keep their relative order."""
+    results = [
+        {"kind": "chapter", "result_id": 1, "book_title": "A",
+         "excerpt": "a", "rrf_score": 0.020},
+        {"kind": "chapter", "result_id": 2, "book_title": "B",
+         "excerpt": "b", "rrf_score": 0.018},
+        {"kind": "chapter", "result_id": 3, "book_title": "C",
+         "excerpt": "c", "rrf_score": 0.015},
+    ]
+    out = server._dedupe_by_content(results)
+    assert [r["result_id"] for r in out] == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
 # _is_thin_retrieval
 # ---------------------------------------------------------------------------
 
@@ -297,10 +478,13 @@ def test_search_chapters_feeds_wider_pool_to_ranker_than_final_limit(server_stat
     rows when that many exist."""
     pool_size = 3 * server.SCORING_POOL_MULTIPLIER
     # Build pool_size + 5 fake FTS hits so RRF has plenty to fuse.
+    # Each row has a distinct book_title + excerpt so the content-dedup pass
+    # doesn't collapse them.
     fts_hits = [
         {"kind": "chapter", "result_id": i, "rrf_score": 1.0 / (i + 1),
          "chapter_id": i, "doc_section_id": None, "score": 1.0 / (i + 1),
-         "book_title": "x", "chapter_title": f"c{i}", "excerpt": ""}
+         "book_title": f"book {i}", "chapter_title": f"c{i}",
+         "excerpt": f"unique content for chapter {i}"}
         for i in range(1, pool_size + 6)
     ]
     fake_fanout = (fts_hits, [], [], [], [], [])

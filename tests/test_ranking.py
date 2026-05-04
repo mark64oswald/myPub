@@ -84,17 +84,73 @@ def test_doc_alignment_score_mixed_returns_fraction():
     assert ranking.doc_alignment_score(corroborates=3, contradicts=1) == pytest.approx(0.75)
 
 
-def test_relevance_score_at_max_rrf_is_one():
-    assert ranking.relevance_score(rrf_score=2.0, max_rrf_score=2.0) == 1.0
+def test_relevance_score_returns_zero_for_no_modality_signal():
+    """No modality_scores ⇒ no signal known ⇒ 0.0."""
+    assert ranking.relevance_score(None) == 0.0
+    assert ranking.relevance_score({}) == 0.0
 
 
-def test_relevance_score_proportional_to_rrf():
-    assert ranking.relevance_score(rrf_score=1.0, max_rrf_score=2.0) == 0.5
+def test_relevance_score_strong_fts_saturates_near_one():
+    """A strong BM25 score (10+) should land near 1.0."""
+    out = ranking.relevance_score({"fts_chapter": 10.0})
+    assert 0.85 < out < 1.0
 
 
-def test_relevance_score_zero_max_returns_zero():
-    """Empty / all-zero result set must not divide-by-zero — return 0."""
-    assert ranking.relevance_score(rrf_score=0.0, max_rrf_score=0.0) == 0.0
+def test_relevance_score_weak_fts_stays_low():
+    """A weak BM25 (1.4 — like the doc_section result that was winning before)
+    must not score as relevant. Should land well below 0.5."""
+    out = ranking.relevance_score({"fts_doc_section": 1.4})
+    assert 0.0 < out < 0.4, f"weak BM25 should score low, got {out}"
+
+
+def test_relevance_score_vss_passthrough():
+    """VSS cosine similarity is already in [0, 1] — pass through, clamped."""
+    assert ranking.relevance_score({"vss_chapter": 0.85}) == pytest.approx(0.85)
+    # Clamping
+    assert ranking.relevance_score({"vss_chapter": 1.5}) == 1.0
+    assert ranking.relevance_score({"vss_chapter": -0.1}) == 0.0
+
+
+def test_relevance_score_takes_max_across_modalities():
+    """Best signal across modalities wins — strong FTS shouldn't be diluted by
+    weak VSS, and vice versa."""
+    # Strong FTS, no VSS
+    fts_only = ranking.relevance_score({"fts_chapter": 10.0})
+    # Same row also has weak VSS
+    fts_and_weak_vss = ranking.relevance_score({
+        "fts_chapter": 10.0, "vss_chapter": 0.1,
+    })
+    assert fts_and_weak_vss == fts_only, "weak modality must not pull down strong one"
+
+
+def test_relevance_score_chapter_and_doc_section_buckets_unified():
+    """fts_chapter and fts_doc_section both contribute to the FTS slot — the
+    larger of the two wins. Same for VSS and graph."""
+    out = ranking.relevance_score({"fts_chapter": 2.0, "fts_doc_section": 8.0})
+    out_section_only = ranking.relevance_score({"fts_doc_section": 8.0})
+    assert out == out_section_only
+
+
+def test_relevance_score_graph_saturates():
+    """Graph signal (concept_hits) saturates at GRAPH_SATURATION_HITS=3."""
+    out_3 = ranking.relevance_score({"graph_chapter": 3.0})
+    out_10 = ranking.relevance_score({"graph_chapter": 10.0})
+    assert 0.5 < out_3 < 0.8
+    assert out_10 > out_3
+    assert out_10 < 1.0  # never quite hits 1.0
+
+
+def test_relevance_score_addresses_doc_section_dominance_regression():
+    """Regression: a weak doc_section FTS hit (BM25=1.4) must NOT score the
+    same as a strong chapter FTS hit (BM25=10) just because both are top of
+    their respective buckets. This is the bug that pushed irrelevant Apache
+    Spark sections above relevant book chapters."""
+    weak_section = ranking.relevance_score({"fts_doc_section": 1.4})
+    strong_chapter = ranking.relevance_score({"fts_chapter": 10.0})
+    assert strong_chapter > weak_section + 0.4, (
+        f"strong chapter ({strong_chapter}) should clearly beat weak section "
+        f"({weak_section})"
+    )
 
 
 def test_corroboration_score_is_zero_at_zero():
@@ -356,33 +412,35 @@ def test_doc_section_alignment_stats_counts_outbound_edges(catalog, populated):
 
 
 def test_compute_components_for_chapter(catalog, populated):
-    result = {"kind": "chapter", "result_id": populated["ch_with_date"], "rrf_score": 0.5}
-    comps = ranking.compute_components_for_result(
-        catalog, result, max_rrf_score=1.0, now=NOW,
-    )
+    # Strong FTS signal — should give a clear relevance score, not the bucket-
+    # normalized 1.0 of the old formulation.
+    result = {"kind": "chapter", "result_id": populated["ch_with_date"],
+              "modality_scores": {"fts_chapter": 8.0}}
+    comps = ranking.compute_components_for_result(catalog, result, now=NOW)
     assert 0.0 <= comps.recency <= 1.0
     assert comps.doc_alignment == 0.5  # no edges
-    assert comps.relevance == 0.5  # 0.5 / 1.0
+    # FTS=8 → 1 - exp(-8/5) ≈ 0.798
+    assert 0.7 < comps.relevance < 0.85
     assert comps.corroboration == 0.0  # no edges
     assert comps.authority == ranking.DEFAULT_AUTHORITY_BOOK
 
 
 def test_compute_components_for_doc_section(catalog, populated):
+    # Strong VSS similarity carries through to relevance.
     result = {"kind": "doc_section", "result_id": populated["doc_section_id"],
-              "rrf_score": 1.0}
-    comps = ranking.compute_components_for_result(
-        catalog, result, max_rrf_score=1.0, now=NOW,
-    )
+              "modality_scores": {"vss_doc_section": 0.92}}
+    comps = ranking.compute_components_for_result(catalog, result, now=NOW)
     assert comps.recency > 0.99  # very recent snapshot
-    assert comps.relevance == 1.0
+    assert comps.relevance == pytest.approx(0.92)
     assert comps.authority == 0.85
 
 
 def test_compute_components_unknown_kind_raises(catalog):
     with pytest.raises(ValueError, match="unknown result kind"):
         ranking.compute_components_for_result(
-            catalog, {"kind": "weird", "result_id": 1, "rrf_score": 0.5},
-            max_rrf_score=1.0,
+            catalog,
+            {"kind": "weird", "result_id": 1,
+             "modality_scores": {"fts_chapter": 1.0}},
         )
 
 

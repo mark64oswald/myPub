@@ -186,8 +186,14 @@ def test_not_yet_populated_tables_are_empty(conn):
         # Phase 3
         "procedure", "procedure_concept",
         # Phase 4.2 — doc_source seeded with Context7/DeepWiki/GitHub entries.
-        # doc_snapshot/doc_section and their embeddings still empty until 4.4.
         "doc_source",
+        # Phase 4.4 — refresh_docs.py refresh --all populates these.
+        # doc_snapshot_embedding still empty (snapshot-level embeddings are a
+        # later optimization; section-level embeddings are what retrieval uses).
+        # discovery_log fills only when auto-discovery probes have run.
+        # concept_doc_link / alignment_edge fill only after section-level
+        # entity extraction + alignment subagent runs (Phase 4.4b extraction).
+        "doc_snapshot", "doc_section", "doc_section_embedding",
     }
     for table in EXPECTED_TABLES - populated_so_far:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
