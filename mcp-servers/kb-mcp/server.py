@@ -32,8 +32,10 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from fastmcp import FastMCP
 
@@ -45,12 +47,14 @@ if str(_HERE) not in sys.path:
 from db import open_catalog  # noqa: E402
 from resolution import EntityResolver  # noqa: E402
 import ranking  # noqa: E402
+import discovery  # noqa: E402
 
 LOG = logging.getLogger("mypub-kb")
 
 EXCERPT_CHARS = 240
 RRF_K = 60                     # reciprocal-rank-fusion smoothing constant
 PER_MODALITY_LIMIT = 20        # candidates pulled from each modality before merge
+WRITER_GRACE_SECONDS = 0.05    # OS lock-release breathing room (Topology A)
 
 # ---------------------------------------------------------------------------
 # Connection + model lifecycle
@@ -59,21 +63,22 @@ PER_MODALITY_LIMIT = 20        # candidates pulled from each modality before mer
 _CONN = None
 _RESOLVER: EntityResolver | None = None
 _MODEL = None  # sentence-transformers model, shared by resolver and search
+_CATALOG_PATH: Path | None = None  # cached so writer-context can reopen
 
 
 def _bootstrap() -> None:
     """Open the catalog, pre-warm the embedding model, build the resolver."""
-    global _CONN, _RESOLVER, _MODEL
+    global _CONN, _RESOLVER, _MODEL, _CATALOG_PATH
     if _CONN is not None:
         return
 
     catalog_env = os.environ.get("MYPUB_CATALOG")
-    catalog_path = Path(catalog_env) if catalog_env else None
-    LOG.info("opening catalog (%s)", catalog_path or "default")
+    _CATALOG_PATH = Path(catalog_env) if catalog_env else None
+    LOG.info("opening catalog (%s)", _CATALOG_PATH or "default")
     # Explicit read-only at the call site: server.py only issues SELECTs.
     # Holding an RW lock blocks every other process (other Claude Code
     # sessions, test suite, refresh scripts) — see db.py module docstring.
-    _CONN = open_catalog(catalog_path, read_only=True)
+    _CONN = open_catalog(_CATALOG_PATH, read_only=True)
 
     # pylint: disable=import-outside-toplevel
     from sentence_transformers import SentenceTransformer
@@ -82,6 +87,47 @@ def _bootstrap() -> None:
 
     _RESOLVER = EntityResolver(_CONN, model=_MODEL)
     LOG.info("kb-mcp server ready")
+
+
+@contextmanager
+def _temporarily_open_writer() -> "Iterator[Any]":
+    """Close the long-lived RO connection, yield a transient RW one, reopen RO.
+
+    Topology A from ~/Developer/notes/duckdb-concurrent-access.md adapted to
+    kb-mcp's single-process lifecycle. DuckDB rejects opening a second
+    connection with a different ``read_only`` setting in the same process
+    while the first is still open, so we must close-before-write.
+
+    Used exclusively by the auto-discovery integration (and any future
+    in-process writers). Multiple-Claude-Code-session caveat: while the RW
+    connection is held, any *other* kb-mcp process holding RO on the same
+    catalog will be locked out for the duration. In single-session use this
+    is invisible; for multi-session setups, prefer routing inline ingestion
+    through scripts/refresh_docs.py (Topology B + auto-stop) instead.
+
+    Side effect: after the writer closes, ``_CONN`` and ``_RESOLVER`` are
+    rebuilt against a fresh RO connection so the new content is visible.
+    """
+    global _CONN, _RESOLVER
+    assert _CONN is not None and _MODEL is not None, "_bootstrap() must run first"
+
+    _CONN.close()
+    _CONN = None
+    _RESOLVER = None
+    time.sleep(WRITER_GRACE_SECONDS)
+
+    rw_conn = open_catalog(_CATALOG_PATH, read_only=False)
+    try:
+        yield rw_conn
+    finally:
+        try:
+            rw_conn.execute("CHECKPOINT")
+        except Exception as e:  # pragma: no cover - best-effort cleanup
+            LOG.warning("CHECKPOINT failed during writer close: %s", e)
+        rw_conn.close()
+        time.sleep(WRITER_GRACE_SECONDS)
+        _CONN = open_catalog(_CATALOG_PATH, read_only=True)
+        _RESOLVER = EntityResolver(_CONN, model=_MODEL)
 
 
 def _embed(query: str) -> list[float]:
@@ -443,6 +489,45 @@ mcp = FastMCP(
 DEFAULT_INTERACTIVE_PROFILE = "currency_critical_interactive"
 
 
+def _is_thin_retrieval(
+    fts_chapter: list[dict[str, Any]], fts_section: list[dict[str, Any]],
+    graph_chapter: list[dict[str, Any]], graph_section: list[dict[str, Any]],
+) -> bool:
+    """True when keyword + concept-graph signals are all empty.
+
+    VSS deliberately excluded — it always returns *some* result via the HNSW
+    nearest-neighbor scan, even for queries with no real corpus match
+    (semantic similarity to vaguely related chapters). Letting VSS suppress
+    auto-discovery would mean the gap detector never fires on a fresh KB.
+    Concept-graph and FTS, by contrast, return [] when there's no real hit.
+    """
+    return (
+        len(fts_chapter) == 0
+        and len(fts_section) == 0
+        and len(graph_chapter) == 0
+        and len(graph_section) == 0
+    )
+
+
+def _run_modality_fanout(query: str, qvec: list[float]):
+    """Helper: fan out to all six modality functions and normalize chapter rows.
+
+    Extracted from search_chapters so the auto-discovery re-retrieval path
+    can call it again without copy-pasting the per-modality call list.
+    """
+    fts_chapter = [_normalize_chapter_row(r)
+                   for r in _fts_chapter_search(query, PER_MODALITY_LIMIT)]
+    vss_chapter = [_normalize_chapter_row(r)
+                   for r in _vss_chapter_search(qvec, PER_MODALITY_LIMIT)]
+    graph_chapter = [_normalize_chapter_row(r)
+                     for r in _graph_chapter_search(query, PER_MODALITY_LIMIT)]
+    fts_section = _fts_doc_section_search(query, PER_MODALITY_LIMIT)
+    vss_section = _vss_doc_section_search(qvec, PER_MODALITY_LIMIT)
+    graph_section = _graph_doc_section_search(query, PER_MODALITY_LIMIT)
+    return (fts_chapter, vss_chapter, graph_chapter,
+            fts_section, vss_section, graph_section)
+
+
 def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
     """Flatten a ScoredResult into a JSON-friendly dict for the MCP envelope."""
     return {
@@ -473,6 +558,7 @@ def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
 def search_chapters(
     query: str, mode: str = "interactive", limit: int = 10,
     weight_profile: str = DEFAULT_INTERACTIVE_PROFILE,
+    auto_discover: bool = True,
 ) -> dict[str, Any]:
     """Hybrid search across book chapters and live doc sections.
 
@@ -507,18 +593,25 @@ def search_chapters(
         )
 
     qvec = _embed(query)
-    # Chapter modalities (book corpus)
-    fts_chapter = [_normalize_chapter_row(r)
-                   for r in _fts_chapter_search(query, PER_MODALITY_LIMIT)]
-    vss_chapter = [_normalize_chapter_row(r)
-                   for r in _vss_chapter_search(qvec, PER_MODALITY_LIMIT)]
-    graph_chapter = [_normalize_chapter_row(r)
-                     for r in _graph_chapter_search(query, PER_MODALITY_LIMIT)]
-    # Doc-section modalities (live-doc corpus). Phase 4.4b adds these so
-    # Context7 / DeepWiki / GitHub content rides in the same ranked list.
-    fts_section = _fts_doc_section_search(query, PER_MODALITY_LIMIT)
-    vss_section = _vss_doc_section_search(qvec, PER_MODALITY_LIMIT)
-    graph_section = _graph_doc_section_search(query, PER_MODALITY_LIMIT)
+    (fts_chapter, vss_chapter, graph_chapter,
+     fts_section, vss_section, graph_section) = _run_modality_fanout(query, qvec)
+
+    # Phase 4.5b: if FTS + graph all came back empty, the corpus probably
+    # doesn't know the topic — try auto-discovery before giving up.
+    discovery_outcomes: list[dict[str, Any]] = []
+    if auto_discover and _is_thin_retrieval(
+        fts_chapter, fts_section, graph_chapter, graph_section,
+    ):
+        # Build a preliminary search_response shape for the gap detector to
+        # inspect (it cross-references hits to skip terms already surfaced).
+        prelim = {"results": fts_chapter + fts_section + vss_chapter + vss_section}
+        discovery_outcomes = _run_auto_discovery(query, prelim)
+        if any(o.get("decision") == "ingested" for o in discovery_outcomes):
+            # Refresh fan-out against the freshly-ingested data. _CONN was
+            # already swapped back to RO inside the writer context, so the
+            # new doc_section rows are visible.
+            (fts_chapter, vss_chapter, graph_chapter,
+             fts_section, vss_section, graph_section) = _run_modality_fanout(query, qvec)
 
     # Merge across all six buckets — RRF keys on (kind, result_id) so
     # chapter and doc_section rows can co-occur in the merged ranking.
@@ -575,7 +668,51 @@ def search_chapters(
             "vss_doc_section": vss_section[:limit],
             "graph_doc_section": graph_section[:limit],
         },
+        "discovery": discovery_outcomes,
     }
+
+
+def _run_auto_discovery(
+    query: str, search_response: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Run AutoDiscoveryOrchestrator inside a Topology A writer context.
+
+    Returns one summary dict per attempted query term so callers can surface
+    what was probed, what got ingested, and what needs user disambiguation.
+    """
+    assert _RESOLVER is not None
+    summaries: list[dict[str, Any]] = []
+    with _temporarily_open_writer() as rw_conn:
+        # The orchestrator needs an RW connection (for the InlineIngester) and
+        # a resolver (for the gap detector). Build a fresh resolver against the
+        # writer connection — the module-level _RESOLVER is None right now
+        # (cleared by _temporarily_open_writer entry).
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        orchestrator = discovery.AutoDiscoveryOrchestrator(
+            rw_conn, rw_resolver, embedder=_MODEL,
+        )
+        outcomes = orchestrator.run(query, search_response)
+    for out in outcomes:
+        summaries.append({
+            "query_term": out.query_term,
+            "decision": out.decision,
+            "source": out.source,
+            "doc_source_id": out.doc_source_id,
+            "chosen_match": (
+                {"name": out.chosen_match.name,
+                 "identifier": out.chosen_match.identifier,
+                 "description": out.chosen_match.description,
+                 "score": out.chosen_match.score}
+                if out.chosen_match else None
+            ),
+            "candidates": [
+                {"name": m.name, "identifier": m.identifier,
+                 "description": m.description, "score": m.score}
+                for m in out.candidates
+            ],
+            "note": out.note,
+        })
+    return summaries
 
 
 @mcp.tool

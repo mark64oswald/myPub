@@ -257,42 +257,67 @@ class DeepWikiProber:
     """Probes DeepWiki via ``read_wiki_structure`` for owner/repo guesses.
 
     DeepWiki doesn't expose a search endpoint — its tool surface is
-    repo-keyed. So the prober treats the term itself as a repo identifier
-    candidate and reports a match iff the structure call returns content.
-    For multi-token terms ("apache spark"), we don't currently fan out into
-    candidate owner/repo combinations — that's a Phase 4.6 enrichment.
+    repo-keyed. Strategy:
+
+      1. If the term is repo-shaped (contains '/'), try it directly.
+      2. Otherwise try the canonical "{term}/{term}" convention — many
+         well-known projects use this pattern (redis/redis, facebook/facebook,
+         prefecthq/prefecthq, langchain-ai/langchain). One extra round-trip
+         per probe; usually catches the canonical home repo. If that misses,
+         report not-found and let the orchestrator fall through to the next
+         source (typically GitHub search, which CAN find by name).
     """
 
     HTTP_URL = "https://mcp.deepwiki.com/mcp"
     TOOL_NAME = "read_wiki_structure"
 
     def probe(self, query_term: str) -> ProbeResult:
-        return asyncio.run(self._probe_async(query_term))
+        candidates = self._candidate_repos(query_term)
+        for candidate in candidates:
+            result = asyncio.run(self._probe_one(candidate))
+            if result.error or result.matches:
+                # Either we hit a real match, or a transport-level error worth
+                # surfacing. Either way, stop probing further candidates.
+                return result
+        # Every candidate came back empty (no transport errors).
+        return ProbeResult(source="deepwiki", query_term=query_term, matches=[])
 
-    async def _probe_async(self, query_term: str) -> ProbeResult:
-        # Only repo-shaped terms are valid input ("owner/repo"). Single tokens
-        # have no repo meaning; report not-found cleanly without a network round-trip.
-        if "/" not in query_term:
-            return ProbeResult(source="deepwiki", query_term=query_term, matches=[])
+    @staticmethod
+    def _candidate_repos(query_term: str) -> list[str]:
+        """Build the ordered list of owner/repo candidates to try."""
+        if "/" in query_term:
+            return [query_term]
+        # Canonical "name/name" convention — try lowercase since GitHub repo
+        # paths are case-insensitive but DeepWiki may return more relevant
+        # content for the canonical owner casing. We try the original first
+        # (handles cases like 'PrefectHQ' that may have a 'PrefectHQ/PrefectHQ')
+        # then lowercase as a fallback.
+        out = [f"{query_term}/{query_term}"]
+        lower = query_term.lower()
+        if lower != query_term:
+            out.append(f"{lower}/{lower}")
+        return out
+
+    async def _probe_one(self, repo_name: str) -> ProbeResult:
         try:
             async with streamable_http_client(self.HTTP_URL) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.call_tool(
-                        self.TOOL_NAME, {"repoName": query_term},
+                        self.TOOL_NAME, {"repoName": repo_name},
                     )
         except Exception as e:
-            return ProbeResult(source="deepwiki", query_term=query_term,
+            return ProbeResult(source="deepwiki", query_term=repo_name,
                                error=f"transport: {e}")
 
         text = _extract_mcp_text(result)
         if not text or "not found" in text.lower() or "error" in text.lower():
-            return ProbeResult(source="deepwiki", query_term=query_term, matches=[])
+            return ProbeResult(source="deepwiki", query_term=repo_name, matches=[])
         # DeepWiki returned a wiki structure → treat as a confident match.
         return ProbeResult(
-            source="deepwiki", query_term=query_term,
+            source="deepwiki", query_term=repo_name,
             matches=[ProbeMatch(
-                name=query_term, identifier=query_term,
+                name=repo_name, identifier=repo_name,
                 description=_first_nonblank_line(text), score=1.0,
             )],
         )

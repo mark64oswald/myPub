@@ -228,12 +228,75 @@ def test_parse_context7_libraries_handles_missing_fields():
 # ---------------------------------------------------------------------------
 
 
-def test_deepwiki_prober_short_circuits_on_non_repo_terms():
-    """Single-token term → no network call, returns empty matches."""
+def test_deepwiki_candidate_repos_repo_shaped_passes_through():
+    """A term with '/' in it is treated as the literal repo to probe."""
+    assert discovery.DeepWikiProber._candidate_repos("owner/repo") == ["owner/repo"]
+
+
+def test_deepwiki_candidate_repos_single_token_uses_name_name_convention():
+    """Single-token query → try '{term}/{term}'; mixed-case adds lowercase fallback."""
+    assert discovery.DeepWikiProber._candidate_repos("zippy") == ["zippy/zippy"]
+    assert discovery.DeepWikiProber._candidate_repos("PrefectHQ") == [
+        "PrefectHQ/PrefectHQ", "prefecthq/prefecthq",
+    ]
+
+
+def test_deepwiki_prober_returns_empty_after_all_candidates_miss(monkeypatch):
+    """If every candidate repo comes back empty, the prober surfaces no match —
+    no transport errors, just clean not-found that the orchestrator can fall
+    through past."""
+    async def fake_probe_one(self, repo_name):
+        return discovery.ProbeResult(
+            source="deepwiki", query_term=repo_name, matches=[],
+        )
+    monkeypatch.setattr(discovery.DeepWikiProber, "_probe_one", fake_probe_one)
     out = discovery.DeepWikiProber().probe("zippy")
-    assert out.source == "deepwiki"
     assert out.matches == []
     assert out.error is None
+
+
+def test_deepwiki_prober_returns_first_successful_match(monkeypatch):
+    """First candidate to return a match wins; subsequent candidates aren't tried."""
+    call_log: list[str] = []
+
+    async def fake_probe_one(self, repo_name):
+        call_log.append(repo_name)
+        if repo_name == "PrefectHQ/PrefectHQ":
+            return discovery.ProbeResult(
+                source="deepwiki", query_term=repo_name,
+                matches=[discovery.ProbeMatch(
+                    name=repo_name, identifier=repo_name,
+                    description="found", score=1.0,
+                )],
+            )
+        return discovery.ProbeResult(
+            source="deepwiki", query_term=repo_name, matches=[],
+        )
+
+    monkeypatch.setattr(discovery.DeepWikiProber, "_probe_one", fake_probe_one)
+    out = discovery.DeepWikiProber().probe("PrefectHQ")
+    assert len(out.matches) == 1
+    assert out.matches[0].identifier == "PrefectHQ/PrefectHQ"
+    # Did NOT call lowercase fallback after first candidate matched.
+    assert call_log == ["PrefectHQ/PrefectHQ"]
+
+
+def test_deepwiki_prober_short_circuits_on_transport_error(monkeypatch):
+    """Transport error stops further candidate attempts (don't burn the network
+    on a known-broken state)."""
+    call_log: list[str] = []
+
+    async def fake_probe_one(self, repo_name):
+        call_log.append(repo_name)
+        return discovery.ProbeResult(
+            source="deepwiki", query_term=repo_name,
+            error="transport: connection refused",
+        )
+
+    monkeypatch.setattr(discovery.DeepWikiProber, "_probe_one", fake_probe_one)
+    out = discovery.DeepWikiProber().probe("Zippy")
+    assert out.error is not None
+    assert call_log == ["Zippy/Zippy"]  # only one attempt, not the lowercase fallback
 
 
 # ---------------------------------------------------------------------------

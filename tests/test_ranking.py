@@ -122,6 +122,39 @@ def test_authority_score_unknown_is_neutral():
     assert ranking.authority_score_from_raw(None) == 0.5
 
 
+def test_publisher_authority_known_imprints():
+    """Established tech imprints get above-baseline authority."""
+    assert ranking.authority_score_from_publisher("O'Reilly") > ranking.DEFAULT_AUTHORITY_BOOK
+    assert ranking.authority_score_from_publisher("Manning") > ranking.DEFAULT_AUTHORITY_BOOK
+    assert ranking.authority_score_from_publisher("MIT Press") > ranking.DEFAULT_AUTHORITY_BOOK
+
+
+def test_publisher_authority_case_and_whitespace_tolerant():
+    """Lookup must work regardless of casing or surrounding whitespace."""
+    a1 = ranking.authority_score_from_publisher("o'reilly")
+    a2 = ranking.authority_score_from_publisher("  O'Reilly  ")
+    a3 = ranking.authority_score_from_publisher("O'REILLY")
+    assert a1 == a2 == a3
+
+
+def test_publisher_authority_unknown_falls_back_to_default():
+    assert ranking.authority_score_from_publisher("Some Niche Press") == \
+           ranking.DEFAULT_AUTHORITY_BOOK
+
+
+def test_publisher_authority_none_or_empty_falls_back_to_default():
+    assert ranking.authority_score_from_publisher(None) == ranking.DEFAULT_AUTHORITY_BOOK
+    assert ranking.authority_score_from_publisher("") == ranking.DEFAULT_AUTHORITY_BOOK
+    assert ranking.authority_score_from_publisher("   ") == ranking.DEFAULT_AUTHORITY_BOOK
+
+
+def test_publisher_authority_no_fuzzy_false_positives():
+    """A publisher containing a known substring (e.g., 'Wiley-VCH') must NOT
+    accidentally match the known 'Wiley' score — exact strings only."""
+    assert ranking.authority_score_from_publisher("Wiley-VCH") == \
+           ranking.DEFAULT_AUTHORITY_BOOK
+
+
 def test_combined_score_zero_inputs_zero_output():
     w = ranking.WEIGHT_PROFILES["currency_critical_interactive"]
     assert ranking.combined_score(
@@ -248,6 +281,36 @@ def test_doc_section_age_days_uses_snapshot_retrieved_at(catalog, populated):
 def test_doc_section_raw_authority_pulls_from_doc_source(catalog, populated):
     auth = ranking.doc_section_raw_authority(catalog, populated["doc_section_id"])
     assert auth == 0.85
+
+
+def test_chapter_raw_authority_uses_publisher_when_known(catalog):
+    """A book with a known publisher should yield a publisher-derived score,
+    not the flat 0.6 default."""
+    catalog.execute("INSERT INTO author (name) VALUES ('A')")
+    book_id = catalog.execute(
+        "INSERT INTO book (title, source_path, publisher) "
+        "VALUES ('B', '/x', 'O''Reilly') RETURNING book_id"
+    ).fetchone()[0]
+    ch_id = catalog.execute(
+        "INSERT INTO chapter (book_id, chapter_num, title, content) "
+        "VALUES (?, 1, 'C', 'x') RETURNING chapter_id", [book_id]
+    ).fetchone()[0]
+    auth = ranking.chapter_raw_authority(catalog, int(ch_id))
+    assert auth == ranking.PUBLISHER_AUTHORITY["o'reilly"]
+
+
+def test_chapter_raw_authority_falls_back_to_default_when_publisher_missing(catalog):
+    catalog.execute("INSERT INTO author (name) VALUES ('A')")
+    book_id = catalog.execute(
+        "INSERT INTO book (title, source_path) VALUES ('No Publisher', '/y') "
+        "RETURNING book_id"
+    ).fetchone()[0]
+    ch_id = catalog.execute(
+        "INSERT INTO chapter (book_id, chapter_num, content) "
+        "VALUES (?, 1, 'x') RETURNING chapter_id", [book_id]
+    ).fetchone()[0]
+    auth = ranking.chapter_raw_authority(catalog, int(ch_id))
+    assert auth == ranking.DEFAULT_AUTHORITY_BOOK
 
 
 def test_doc_section_raw_authority_returns_none_when_missing(catalog):

@@ -51,6 +51,49 @@ DEFAULT_NEUTRAL_FACTOR = 0.5              # used when a factor is genuinely unkn
 CORROBORATION_SATURATION = 3              # ~1.0 once 3+ corroborators exist
 
 
+# Publisher → authority mapping. Tech-publisher reputation is reasonably well-
+# anchored: established imprints with strong editorial review (O'Reilly, Manning,
+# Pragmatic, Addison-Wesley/Pearson, MIT Press) get higher scores than fast-cycle
+# publishers (Packt) or self-published material. Numbers here are starting points;
+# Phase 4.6 eval can drive empirical tuning.
+PUBLISHER_AUTHORITY: dict[str, float] = {
+    "o'reilly":           0.85,
+    "o'reilly media":     0.85,
+    "manning":            0.85,
+    "manning publications": 0.85,
+    "pragmatic bookshelf": 0.80,
+    "the pragmatic programmers": 0.80,
+    "addison-wesley":     0.80,
+    "addison-wesley professional": 0.80,
+    "pearson":            0.78,
+    "morgan kaufmann":    0.80,
+    "mit press":          0.85,
+    "no starch press":    0.78,
+    "apress":             0.72,
+    "wiley":              0.72,
+    "wrox":               0.68,
+    "packt":              0.65,
+    "packt publishing":   0.65,
+}
+
+
+def authority_score_from_publisher(publisher: Optional[str]) -> float:
+    """Map a free-form publisher string to an authority value.
+
+    Match is case- and whitespace-tolerant; unknown / missing publisher
+    falls back to ``DEFAULT_AUTHORITY_BOOK``. Common compound names
+    ("O'Reilly Media", "Addison-Wesley Professional") are handled by
+    explicit table entries rather than fuzzy matching, which would risk
+    false positives like "Wiley-VCH" hitting the Wiley score.
+    """
+    if not publisher:
+        return DEFAULT_AUTHORITY_BOOK
+    norm = publisher.strip().lower()
+    if not norm:
+        return DEFAULT_AUTHORITY_BOOK
+    return PUBLISHER_AUTHORITY.get(norm, DEFAULT_AUTHORITY_BOOK)
+
+
 # ---------------------------------------------------------------------------
 # Weights + profiles (§8.5)
 # ---------------------------------------------------------------------------
@@ -237,8 +280,19 @@ def doc_section_alignment_stats(conn: duckdb.DuckDBPyConnection,
 
 def chapter_raw_authority(conn: duckdb.DuckDBPyConnection,
                           chapter_id: int) -> Optional[float]:
-    """Per scope note in module docstring: fixed 0.6 default for chapters."""
-    return DEFAULT_AUTHORITY_BOOK
+    """Look up the chapter's parent book.publisher and map via PUBLISHER_AUTHORITY.
+
+    Returns ``DEFAULT_AUTHORITY_BOOK`` when the book has no publisher
+    recorded or the publisher isn't in the known-imprint table — never
+    None, since chapters always have a positive default authority.
+    """
+    row = conn.execute(
+        "SELECT b.publisher FROM chapter c "
+        "  JOIN book b ON c.book_id = b.book_id "
+        " WHERE c.chapter_id = ?", [chapter_id],
+    ).fetchone()
+    publisher = row[0] if row else None
+    return authority_score_from_publisher(publisher)
 
 
 def doc_section_raw_authority(conn: duckdb.DuckDBPyConnection,
