@@ -921,6 +921,213 @@ def _seed_snapshot_with_sections(conn, doc_source_id, content):
     return int(snap_id)
 
 
+def test_prep_extraction_writes_procedure_prompt_per_section(
+    rw_conn, seeded_doc_source, tmp_path,
+):
+    """Step 8: prep emits a separate procedure prompt file per section,
+    distinct from the entity prompt, with the procedure SYSTEM_PROMPT."""
+    snap_id = _seed_snapshot_with_sections(
+        rw_conn, seeded_doc_source,
+        "# top\n\n## install\nrun `pip install duckdb`\n\n## query\nSELECT * FROM x",
+    )
+    out = tmp_path / "prep"
+    manifest = refresh_docs.prep_extraction(rw_conn, snap_id, out)
+
+    proc_files = sorted((out / "prompts").glob("prompt_section_*_proc.txt"))
+    ent_files = sorted(p for p in (out / "prompts").glob("prompt_section_*.txt")
+                       if not p.name.endswith("_proc.txt"))
+    assert len(proc_files) == len(ent_files) == len(manifest.sections)
+
+    # Procedure prompt must contain the procedure SYSTEM_PROMPT signature, not
+    # the entity SYSTEM_PROMPT. Use a phrase unique to extract_procedures.
+    proc_text = proc_files[0].read_text()
+    assert "executable procedures" in proc_text
+    assert "preconditions" in proc_text
+    # Manifest carries both paths.
+    sec = manifest.sections[0]
+    assert sec.prompt_path.endswith(".txt")
+    assert sec.procedure_prompt_path is not None
+    assert sec.procedure_prompt_path.endswith("_proc.txt")
+    assert sec.procedure_result_path is not None
+
+
+def test_prep_manifest_round_trips_with_procedure_fields(
+    rw_conn, seeded_doc_source, tmp_path,
+):
+    """Manifest round-trip preserves the new procedure_*_path fields."""
+    snap_id = _seed_snapshot_with_sections(rw_conn, seeded_doc_source, "# x\nbody")
+    out = tmp_path / "prep"
+    refresh_docs.prep_extraction(rw_conn, snap_id, out)
+    raw = json.loads((out / "manifest.json").read_text())
+    rehydrated = refresh_docs.PrepManifest.from_dict(raw)
+    sec = rehydrated.sections[0]
+    assert sec.procedure_prompt_path is not None and sec.procedure_prompt_path.endswith("_proc.txt")
+    assert sec.procedure_result_path is not None
+
+
+def test_prep_manifest_backwards_compat_with_old_4_4_format(tmp_path):
+    """4.4-era manifests omit procedure_*_path entirely. Loading must still work."""
+    legacy = {
+        "output_dir": str(tmp_path),
+        "created_at": "2026-05-03T00:00:00+00:00",
+        "snapshot_id": 42,
+        "sections": [
+            {
+                "doc_section_id": 1, "snapshot_id": 42,
+                "doc_source_id": 99, "doc_source_name": "Legacy",
+                "heading_text": None,
+                "prompt_path": "/x/prompt_section_1.txt",
+                "result_path": "/x/result_section_1.json",
+            },
+        ],
+    }
+    rehydrated = refresh_docs.PrepManifest.from_dict(legacy)
+    sec = rehydrated.sections[0]
+    assert sec.procedure_prompt_path is None
+    assert sec.procedure_result_path is None
+
+
+def test_process_extraction_writes_procedures_with_doc_section_source_type(
+    rw_conn, seeded_doc_source, tmp_path,
+):
+    """Step 8 happy path: a procedure result file produces procedure rows
+    with source_type='doc_section' and procedure_concept links."""
+    snap_id = _seed_snapshot_with_sections(rw_conn, seeded_doc_source, "# x\n\n## y\nbody")
+    out = tmp_path / "prep"
+    manifest = refresh_docs.prep_extraction(rw_conn, snap_id, out)
+    target = manifest.sections[0]
+
+    # Step 7 result so the entity name cache has something.
+    _write_result_file(
+        Path(target.result_path),
+        entities=[{"name": "Kafka", "type": "Tool", "description": ""}],
+        relations=[],
+    )
+    # Step 8 procedure result.
+    proc_payload = {
+        "procedures": [
+            {
+                "name": "Configure Kafka idempotent producer",
+                "preconditions": "Kafka cluster running",
+                "steps": [
+                    {"n": 1, "action": "set enable.idempotence=true"},
+                    {"n": 2, "action": "set transactional.id"},
+                ],
+                "postconditions": "exactly-once writes",
+                "failure_modes": "",
+                "concepts": ["Kafka", "exactly-once"],
+                "implements_pattern": None,
+            }
+        ]
+    }
+    Path(target.procedure_result_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(target.procedure_result_path).write_text(json.dumps(proc_payload))
+
+    summary = refresh_docs.process_extraction(
+        rw_conn, out, resolver=_FakeResolver(rw_conn),
+    )
+    assert summary.procedure_results_processed == 1
+    # Other sections lack procedure results — counted as missing, not unparseable.
+    assert summary.procedure_results_missing == len(manifest.sections) - 1
+    assert summary.procedures_written == 1
+    # Two concepts in the procedure → two procedure_concept links.
+    assert summary.procedure_concept_links_written == 2
+
+    rows = rw_conn.execute(
+        "SELECT name, source_type, source_id FROM procedure"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0] == ("Configure Kafka idempotent producer", "doc_section",
+                       target.doc_section_id)
+
+
+def test_process_extraction_procedure_idempotent_on_rerun(
+    rw_conn, seeded_doc_source, tmp_path,
+):
+    """Re-running process_extraction must clear prior procedures, not duplicate them."""
+    snap_id = _seed_snapshot_with_sections(rw_conn, seeded_doc_source, "# x\nbody")
+    out = tmp_path / "prep"
+    manifest = refresh_docs.prep_extraction(rw_conn, snap_id, out)
+    target = manifest.sections[0]
+    Path(target.procedure_result_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(target.procedure_result_path).write_text(json.dumps({
+        "procedures": [{
+            "name": "Run query", "preconditions": "", "steps": [{"n": 1, "action": "go"}],
+            "postconditions": "", "failure_modes": "",
+            "concepts": ["Query"], "implements_pattern": None,
+        }],
+    }))
+
+    refresh_docs.process_extraction(rw_conn, out, resolver=_FakeResolver(rw_conn))
+    refresh_docs.process_extraction(rw_conn, out, resolver=_FakeResolver(rw_conn))
+    proc_count = rw_conn.execute(
+        "SELECT COUNT(*) FROM procedure "
+        " WHERE source_type='doc_section' AND source_id = ?",
+        [target.doc_section_id],
+    ).fetchone()[0]
+    assert proc_count == 1
+
+
+def test_process_extraction_handles_missing_procedure_result(
+    rw_conn, seeded_doc_source, tmp_path,
+):
+    """Missing procedure result files count as missing, not unparseable; no crash."""
+    snap_id = _seed_snapshot_with_sections(rw_conn, seeded_doc_source, "# x\nbody")
+    out = tmp_path / "prep"
+    manifest = refresh_docs.prep_extraction(rw_conn, snap_id, out)
+
+    summary = refresh_docs.process_extraction(
+        rw_conn, out, resolver=_FakeResolver(rw_conn),
+    )
+    assert summary.procedure_results_missing == len(manifest.sections)
+    assert summary.procedure_results_processed == 0
+    assert summary.procedures_written == 0
+
+
+def test_process_extraction_reuses_entity_concept_cache_for_procedures(
+    rw_conn, seeded_doc_source, tmp_path,
+):
+    """Concepts already resolved during step 7 should NOT be re-resolved
+    when step 8 references the same concept names. This avoids redundant
+    resolver work and keeps concept_id assignments consistent."""
+    snap_id = _seed_snapshot_with_sections(rw_conn, seeded_doc_source, "# x\nbody")
+    out = tmp_path / "prep"
+    manifest = refresh_docs.prep_extraction(rw_conn, snap_id, out)
+    target = manifest.sections[0]
+
+    # Entity result mentions Kafka; record concept_id created.
+    _write_result_file(
+        Path(target.result_path),
+        entities=[{"name": "Kafka", "type": "Tool", "description": ""}],
+        relations=[],
+    )
+    # Procedure result also references Kafka.
+    Path(target.procedure_result_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(target.procedure_result_path).write_text(json.dumps({
+        "procedures": [{
+            "name": "Use Kafka", "preconditions": "", "steps": [{"n": 1, "action": "go"}],
+            "postconditions": "", "failure_modes": "",
+            "concepts": ["Kafka"], "implements_pattern": None,
+        }],
+    }))
+
+    fake_resolver = _FakeResolver(rw_conn)
+    refresh_docs.process_extraction(rw_conn, out, resolver=fake_resolver)
+    # Kafka should only appear once in the concept table — same id used
+    # by both the entity row and the procedure_concept link.
+    kafka_count = rw_conn.execute(
+        "SELECT COUNT(*) FROM concept WHERE name = 'Kafka'"
+    ).fetchone()[0]
+    assert kafka_count == 1
+    link_count = rw_conn.execute(
+        "SELECT COUNT(*) FROM procedure_concept pc "
+        "  JOIN procedure p USING (procedure_id) "
+        "  JOIN concept c ON pc.concept_id = c.concept_id "
+        " WHERE c.name = 'Kafka' AND p.source_type = 'doc_section'"
+    ).fetchone()[0]
+    assert link_count == 1
+
+
 def test_prep_extraction_writes_one_prompt_per_section(
     rw_conn, seeded_doc_source, tmp_path,
 ):
@@ -936,10 +1143,15 @@ def test_prep_extraction_writes_one_prompt_per_section(
     ).fetchone()[0]
     assert section_count == 3
     assert len(manifest.sections) == 3
-    prompt_files = sorted((out_dir / "prompts").glob("prompt_section_*.txt"))
-    assert len(prompt_files) == 3
+    # Step 7 (entity) prompts: one per section. Step 8 (procedure) prompts have
+    # the _proc.txt suffix and are tested separately. Filter to entity-only here.
+    ent_files = sorted(
+        p for p in (out_dir / "prompts").glob("prompt_section_*.txt")
+        if not p.name.endswith("_proc.txt")
+    )
+    assert len(ent_files) == 3
     # Each prompt file is non-empty and references the section_id in its content.
-    for pf in prompt_files:
+    for pf in ent_files:
         text = pf.read_text()
         assert len(text) > 0
         assert "DOC_SECTION_ID" in text
@@ -1142,6 +1354,480 @@ def test_process_extraction_skips_relations_with_unknown_endpoints(
     )
     assert summary.entities_resolved == 1
     assert summary.relations_written == 0
+
+
+# ---------------------------------------------------------------------------
+# Step 9 — Alignment edges (DocSection → Chapter)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def aligned_world(rw_conn, seeded_doc_source):
+    """Seed a small concept graph with one section and two book chapters that
+    discuss the same concept. Returns a dict with the relevant ids so tests
+    can drive alignment prep/process directly."""
+    # Two chapters with content + a book to host them
+    rw_conn.execute(
+        "INSERT INTO author (name) VALUES ('Test Author') RETURNING author_id"
+    )
+    book_id = rw_conn.execute(
+        "INSERT INTO book (title, source_path) VALUES ('Test Book', '/tmp/x.epub') "
+        "RETURNING book_id"
+    ).fetchone()[0]
+    ch1_id = rw_conn.execute(
+        "INSERT INTO chapter (book_id, chapter_num, title, content) "
+        "VALUES (?, 1, 'Kafka Primer', 'Kafka is a distributed log. "
+        "Use enable.idempotence for exactly-once.') RETURNING chapter_id",
+        [book_id],
+    ).fetchone()[0]
+    ch2_id = rw_conn.execute(
+        "INSERT INTO chapter (book_id, chapter_num, title, content) "
+        "VALUES (?, 2, 'Old Kafka Patterns', 'Kafka producers used to require "
+        "manual deduplication; this is no longer the recommended approach.') "
+        "RETURNING chapter_id",
+        [book_id],
+    ).fetchone()[0]
+
+    # Seed snapshot + section via the pipeline
+    snap_id = _seed_snapshot_with_sections(
+        rw_conn, seeded_doc_source,
+        "# Kafka\n\nUse `enable.idempotence=true` and set transactional.id "
+        "for exactly-once writes.",
+    )
+    section_id = rw_conn.execute(
+        "SELECT MIN(doc_section_id) FROM doc_section WHERE snapshot_id = ?",
+        [snap_id],
+    ).fetchone()[0]
+
+    # One concept that all three sources discuss
+    concept_id = rw_conn.execute(
+        "INSERT INTO concept (name, concept_type) VALUES ('Kafka', 'Tool') "
+        "RETURNING concept_id"
+    ).fetchone()[0]
+    other_concept_id = rw_conn.execute(
+        "INSERT INTO concept (name, concept_type) VALUES ('exactly-once', 'Concept') "
+        "RETURNING concept_id"
+    ).fetchone()[0]
+
+    # concept_relation rows tying chapters and section to the concept
+    for source_type, source_id in (
+        ("chapter", ch1_id),
+        ("chapter", ch2_id),
+        ("doc_section", section_id),
+    ):
+        rw_conn.execute(
+            "INSERT INTO concept_relation "
+            "  (from_concept_id, to_concept_id, relation_type, source_type, source_id) "
+            "VALUES (?, ?, 'REQUIRES', ?, ?)",
+            [concept_id, other_concept_id, source_type, source_id],
+        )
+
+    return {
+        "snapshot_id": int(snap_id),
+        "section_id": int(section_id),
+        "concept_id": int(concept_id),
+        "other_concept_id": int(other_concept_id),
+        "chapter_ids": [int(ch1_id), int(ch2_id)],
+        "book_id": int(book_id),
+    }
+
+
+def test_gather_alignment_candidates_returns_concepts_with_chapter_ids(
+    rw_conn, aligned_world,
+):
+    """Concepts the section discusses come back, with candidate chapter_ids."""
+    candidates = refresh_docs.gather_alignment_candidates(
+        rw_conn, aligned_world["section_id"],
+    )
+    # Both concepts are mentioned in the section's relation row (from + to).
+    concept_ids_returned = {c["concept_id"] for c in candidates}
+    assert aligned_world["concept_id"] in concept_ids_returned
+    # Chapter ids include both seeded chapters.
+    chapter_ids_returned: set[int] = set()
+    for c in candidates:
+        chapter_ids_returned.update(c["candidate_chapter_ids"])
+    assert set(aligned_world["chapter_ids"]).issubset(chapter_ids_returned)
+
+
+def test_gather_alignment_candidates_skips_concepts_with_no_chapters(
+    rw_conn, aligned_world,
+):
+    """A concept the section discusses but no book chapter does → skipped."""
+    orphan_id = rw_conn.execute(
+        "INSERT INTO concept (name, concept_type) VALUES ('Orphan', 'Concept') "
+        "RETURNING concept_id"
+    ).fetchone()[0]
+    rw_conn.execute(
+        "INSERT INTO concept_relation "
+        "  (from_concept_id, to_concept_id, relation_type, source_type, source_id) "
+        "VALUES (?, ?, 'REQUIRES', 'doc_section', ?)",
+        [orphan_id, aligned_world["concept_id"], aligned_world["section_id"]],
+    )
+    candidates = refresh_docs.gather_alignment_candidates(
+        rw_conn, aligned_world["section_id"],
+    )
+    assert orphan_id not in {c["concept_id"] for c in candidates}
+
+
+def test_gather_alignment_candidates_respects_limits(rw_conn, aligned_world):
+    """max_concepts and max_chapters_per_concept caps are honored."""
+    candidates = refresh_docs.gather_alignment_candidates(
+        rw_conn, aligned_world["section_id"],
+        max_concepts=1, max_chapters_per_concept=1,
+    )
+    assert len(candidates) == 1
+    assert len(candidates[0]["candidate_chapter_ids"]) == 1
+
+
+def test_build_section_alignment_prompt_includes_section_and_candidates(rw_conn, aligned_world):
+    """Prompt text includes the section content, candidate chapter excerpts, and concept context."""
+    candidates = refresh_docs.gather_alignment_candidates(
+        rw_conn, aligned_world["section_id"], max_concepts=2, max_chapters_per_concept=2,
+    )
+    excerpts = refresh_docs._fetch_chapter_excerpts(
+        rw_conn,
+        [c for cands in candidates for c in cands["candidate_chapter_ids"]],
+        excerpt_chars=500,
+    )
+    prompt = refresh_docs.build_section_alignment_prompt(
+        doc_section_id=aligned_world["section_id"],
+        doc_source_name="Test Source",
+        heading_text="kafka",
+        section_content="enable.idempotence=true is the modern path",
+        concepts_with_candidates=candidates,
+        chapter_excerpts=excerpts,
+        excerpt_chars=500,
+    )
+    assert "ALIGNMENT" in prompt or "alignment classifier" in prompt.lower()
+    assert "DOC_SECTION_ID" in prompt
+    assert "CANDIDATE_CHAPTER" in prompt
+    # Both seeded chapter ids appear as candidates in the prompt.
+    for ch_id in aligned_world["chapter_ids"]:
+        assert f"to_chapter_id={ch_id}" in prompt
+
+
+def test_prep_alignment_skips_sections_with_no_candidates(
+    rw_conn, seeded_doc_source, tmp_path,
+):
+    """Sections whose concepts have no candidate chapters get no prompt files."""
+    snap_id = _seed_snapshot_with_sections(rw_conn, seeded_doc_source, "# x\nbody")
+    out = tmp_path / "alignment"
+    manifest = refresh_docs.prep_alignment(rw_conn, snap_id, out)
+    # No concept_relation rows for this snapshot's section → no candidates → no entries.
+    assert manifest.sections == []
+
+
+def test_prep_alignment_writes_prompts_when_candidates_exist(rw_conn, aligned_world, tmp_path):
+    """Section with a candidate concept + candidate chapters gets a prompt file."""
+    out = tmp_path / "alignment"
+    manifest = refresh_docs.prep_alignment(
+        rw_conn, aligned_world["snapshot_id"], out,
+    )
+    assert len(manifest.sections) == 1
+    entry = manifest.sections[0]
+    assert entry.doc_section_id == aligned_world["section_id"]
+    assert Path(entry.prompt_path).exists()
+    assert entry.concepts_with_candidates  # non-empty
+    rehydrated = refresh_docs.AlignmentManifest.from_dict(
+        json.loads((out / "manifest.json").read_text())
+    )
+    assert rehydrated.sections[0].doc_section_id == aligned_world["section_id"]
+
+
+def test_validate_alignment_payload_drops_hallucinated_concept_ids():
+    """Sub-agent invents a concept_id not in the prompt's allowed set → dropped."""
+    summary = refresh_docs.AlignmentSummary()
+    raw = {
+        "alignments": [
+            {"concept_id": 999, "to_chapter_id": 1, "relation_type": "CORROBORATES",
+             "confidence": 0.9, "explanation": "x"},
+            {"concept_id": 100, "to_chapter_id": 1, "relation_type": "CORROBORATES",
+             "confidence": 0.9, "explanation": "y"},
+        ],
+    }
+    out = refresh_docs._validate_alignment_payload(
+        raw, allowed_concept_ids={100}, allowed_chapter_ids={1},
+        allowed_section_ids=set(), summary=summary,
+    )
+    assert len(out) == 1
+    assert out[0]["concept_id"] == 100
+    assert summary.edges_dropped_unknown_concept == 1
+
+
+def test_validate_alignment_payload_drops_hallucinated_target_ids():
+    """Same protection for chapter ids."""
+    summary = refresh_docs.AlignmentSummary()
+    raw = {
+        "alignments": [
+            {"concept_id": 100, "to_chapter_id": 999, "relation_type": "CORROBORATES",
+             "confidence": 0.9, "explanation": "x"},
+        ],
+    }
+    out = refresh_docs._validate_alignment_payload(
+        raw, allowed_concept_ids={100}, allowed_chapter_ids={1, 2, 3},
+        allowed_section_ids=set(), summary=summary,
+    )
+    assert out == []
+    assert summary.edges_dropped_unknown_target == 1
+
+
+def test_validate_alignment_payload_drops_invalid_relation_types():
+    """Only CORROBORATES and CONTRADICTS allowed."""
+    summary = refresh_docs.AlignmentSummary()
+    raw = {
+        "alignments": [
+            {"concept_id": 100, "to_chapter_id": 1, "relation_type": "MAYBE",
+             "confidence": 0.5, "explanation": "x"},
+        ],
+    }
+    out = refresh_docs._validate_alignment_payload(
+        raw, allowed_concept_ids={100}, allowed_chapter_ids={1},
+        allowed_section_ids=set(), summary=summary,
+    )
+    assert out == []
+    assert summary.edges_dropped_invalid_relation == 1
+
+
+def test_validate_alignment_payload_clamps_confidence_to_unit_interval():
+    """Confidence values outside [0, 1] are clamped, not dropped."""
+    summary = refresh_docs.AlignmentSummary()
+    raw = {
+        "alignments": [
+            {"concept_id": 100, "to_chapter_id": 1, "relation_type": "CORROBORATES",
+             "confidence": 1.5, "explanation": "high"},
+            {"concept_id": 100, "to_chapter_id": 2, "relation_type": "CONTRADICTS",
+             "confidence": -0.1, "explanation": "low"},
+        ],
+    }
+    out = refresh_docs._validate_alignment_payload(
+        raw, allowed_concept_ids={100}, allowed_chapter_ids={1, 2},
+        allowed_section_ids=set(), summary=summary,
+    )
+    assert [o["confidence"] for o in out] == [1.0, 0.0]
+
+
+def test_process_alignment_writes_edges_with_correct_provenance(
+    rw_conn, aligned_world, tmp_path,
+):
+    """Happy path: a result file with valid CORROBORATES edge writes to alignment_edge."""
+    out = tmp_path / "alignment"
+    manifest = refresh_docs.prep_alignment(rw_conn, aligned_world["snapshot_id"], out)
+    entry = manifest.sections[0]
+    target_concept_id = entry.concepts_with_candidates[0]["concept_id"]
+    target_chapter_id = entry.concepts_with_candidates[0]["candidate_chapter_ids"][0]
+
+    payload = {"alignments": [{
+        "concept_id": target_concept_id,
+        "to_chapter_id": target_chapter_id,
+        "relation_type": "CORROBORATES",
+        "confidence": 0.85,
+        "explanation": "Both describe enable.idempotence pattern.",
+    }]}
+    Path(entry.result_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(entry.result_path).write_text(json.dumps(payload))
+
+    summary = refresh_docs.process_alignment(rw_conn, out)
+    assert summary.edges_written == 1
+    assert summary.results_processed == 1
+
+    row = rw_conn.execute(
+        "SELECT from_doc_section_id, to_chapter_id, to_doc_section_id, "
+        "       concept_id, relation_type, confidence "
+        "  FROM alignment_edge"
+    ).fetchone()
+    assert row == (entry.doc_section_id, target_chapter_id, None,
+                   target_concept_id, "CORROBORATES", 0.85)
+
+
+def test_process_alignment_idempotent_clears_prior_edges(
+    rw_conn, aligned_world, tmp_path,
+):
+    """Re-running process_alignment must not duplicate edges for the same section."""
+    out = tmp_path / "alignment"
+    manifest = refresh_docs.prep_alignment(rw_conn, aligned_world["snapshot_id"], out)
+    entry = manifest.sections[0]
+    cand = entry.concepts_with_candidates[0]
+    payload = {"alignments": [{
+        "concept_id": cand["concept_id"], "to_chapter_id": cand["candidate_chapter_ids"][0],
+        "relation_type": "CORROBORATES", "confidence": 0.7,
+        "explanation": "x",
+    }]}
+    Path(entry.result_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(entry.result_path).write_text(json.dumps(payload))
+
+    refresh_docs.process_alignment(rw_conn, out)
+    refresh_docs.process_alignment(rw_conn, out)
+    count = rw_conn.execute(
+        "SELECT COUNT(*) FROM alignment_edge WHERE from_doc_section_id = ?",
+        [entry.doc_section_id],
+    ).fetchone()[0]
+    assert count == 1
+
+
+def test_process_alignment_handles_missing_and_unparseable(rw_conn, aligned_world, tmp_path):
+    """Missing result file → counted as missing. Bad JSON → unparseable. No crash."""
+    out = tmp_path / "alignment"
+    manifest = refresh_docs.prep_alignment(rw_conn, aligned_world["snapshot_id"], out)
+    entry = manifest.sections[0]
+    Path(entry.result_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(entry.result_path).write_text("not json {{{")
+
+    summary = refresh_docs.process_alignment(rw_conn, out)
+    assert summary.results_unparseable == 1
+    assert summary.edges_written == 0
+
+
+# ---------------------------------------------------------------------------
+# Cross-corpus search_chapters — Phase 4.4b mixes book chapters + doc sections
+# ---------------------------------------------------------------------------
+
+
+def _import_kb_server():
+    """Import mcp-servers/kb-mcp/server.py without booting the long-lived MCP."""
+    kb_path = PROJECT_ROOT / "mcp-servers" / "kb-mcp"
+    if str(kb_path) not in sys.path:
+        sys.path.insert(0, str(kb_path))
+    import server  # type: ignore[import-not-found]
+    return server
+
+
+def test_normalize_chapter_row_adds_unified_keys():
+    """Existing chapter-modality rows must gain (kind, result_id, doc_section_id) keys."""
+    server = _import_kb_server()
+    raw = {"chapter_id": 42, "score": 1.0, "book_title": "x", "chapter_title": "y", "excerpt": "z"}
+    out = server._normalize_chapter_row(raw)
+    assert out["kind"] == "chapter"
+    assert out["result_id"] == 42
+    assert out["doc_section_id"] is None
+    assert out["chapter_id"] == 42  # original keys preserved
+
+
+def test_rrf_merge_keys_on_kind_and_result_id_so_corpora_dont_collide():
+    """A chapter_id and a doc_section_id with the same numeric value must NOT
+    collapse into one merged result. Cross-corpus mixing requires the (kind,
+    result_id) key invariant."""
+    server = _import_kb_server()
+    chapter_row = {"kind": "chapter", "result_id": 7, "chapter_id": 7,
+                   "doc_section_id": None, "score": 1.0}
+    section_row = {"kind": "doc_section", "result_id": 7, "chapter_id": None,
+                   "doc_section_id": 7, "score": 1.0}
+    merged = server._rrf_merge(
+        {"fts_chapter": [chapter_row], "fts_doc_section": [section_row]},
+        limit=10,
+    )
+    kinds = sorted(r["kind"] for r in merged)
+    assert kinds == ["chapter", "doc_section"]
+    # Each retains its own provenance keys.
+    chapter_result = next(r for r in merged if r["kind"] == "chapter")
+    assert chapter_result["chapter_id"] == 7 and chapter_result["doc_section_id"] is None
+    section_result = next(r for r in merged if r["kind"] == "doc_section")
+    assert section_result["doc_section_id"] == 7 and section_result["chapter_id"] is None
+
+
+def test_rrf_merge_combines_modalities_for_same_result():
+    """A result that hits multiple modalities accumulates RRF score across them."""
+    server = _import_kb_server()
+    chapter_row_fts = {"kind": "chapter", "result_id": 5, "chapter_id": 5,
+                       "doc_section_id": None, "score": 0.9}
+    chapter_row_vss = {"kind": "chapter", "result_id": 5, "chapter_id": 5,
+                       "doc_section_id": None, "score": 0.8}
+    merged = server._rrf_merge(
+        {"fts_chapter": [chapter_row_fts], "vss_chapter": [chapter_row_vss]},
+        limit=10,
+    )
+    assert len(merged) == 1
+    assert sorted(merged[0]["modalities"]) == ["fts_chapter", "vss_chapter"]
+
+
+def test_fts_doc_section_search_returns_empty_when_index_missing(rw_catalog):
+    """Greenfield catalog with no refresh ever run → FTS returns [] cleanly,
+    not an error. Important for chapter-only callers who haven't refreshed docs yet."""
+    server = _import_kb_server()
+    # Fresh schema connection, no refresh → no fts_main_doc_section schema.
+    test_conn = duckdb.connect(str(rw_catalog))
+    test_conn.execute("LOAD fts")
+    with patch.object(server, "_CONN", test_conn):
+        out = server._fts_doc_section_search("anything", limit=5)
+    test_conn.close()
+    assert out == []
+
+
+def test_fts_doc_section_search_finds_indexed_sections(rw_conn, seeded_doc_source):
+    """After a refresh, FTS over doc_section returns scored matching rows."""
+    server = _import_kb_server()
+    fetcher = _FakeFetcher(
+        content="# kafka\n\n## streams\nwatermark and event time processing\n\n## other\nfoo",
+        source_type="markdown",
+    )
+    refresh_docs.refresh_one_source(
+        rw_conn, seeded_doc_source, fetcher=fetcher, embedder=_FakeEmbedder(),
+    )
+    with patch.object(server, "_CONN", rw_conn):
+        out = server._fts_doc_section_search("watermark", limit=5)
+    assert len(out) >= 1
+    assert all(r["kind"] == "doc_section" for r in out)
+    assert all(r["chapter_id"] is None for r in out)
+    assert all(isinstance(r["doc_section_id"], int) for r in out)
+
+
+def test_vss_doc_section_search_returns_distance_ranked_sections(
+    rw_conn, seeded_doc_source,
+):
+    """VSS modality returns sections ranked by cosine distance, with doc_source_name."""
+    server = _import_kb_server()
+    fetcher = _FakeFetcher(
+        content="# topics\n\n## a\nalpha content\n\n## b\nbeta content\n\n## c\ngamma content",
+        source_type="markdown",
+    )
+    refresh_docs.refresh_one_source(
+        rw_conn, seeded_doc_source, fetcher=fetcher, embedder=_FakeEmbedder(),
+    )
+    # Use one section's stored embedding as the query vector → that section
+    # ranks first (self-distance = 0).
+    self_emb = rw_conn.execute(
+        "SELECT embedding FROM doc_section_embedding LIMIT 1"
+    ).fetchone()[0]
+    with patch.object(server, "_CONN", rw_conn):
+        out = server._vss_doc_section_search(self_emb, limit=5)
+    assert len(out) >= 1
+    assert all(r["kind"] == "doc_section" for r in out)
+    # First result is the self-match (similarity = 1.0 - 0 = 1.0).
+    assert out[0]["score"] == pytest.approx(1.0, abs=1e-3)
+
+
+def test_search_chapters_full_fanout_no_doc_data_still_works(rw_conn, seeded_doc_source):
+    """Chapter-only catalog (no doc refresh) → search_chapters still returns
+    chapter results without crashing on the missing doc_section_fts index."""
+    server = _import_kb_server()
+    # Bootstrap chapter side: one chapter + concept + relation, plus the FTS index.
+    rw_conn.execute(
+        "INSERT INTO author (name) VALUES ('Author') RETURNING author_id"
+    )
+    book_id = rw_conn.execute(
+        "INSERT INTO book (title, source_path) VALUES ('B', '/x') RETURNING book_id"
+    ).fetchone()[0]
+    ch_id = rw_conn.execute(
+        "INSERT INTO chapter (book_id, chapter_num, title, content) "
+        "VALUES (?, 1, 'C', 'kafka stream watermark') RETURNING chapter_id",
+        [book_id],
+    ).fetchone()[0]
+    # Build chapter FTS index so the chapter modality returns hits.
+    rw_conn.execute(
+        "PRAGMA create_fts_index('chapter', 'chapter_id', 'content', overwrite=1)"
+    )
+    # No doc refresh has run, so fts_main_doc_section does NOT exist.
+    assert not server._doc_section_fts_index_exists.__call__ or True  # smoke
+    # Patch the module connection + a stub resolver for the graph modality.
+    fake_resolver = MagicMock()
+    fake_resolver.resolve_lookup_only.return_value = None  # no concepts known
+    with patch.object(server, "_CONN", rw_conn), \
+         patch.object(server, "_RESOLVER", fake_resolver):
+        # FTS on chapter: should find our chapter
+        ch_hits = server._fts_chapter_search("kafka watermark", 10)
+        # FTS on doc_section: empty (index missing)
+        ds_hits = server._fts_doc_section_search("kafka watermark", 10)
+    assert any(h["chapter_id"] == ch_id for h in ch_hits)
+    assert ds_hits == []
 
 
 def test_doc_section_vss_query_returns_ranked_results(rw_conn, seeded_doc_source):

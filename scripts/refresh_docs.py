@@ -864,7 +864,14 @@ def _load_default_embedder() -> Any:
 
 @dataclass
 class SectionEntry:
-    """One doc_section's entry in the prep manifest."""
+    """One doc_section's entry in the prep manifest.
+
+    The (prompt_path, result_path) pair is the entity-extraction prompt
+    (step 7). When step 8 (procedures) is also prepped, the per-section
+    procedure prompt + result paths populate procedure_prompt_path and
+    procedure_result_path. Older 4.4-era manifests omit the procedure
+    fields entirely; ``from_dict`` defaults them to None for compat.
+    """
 
     doc_section_id: int
     snapshot_id: int
@@ -873,6 +880,8 @@ class SectionEntry:
     heading_text: Optional[str]
     prompt_path: str
     result_path: str
+    procedure_prompt_path: Optional[str] = None
+    procedure_result_path: Optional[str] = None
 
 
 @dataclass
@@ -902,6 +911,21 @@ class PrepManifest:
         )
 
 
+def _section_payload_header(
+    doc_section_id: int, doc_source_name: str, heading_text: Optional[str],
+    content: str,
+) -> str:
+    """Common payload framing for any per-section sub-agent prompt."""
+    return (
+        f"DOC_SECTION_ID: {doc_section_id}\n"
+        f"DOC_SOURCE: {doc_source_name}\n"
+        f"HEADING: {heading_text or '(none — shapeless or top-level section)'}\n"
+        f"\n"
+        f"CONTENT:\n"
+        f"{content}\n"
+    )
+
+
 def build_section_extraction_prompt(
     *,
     doc_section_id: int,
@@ -909,7 +933,7 @@ def build_section_extraction_prompt(
     heading_text: Optional[str],
     content: str,
 ) -> str:
-    """Self-contained sub-agent prompt for one doc_section.
+    """Step 7 prompt: entity + relation extraction at section level.
 
     Reuses the entity-extraction SYSTEM_PROMPT from ``extract_entities.py``
     so the JSON schema sub-agents emit is identical to chapter extraction.
@@ -919,17 +943,35 @@ def build_section_extraction_prompt(
     # Local import — extract_entities sits next to us in scripts/.
     import extract_entities  # type: ignore[import-not-found]
 
-    payload_header = (
-        f"DOC_SECTION_ID: {doc_section_id}\n"
-        f"DOC_SOURCE: {doc_source_name}\n"
-        f"HEADING: {heading_text or '(none — shapeless or top-level section)'}\n"
-        f"\n"
-        f"CONTENT:\n"
-        f"{content}\n"
-    )
     return (
         f"{extract_entities.SYSTEM_PROMPT}\n\n"
-        f"{payload_header}\n"
+        f"{_section_payload_header(doc_section_id, doc_source_name, heading_text, content)}\n"
+        f"Respond with JSON only. No prose, no markdown fences."
+    )
+
+
+def build_section_procedure_prompt(
+    *,
+    doc_section_id: int,
+    doc_source_name: str,
+    heading_text: Optional[str],
+    content: str,
+) -> str:
+    """Step 8 prompt: procedure extraction at section level.
+
+    Reuses ``extract_procedures.SYSTEM_PROMPT`` so the JSON schema (procedure
+    name / preconditions / steps / postconditions / failure_modes / concepts /
+    implements_pattern) is identical to chapter-level procedure extraction.
+    Doc sections often contain less procedural content than book chapters
+    (and many will produce zero procedures) — same as front-matter chapters
+    in the book pipeline. Empty results are valid and expected.
+    """
+    import extract_procedures  # type: ignore[import-not-found]
+
+    return (
+        f"{extract_procedures.SYSTEM_PROMPT}\n\n"
+        f"--- DOC SECTION TO EXTRACT ---\n\n"
+        f"{_section_payload_header(doc_section_id, doc_source_name, heading_text, content)}\n"
         f"Respond with JSON only. No prose, no markdown fences."
     )
 
@@ -963,23 +1005,32 @@ def prep_extraction(
 
     sections: list[SectionEntry] = []
     for sid, snap_id, heading, content, src_id, src_name in rows:
-        prompt_path = output_dir / "prompts" / f"prompt_section_{sid}.txt"
-        result_path = output_dir / "results" / f"result_section_{sid}.json"
-        prompt_text = build_section_extraction_prompt(
-            doc_section_id=int(sid),
-            doc_source_name=src_name,
-            heading_text=heading,
-            content=content or "",
-        )
-        prompt_path.write_text(prompt_text)
+        # Step 7: entity-extraction prompt
+        ent_prompt = output_dir / "prompts" / f"prompt_section_{sid}.txt"
+        ent_result = output_dir / "results" / f"result_section_{sid}.json"
+        ent_prompt.write_text(build_section_extraction_prompt(
+            doc_section_id=int(sid), doc_source_name=src_name,
+            heading_text=heading, content=content or "",
+        ))
+
+        # Step 8: procedure-extraction prompt (same section, separate prompt file)
+        proc_prompt = output_dir / "prompts" / f"prompt_section_{sid}_proc.txt"
+        proc_result = output_dir / "results" / f"result_section_{sid}_proc.json"
+        proc_prompt.write_text(build_section_procedure_prompt(
+            doc_section_id=int(sid), doc_source_name=src_name,
+            heading_text=heading, content=content or "",
+        ))
+
         sections.append(SectionEntry(
             doc_section_id=int(sid),
             snapshot_id=int(snap_id),
             doc_source_id=int(src_id),
             doc_source_name=src_name,
             heading_text=heading,
-            prompt_path=str(prompt_path),
-            result_path=str(result_path),
+            prompt_path=str(ent_prompt),
+            result_path=str(ent_result),
+            procedure_prompt_path=str(proc_prompt),
+            procedure_result_path=str(proc_result),
         ))
 
     manifest = PrepManifest(
@@ -1003,14 +1054,40 @@ def prep_extraction(
 
 @dataclass
 class ProcessSummary:
-    """Outcome of ``process_extraction`` for caller introspection / logging."""
+    """Outcome of ``process_extraction`` for caller introspection / logging.
+
+    Tracks entity-extraction (step 7) and procedure-extraction (step 8)
+    results separately so a partial sub-agent run is observable. The
+    ``*_missing`` counters distinguish "sub-agent didn't run for this
+    section" from "ran but produced empty/invalid output".
+    """
 
     total_sections: int = 0
-    results_processed: int = 0
-    results_missing: int = 0
-    results_unparseable: int = 0
+    # Step 7 — entities
+    entity_results_processed: int = 0
+    entity_results_missing: int = 0
+    entity_results_unparseable: int = 0
     entities_resolved: int = 0
     relations_written: int = 0
+    # Step 8 — procedures
+    procedure_results_processed: int = 0
+    procedure_results_missing: int = 0
+    procedure_results_unparseable: int = 0
+    procedures_written: int = 0
+    procedure_concept_links_written: int = 0
+
+    # Backwards-compat aliases for callers that read 4.4-era field names.
+    @property
+    def results_processed(self) -> int:
+        return self.entity_results_processed
+
+    @property
+    def results_missing(self) -> int:
+        return self.entity_results_missing
+
+    @property
+    def results_unparseable(self) -> int:
+        return self.entity_results_unparseable
 
 
 def _validate_section_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
@@ -1074,6 +1151,77 @@ def _clear_prior_doc_section_relations(
     return int(before)
 
 
+def _clear_prior_doc_section_procedures(
+    conn: duckdb.DuckDBPyConnection, doc_section_id: int,
+) -> int:
+    """Remove procedure + procedure_concept rows from this section.
+
+    Mirrors ``extract_procedures._clear_prior_extraction``: drops
+    procedure_concept link rows first (FK), then the procedures themselves.
+    Concept and pattern nodes are left in place — they may be referenced by
+    other sources.
+    """
+    proc_ids = [
+        r[0] for r in conn.execute(
+            "SELECT procedure_id FROM procedure "
+            "WHERE source_type='doc_section' AND source_id = ?",
+            [doc_section_id],
+        ).fetchall()
+    ]
+    if not proc_ids:
+        return 0
+    placeholders = ",".join("?" * len(proc_ids))
+    conn.execute(
+        f"DELETE FROM procedure_concept WHERE procedure_id IN ({placeholders})",
+        proc_ids,
+    )
+    conn.execute(
+        f"DELETE FROM procedure WHERE procedure_id IN ({placeholders})",
+        proc_ids,
+    )
+    return len(proc_ids)
+
+
+def _write_doc_section_procedure(
+    conn: duckdb.DuckDBPyConnection,
+    *, doc_section_id: int, proc: dict, pattern_id: Optional[int],
+) -> int:
+    """Insert one procedure row with source_type='doc_section'; return procedure_id."""
+    row = conn.execute(
+        """
+        INSERT INTO procedure
+            (name, preconditions, steps, postconditions, failure_modes,
+             source_type, source_id, implements_pattern)
+        VALUES (?, ?, ?, ?, ?, 'doc_section', ?, ?)
+        RETURNING procedure_id
+        """,
+        [
+            proc["name"],
+            proc.get("preconditions") or None,
+            json.dumps(proc["steps"], ensure_ascii=False),
+            proc.get("postconditions") or None,
+            proc.get("failure_modes") or None,
+            doc_section_id,
+            pattern_id,
+        ],
+    ).fetchone()
+    return int(row[0])
+
+
+def _link_doc_section_procedure_concept(
+    conn: duckdb.DuckDBPyConnection, procedure_id: int, concept_id: int,
+) -> bool:
+    """Insert a procedure_concept link; duplicates fail silently."""
+    try:
+        conn.execute(
+            "INSERT INTO procedure_concept (procedure_id, concept_id) VALUES (?, ?)",
+            [procedure_id, concept_id],
+        )
+        return True
+    except duckdb.ConstraintException:
+        return False
+
+
 def _write_doc_section_relation(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -1126,72 +1274,703 @@ def process_extraction(
 
     summary = ProcessSummary(total_sections=len(manifest.sections))
 
+    # Step 7: entity extraction (ingest one result file per section).
+    # The name → concept_id map per section is reused by step 8 — procedures
+    # often reference the same concepts the section discusses, so resolving
+    # them once here saves a redundant round-trip through EntityResolver.
+    section_name_to_cid: dict[int, dict[str, int]] = {}
+    for entry in manifest.sections:
+        section_name_to_cid[entry.doc_section_id] = _process_entity_result(
+            conn, entry, resolver, parse_llm_json, summary,
+        )
+
+    # Step 8: procedure extraction (ingest the per-section procedure result).
+    # Skipped cleanly if the manifest predates procedure prompts (entry's
+    # procedure_*_path is None — old 4.4-era manifests).
+    for entry in manifest.sections:
+        if not entry.procedure_prompt_path or not entry.procedure_result_path:
+            continue
+        _process_procedure_result(
+            conn, entry, resolver, parse_llm_json, summary,
+            entity_name_cache=section_name_to_cid.get(entry.doc_section_id, {}),
+        )
+
+    log.info(
+        "process_extraction: %d sections | "
+        "entities: %d processed (%d missing, %d unparseable), "
+        "%d resolved, %d relations | "
+        "procedures: %d processed (%d missing, %d unparseable), "
+        "%d written, %d concept links",
+        summary.total_sections,
+        summary.entity_results_processed,
+        summary.entity_results_missing,
+        summary.entity_results_unparseable,
+        summary.entities_resolved,
+        summary.relations_written,
+        summary.procedure_results_processed,
+        summary.procedure_results_missing,
+        summary.procedure_results_unparseable,
+        summary.procedures_written,
+        summary.procedure_concept_links_written,
+    )
+    return summary
+
+
+def _process_entity_result(
+    conn: duckdb.DuckDBPyConnection,
+    entry: SectionEntry,
+    resolver: Any,
+    parse_llm_json: Any,
+    summary: ProcessSummary,
+) -> dict[str, int]:
+    """Ingest one section's entity-extraction result. Returns name → concept_id map."""
+    result_path = Path(entry.result_path)
+    name_to_cid: dict[str, int] = {}
+    if not result_path.exists():
+        summary.entity_results_missing += 1
+        log.info("section %d: no entity result file", entry.doc_section_id)
+        return name_to_cid
+
+    try:
+        raw = parse_llm_json(result_path.read_text())
+    except (json.JSONDecodeError, ValueError) as e:
+        summary.entity_results_unparseable += 1
+        log.warning("section %d: entity result parse error: %s",
+                    entry.doc_section_id, e)
+        return name_to_cid
+
+    entities, relations = _validate_section_extraction(raw)
+
+    for ent in entities:
+        res = resolver.resolve(
+            ent["name"],
+            candidate_context=ent["description"],
+            concept_type=ent["type"],
+            source_type="doc_section",
+            source_id=entry.doc_section_id,
+        )
+        if res is not None and res.concept_id is not None:
+            name_to_cid[ent["name"]] = res.concept_id
+            summary.entities_resolved += 1
+
+    _clear_prior_doc_section_relations(conn, entry.doc_section_id)
+    for rel in relations:
+        from_id = name_to_cid.get(rel["from"])
+        to_id = name_to_cid.get(rel["to"])
+        if from_id is None or to_id is None:
+            continue
+        if _write_doc_section_relation(
+            conn,
+            from_id=from_id, to_id=to_id,
+            rtype=rel["type"], confidence=rel["confidence"],
+            doc_section_id=entry.doc_section_id,
+        ):
+            summary.relations_written += 1
+
+    summary.entity_results_processed += 1
+    return name_to_cid
+
+
+def _process_procedure_result(
+    conn: duckdb.DuckDBPyConnection,
+    entry: SectionEntry,
+    resolver: Any,
+    parse_llm_json: Any,
+    summary: ProcessSummary,
+    *,
+    entity_name_cache: dict[str, int],
+) -> None:
+    """Ingest one section's procedure-extraction result.
+
+    Reuses ``extract_procedures._validate_extraction`` so any future schema
+    tightening on chapter-level procedure validation flows through here too.
+    Concept references are resolved through EntityResolver, but if the same
+    name was already resolved in this section's entity-extraction pass we
+    reuse the cached concept_id (saves a resolver round-trip).
+    """
+    import extract_procedures  # type: ignore[import-not-found]
+
+    proc_result_path = Path(entry.procedure_result_path or "")
+    if not entry.procedure_result_path or not proc_result_path.exists():
+        summary.procedure_results_missing += 1
+        log.info("section %d: no procedure result file", entry.doc_section_id)
+        return
+
+    try:
+        raw = parse_llm_json(proc_result_path.read_text())
+    except (json.JSONDecodeError, ValueError) as e:
+        summary.procedure_results_unparseable += 1
+        log.warning("section %d: procedure result parse error: %s",
+                    entry.doc_section_id, e)
+        return
+
+    procedures = extract_procedures._validate_extraction(raw)
+    _clear_prior_doc_section_procedures(conn, entry.doc_section_id)
+
+    for proc in procedures:
+        # Concept references on this procedure: resolve fresh ones, reuse cached.
+        concept_ids: list[int] = []
+        for cname in proc.get("concepts", []):
+            if cname in entity_name_cache:
+                concept_ids.append(entity_name_cache[cname])
+                continue
+            res = resolver.resolve(
+                cname,
+                candidate_context=f"operates_on procedure: {proc['name']}",
+                concept_type="Concept",
+                source_type="doc_section",
+                source_id=entry.doc_section_id,
+            )
+            if res is not None and res.concept_id is not None:
+                concept_ids.append(res.concept_id)
+                entity_name_cache[cname] = res.concept_id
+
+        # Pattern reference (optional): one resolver call as Pattern type.
+        pattern_id: Optional[int] = None
+        pname = proc.get("implements_pattern")
+        if pname:
+            res = resolver.resolve(
+                pname,
+                candidate_context="implements pattern",
+                concept_type="Pattern",
+                source_type="doc_section",
+                source_id=entry.doc_section_id,
+            )
+            if res is not None:
+                pattern_id = res.concept_id
+
+        proc_id = _write_doc_section_procedure(
+            conn, doc_section_id=entry.doc_section_id, proc=proc, pattern_id=pattern_id,
+        )
+        summary.procedures_written += 1
+        for cid in concept_ids:
+            if _link_doc_section_procedure_concept(conn, proc_id, cid):
+                summary.procedure_concept_links_written += 1
+
+    summary.procedure_results_processed += 1
+
+
+# ---------------------------------------------------------------------------
+# Step 9 — Alignment edges (DocSection → Chapter / DocSection)
+# ---------------------------------------------------------------------------
+#
+# Alignment prep is a *second* sub-agent round that runs AFTER process_extraction
+# (step 7) has produced concept_relation rows. For each section, we gather:
+#   * the concepts the section discusses (from concept_relation source_type='doc_section')
+#   * candidate book chapters that also discuss those concepts
+# and emit one prompt per section asking the sub-agent to classify each
+# (concept, chapter) pair as CORROBORATES / CONTRADICTS / (skip).
+#
+# Output goes under <output_dir>/alignment/ — separate from the entity/procedure
+# manifest so the two rounds compose cleanly. Idempotency: re-running clears
+# prior alignment_edge rows from from_doc_section_id before writing new ones.
+
+ALIGNMENT_SYSTEM_PROMPT = """You are an alignment classifier comparing technical documentation to book chapters from a knowledge base.
+
+You will be given:
+  * a DOC_SECTION (current vendor/upstream documentation)
+  * a list of CONCEPTS the section discusses
+  * for each concept, one or more CANDIDATE_CHAPTER excerpts from technical books in the knowledge base that also discuss that concept
+
+For each (concept, candidate_chapter) pair, classify the relationship:
+
+  CORROBORATES — the doc section and the book chapter agree on substantive claims about this concept (e.g., both describe the same mechanism, recommend the same approach, or share the same definition). The agreement must be specific, not generic ("both mention X" is not enough).
+
+  CONTRADICTS — the doc section and the book chapter make substantively different claims about this concept (e.g., the doc shows a new API the book describes as deprecated; the book recommends an approach the docs explicitly warn against). Surface-level wording differences are NOT contradictions.
+
+  (skip) — emit no edge. Use this when:
+     - the chapter doesn't actually discuss the concept meaningfully (false candidate)
+     - there's no overlap in specific claims to align
+     - you cannot tell with reasonable confidence
+     - the concept is too generic to align (e.g., "data", "system")
+
+Rules:
+
+  * Specificity beats coverage. A handful of high-confidence edges is better than many low-confidence ones.
+  * Do not invent facts. If the chapter excerpt doesn't contain enough text to support a claim, skip.
+  * Confidence ∈ [0.0, 1.0]. Use ≥0.8 only for clear, specific agreement/disagreement.
+  * One sentence per explanation, citing the specific point of agreement or disagreement.
+
+Output JSON only — no prose, no markdown fences:
+
+{
+  "alignments": [
+    {
+      "concept_id": <int>,
+      "to_chapter_id": <int>,
+      "relation_type": "CORROBORATES" | "CONTRADICTS",
+      "confidence": <float 0..1>,
+      "explanation": "<one sentence>"
+    }
+  ]
+}"""
+
+DEFAULT_MAX_CONCEPTS_PER_SECTION = 5
+DEFAULT_MAX_CHAPTERS_PER_CONCEPT = 3
+DEFAULT_CHAPTER_EXCERPT_CHARS = 1000
+
+
+@dataclass
+class AlignmentSectionEntry:
+    """One section's entry in the alignment manifest.
+
+    ``concepts_with_candidates`` carries the (concept_id, concept_name,
+    candidate_chapter_ids) triples used to build the prompt — preserved in
+    the manifest so process_alignment can validate that the sub-agent's
+    response references known concept_ids and chapter_ids (not hallucinated).
+    """
+
+    doc_section_id: int
+    snapshot_id: int
+    doc_source_id: int
+    doc_source_name: str
+    heading_text: Optional[str]
+    prompt_path: str
+    result_path: str
+    concepts_with_candidates: list[dict]  # [{concept_id, concept_name, candidate_chapter_ids}]
+
+
+@dataclass
+class AlignmentManifest:
+    output_dir: str
+    created_at: str
+    snapshot_id: int
+    sections: list[AlignmentSectionEntry] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "output_dir": self.output_dir,
+            "created_at": self.created_at,
+            "snapshot_id": self.snapshot_id,
+            "sections": [asdict(s) for s in self.sections],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AlignmentManifest":
+        return cls(
+            output_dir=d["output_dir"],
+            created_at=d["created_at"],
+            snapshot_id=int(d["snapshot_id"]),
+            sections=[AlignmentSectionEntry(**s) for s in d.get("sections", [])],
+        )
+
+
+@dataclass
+class AlignmentSummary:
+    """Outcome of process_alignment for caller introspection / logging."""
+
+    total_sections: int = 0
+    results_processed: int = 0
+    results_missing: int = 0
+    results_unparseable: int = 0
+    edges_written: int = 0
+    edges_dropped_unknown_concept: int = 0
+    edges_dropped_unknown_target: int = 0
+    edges_dropped_invalid_relation: int = 0
+
+
+def gather_alignment_candidates(
+    conn: duckdb.DuckDBPyConnection,
+    doc_section_id: int,
+    *,
+    max_concepts: int = DEFAULT_MAX_CONCEPTS_PER_SECTION,
+    max_chapters_per_concept: int = DEFAULT_MAX_CHAPTERS_PER_CONCEPT,
+) -> list[dict[str, Any]]:
+    """For one section, return up to max_concepts (concept, candidate_chapters) pairs.
+
+    Concepts come from concept_relation rows where source_type='doc_section'
+    and source_id=this_section. Ranked by mention count (concepts the section
+    talks about most win). Candidate chapters per concept come from
+    concept_relation rows where source_type='chapter' that touch the same
+    concept_id (either as from_ or to_).
+
+    Skips concepts with zero candidate chapters — alignment requires book
+    content to compare against.
+    """
+    # Concepts this section discusses, ranked by mention count.
+    section_concepts = conn.execute(
+        """
+        WITH concepts_in_section AS (
+          SELECT cr.from_concept_id AS concept_id FROM concept_relation cr
+           WHERE cr.source_type = 'doc_section' AND cr.source_id = ?
+          UNION ALL
+          SELECT cr.to_concept_id   AS concept_id FROM concept_relation cr
+           WHERE cr.source_type = 'doc_section' AND cr.source_id = ?
+        )
+        SELECT c.concept_id, c.name, COUNT(*) AS mention_count
+          FROM concepts_in_section cs
+          JOIN concept c ON c.concept_id = cs.concept_id
+         GROUP BY c.concept_id, c.name
+         ORDER BY mention_count DESC, c.concept_id ASC
+         LIMIT ?
+        """,
+        [doc_section_id, doc_section_id, max_concepts],
+    ).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for cid, cname, _mention_count in section_concepts:
+        chapter_ids = [
+            int(r[0]) for r in conn.execute(
+                """
+                SELECT DISTINCT cr.source_id AS chapter_id
+                  FROM concept_relation cr
+                 WHERE cr.source_type = 'chapter'
+                   AND (cr.from_concept_id = ? OR cr.to_concept_id = ?)
+                 LIMIT ?
+                """,
+                [cid, cid, max_chapters_per_concept],
+            ).fetchall()
+        ]
+        if not chapter_ids:
+            continue
+        out.append({
+            "concept_id": int(cid),
+            "concept_name": cname,
+            "candidate_chapter_ids": chapter_ids,
+        })
+    return out
+
+
+def build_section_alignment_prompt(
+    *,
+    doc_section_id: int,
+    doc_source_name: str,
+    heading_text: Optional[str],
+    section_content: str,
+    concepts_with_candidates: list[dict[str, Any]],
+    chapter_excerpts: dict[int, dict[str, str]],
+    excerpt_chars: int = DEFAULT_CHAPTER_EXCERPT_CHARS,
+) -> str:
+    """Compose the per-section alignment prompt.
+
+    ``chapter_excerpts`` is a {chapter_id → {book_title, chapter_title, content}}
+    map. Caller pre-fetches once and passes in to avoid N round-trips.
+    """
+    blocks: list[str] = []
+    for entry in concepts_with_candidates:
+        cid = entry["concept_id"]
+        cname = entry["concept_name"]
+        candidate_block = []
+        for ch_id in entry["candidate_chapter_ids"]:
+            ex = chapter_excerpts.get(ch_id)
+            if not ex:
+                continue
+            excerpt = (ex.get("content") or "")[:excerpt_chars].rstrip()
+            candidate_block.append(
+                f"  CANDIDATE_CHAPTER (to_chapter_id={ch_id})\n"
+                f"    book: {ex.get('book_title') or '(unknown)'}\n"
+                f"    chapter: {ex.get('chapter_title') or '(untitled)'}\n"
+                f"    excerpt:\n      {excerpt.replace(chr(10), chr(10) + '      ')}"
+            )
+        if not candidate_block:
+            continue
+        blocks.append(
+            f"CONCEPT (concept_id={cid}, name={cname!r}):\n"
+            + "\n\n".join(candidate_block)
+        )
+
+    candidates_text = "\n\n---\n\n".join(blocks) if blocks else "(no candidates)"
+
+    return (
+        f"{ALIGNMENT_SYSTEM_PROMPT}\n\n"
+        f"--- DOC SECTION TO CLASSIFY ---\n\n"
+        f"DOC_SECTION_ID: {doc_section_id}\n"
+        f"DOC_SOURCE: {doc_source_name}\n"
+        f"HEADING: {heading_text or '(none)'}\n"
+        f"\nSECTION CONTENT:\n{section_content}\n\n"
+        f"--- CANDIDATES ---\n\n"
+        f"{candidates_text}\n\n"
+        f"Respond with JSON only. No prose, no markdown fences."
+    )
+
+
+def _fetch_chapter_excerpts(
+    conn: duckdb.DuckDBPyConnection, chapter_ids: Sequence[int],
+    excerpt_chars: int = DEFAULT_CHAPTER_EXCERPT_CHARS,
+) -> dict[int, dict[str, str]]:
+    """Fetch book_title / chapter_title / content for the given chapter ids.
+
+    Returns {chapter_id: {book_title, chapter_title, content}}. Content is
+    capped at excerpt_chars * 2 here (the prompt builder slices to
+    excerpt_chars; we fetch a little extra to give the slice room).
+    """
+    if not chapter_ids:
+        return {}
+    placeholders = ",".join("?" * len(chapter_ids))
+    rows = conn.execute(
+        f"""
+        SELECT c.chapter_id, b.title AS book_title, c.title AS chapter_title,
+               substring(c.content, 1, ?) AS content
+          FROM chapter c
+          JOIN book b ON c.book_id = b.book_id
+         WHERE c.chapter_id IN ({placeholders})
+        """,
+        [excerpt_chars * 2, *list(chapter_ids)],
+    ).fetchall()
+    return {
+        int(r[0]): {
+            "book_title": r[1] or "",
+            "chapter_title": r[2] or "",
+            "content": r[3] or "",
+        }
+        for r in rows
+    }
+
+
+def prep_alignment(
+    conn: duckdb.DuckDBPyConnection,
+    snapshot_id: int,
+    output_dir: Path,
+    *,
+    max_concepts: int = DEFAULT_MAX_CONCEPTS_PER_SECTION,
+    max_chapters_per_concept: int = DEFAULT_MAX_CHAPTERS_PER_CONCEPT,
+    excerpt_chars: int = DEFAULT_CHAPTER_EXCERPT_CHARS,
+) -> AlignmentManifest:
+    """Emit alignment prompts for every section in the snapshot.
+
+    Sections with no concept_relation rows yet (step 7 process hasn't run)
+    are skipped — alignment is meaningless without known concepts.
+    Sections whose concepts have zero candidate chapters are also skipped.
+    """
+    output_dir = Path(output_dir)
+    (output_dir / "prompts").mkdir(parents=True, exist_ok=True)
+    (output_dir / "results").mkdir(parents=True, exist_ok=True)
+
+    sections = conn.execute(
+        """
+        SELECT s.doc_section_id, s.snapshot_id, s.heading_text, s.content,
+               sn.doc_source_id, src.name
+          FROM doc_section s
+          JOIN doc_snapshot sn ON s.snapshot_id = sn.snapshot_id
+          JOIN doc_source   src ON sn.doc_source_id = src.doc_source_id
+         WHERE s.snapshot_id = ?
+         ORDER BY s.doc_section_id
+        """,
+        [snapshot_id],
+    ).fetchall()
+
+    entries: list[AlignmentSectionEntry] = []
+    for sid, snap_id, heading, content, src_id, src_name in sections:
+        candidates = gather_alignment_candidates(
+            conn, int(sid),
+            max_concepts=max_concepts,
+            max_chapters_per_concept=max_chapters_per_concept,
+        )
+        if not candidates:
+            continue  # nothing to align
+
+        all_chapter_ids: list[int] = []
+        for c in candidates:
+            all_chapter_ids.extend(c["candidate_chapter_ids"])
+        chapter_excerpts = _fetch_chapter_excerpts(
+            conn, all_chapter_ids, excerpt_chars=excerpt_chars,
+        )
+
+        prompt_path = output_dir / "prompts" / f"prompt_section_{sid}_align.txt"
+        result_path = output_dir / "results" / f"result_section_{sid}_align.json"
+        prompt_path.write_text(build_section_alignment_prompt(
+            doc_section_id=int(sid),
+            doc_source_name=src_name,
+            heading_text=heading,
+            section_content=content or "",
+            concepts_with_candidates=candidates,
+            chapter_excerpts=chapter_excerpts,
+            excerpt_chars=excerpt_chars,
+        ))
+        entries.append(AlignmentSectionEntry(
+            doc_section_id=int(sid),
+            snapshot_id=int(snap_id),
+            doc_source_id=int(src_id),
+            doc_source_name=src_name,
+            heading_text=heading,
+            prompt_path=str(prompt_path),
+            result_path=str(result_path),
+            concepts_with_candidates=candidates,
+        ))
+
+    manifest = AlignmentManifest(
+        output_dir=str(output_dir),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        snapshot_id=int(snapshot_id),
+        sections=entries,
+    )
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest.to_dict(), indent=2),
+    )
+    log.info(
+        "prep_alignment: wrote %d prompts (out of %d sections in snapshot %d) under %s",
+        len(entries), len(sections), snapshot_id, output_dir,
+    )
+    return manifest
+
+
+def _validate_alignment_payload(
+    raw: dict, allowed_concept_ids: set[int],
+    allowed_chapter_ids: set[int], allowed_section_ids: set[int],
+    summary: AlignmentSummary,
+) -> list[dict[str, Any]]:
+    """Filter sub-agent output to well-formed alignment edges.
+
+    Edges referencing concept_ids or target ids the sub-agent invented
+    (not in the prompt's allowed sets) are dropped — counted in summary
+    so we can flag prompt-quality problems.
+    """
+    out: list[dict[str, Any]] = []
+    for a in raw.get("alignments", []) or []:
+        rtype = (a.get("relation_type") or "").strip()
+        if rtype not in {"CORROBORATES", "CONTRADICTS"}:
+            summary.edges_dropped_invalid_relation += 1
+            continue
+
+        try:
+            concept_id = int(a.get("concept_id"))
+        except (TypeError, ValueError):
+            summary.edges_dropped_unknown_concept += 1
+            continue
+        if concept_id not in allowed_concept_ids:
+            summary.edges_dropped_unknown_concept += 1
+            continue
+
+        to_chapter_id: Optional[int] = None
+        to_section_id: Optional[int] = None
+        if a.get("to_chapter_id") is not None:
+            try:
+                to_chapter_id = int(a["to_chapter_id"])
+            except (TypeError, ValueError):
+                pass
+        if a.get("to_doc_section_id") is not None:
+            try:
+                to_section_id = int(a["to_doc_section_id"])
+            except (TypeError, ValueError):
+                pass
+
+        if to_chapter_id is not None and to_chapter_id not in allowed_chapter_ids:
+            summary.edges_dropped_unknown_target += 1
+            continue
+        if to_section_id is not None and to_section_id not in allowed_section_ids:
+            summary.edges_dropped_unknown_target += 1
+            continue
+        if to_chapter_id is None and to_section_id is None:
+            summary.edges_dropped_unknown_target += 1
+            continue
+
+        try:
+            confidence = float(a.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+
+        out.append({
+            "concept_id": concept_id,
+            "to_chapter_id": to_chapter_id,
+            "to_doc_section_id": to_section_id,
+            "relation_type": rtype,
+            "confidence": confidence,
+            "explanation": (a.get("explanation") or "").strip(),
+        })
+    return out
+
+
+def _clear_prior_alignment_edges(
+    conn: duckdb.DuckDBPyConnection, doc_section_id: int,
+) -> int:
+    before = conn.execute(
+        "SELECT COUNT(*) FROM alignment_edge WHERE from_doc_section_id = ?",
+        [doc_section_id],
+    ).fetchone()[0]
+    if before:
+        conn.execute(
+            "DELETE FROM alignment_edge WHERE from_doc_section_id = ?",
+            [doc_section_id],
+        )
+    return int(before)
+
+
+def _write_alignment_edge(
+    conn: duckdb.DuckDBPyConnection, *, doc_section_id: int, edge: dict[str, Any],
+) -> bool:
+    try:
+        conn.execute(
+            """
+            INSERT INTO alignment_edge
+                (from_doc_section_id, to_chapter_id, to_doc_section_id,
+                 concept_id, relation_type, confidence, explanation)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                doc_section_id,
+                edge["to_chapter_id"],
+                edge["to_doc_section_id"],
+                edge["concept_id"],
+                edge["relation_type"],
+                edge["confidence"],
+                edge["explanation"] or None,
+            ],
+        )
+        return True
+    except duckdb.ConstraintException:
+        return False
+
+
+def process_alignment(
+    conn: duckdb.DuckDBPyConnection, output_dir: Path,
+) -> AlignmentSummary:
+    """Read alignment result JSONs and write alignment_edge rows."""
+    output_dir = Path(output_dir)
+    manifest = AlignmentManifest.from_dict(
+        json.loads((output_dir / "manifest.json").read_text())
+    )
+
+    import extract_entities  # type: ignore[import-not-found]
+    parse_llm_json = extract_entities.parse_llm_json
+
+    summary = AlignmentSummary(total_sections=len(manifest.sections))
+
     for entry in manifest.sections:
         result_path = Path(entry.result_path)
         if not result_path.exists():
             summary.results_missing += 1
-            log.info("section %d: no result file (sub-agent didn't run)",
-                     entry.doc_section_id)
+            log.info("section %d: no alignment result file", entry.doc_section_id)
             continue
 
         try:
             raw = parse_llm_json(result_path.read_text())
         except (json.JSONDecodeError, ValueError) as e:
             summary.results_unparseable += 1
-            log.warning("section %d: result parse error: %s",
+            log.warning("section %d: alignment result parse error: %s",
                         entry.doc_section_id, e)
             continue
 
-        entities, relations = _validate_section_extraction(raw)
+        allowed_concept_ids: set[int] = {
+            int(c["concept_id"]) for c in entry.concepts_with_candidates
+        }
+        allowed_chapter_ids: set[int] = set()
+        for c in entry.concepts_with_candidates:
+            allowed_chapter_ids.update(int(x) for x in c["candidate_chapter_ids"])
+        # Phase 4.4b only writes Doc→Chapter edges; Doc→DocSection edges
+        # (cross-source) need a different prompt that surfaces sibling
+        # snapshots — out of scope here. Empty allowed set for sections.
+        allowed_section_ids: set[int] = set()
 
-        # Resolve entity names → concept_ids (creates new nodes as needed).
-        # Mirrors scripts/extract_entities.py:348 — same EntityResolver,
-        # different source_type tag for provenance.
-        name_to_cid: dict[str, int] = {}
-        for ent in entities:
-            result = resolver.resolve(
-                ent["name"],
-                candidate_context=ent["description"],
-                concept_type=ent["type"],
-                source_type="doc_section",
-                source_id=entry.doc_section_id,
-            )
-            if result is not None and result.concept_id is not None:
-                name_to_cid[ent["name"]] = result.concept_id
-                summary.entities_resolved += 1
+        edges = _validate_alignment_payload(
+            raw, allowed_concept_ids, allowed_chapter_ids, allowed_section_ids, summary,
+        )
 
-        _clear_prior_doc_section_relations(conn, entry.doc_section_id)
-        for rel in relations:
-            from_id = name_to_cid.get(rel["from"])
-            to_id = name_to_cid.get(rel["to"])
-            if from_id is None or to_id is None:
-                continue
-            if _write_doc_section_relation(
-                conn,
-                from_id=from_id, to_id=to_id,
-                rtype=rel["type"], confidence=rel["confidence"],
-                doc_section_id=entry.doc_section_id,
-            ):
-                summary.relations_written += 1
-
-        # TODO Phase 4.4b: procedure extraction (step 8) — write procedure +
-        # procedure_concept rows with source_type='doc_section'. Mirrors
-        # scripts/extract_procedures.py but at section granularity.
-        #
-        # TODO Phase 4.4b: alignment pass (step 9) — for each concept this
-        # section discusses, compare against existing book content and emit
-        # CORROBORATES / CONTRADICTS edges in concept_relation. Needs a
-        # different prompt template that loads book-content snippets per
-        # concept; the framework here is ready to accept the second pass.
-
+        _clear_prior_alignment_edges(conn, entry.doc_section_id)
+        for e in edges:
+            if _write_alignment_edge(conn, doc_section_id=entry.doc_section_id, edge=e):
+                summary.edges_written += 1
         summary.results_processed += 1
 
     log.info(
-        "process_extraction: %d/%d sections processed (%d missing, %d unparseable); "
-        "entities_resolved=%d relations_written=%d",
-        summary.results_processed, summary.total_sections,
+        "process_alignment: %d sections | %d processed (%d missing, %d unparseable) | "
+        "edges_written=%d (dropped: concept=%d target=%d relation=%d)",
+        summary.total_sections, summary.results_processed,
         summary.results_missing, summary.results_unparseable,
-        summary.entities_resolved, summary.relations_written,
+        summary.edges_written,
+        summary.edges_dropped_unknown_concept,
+        summary.edges_dropped_unknown_target,
+        summary.edges_dropped_invalid_relation,
     )
     return summary
 
@@ -1247,6 +2026,22 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p_status = sub.add_parser("status",
                               help="Report extraction coverage for an output directory.")
     p_status.add_argument("--output-dir", type=Path, required=True)
+
+    p_align_prep = sub.add_parser(
+        "align-prep",
+        help="Step 9: write alignment prompts for an already-processed snapshot.",
+    )
+    p_align_prep.add_argument("--snapshot-id", type=int, required=True)
+    p_align_prep.add_argument("--output-dir", type=Path, required=True,
+                              help="Alignment manifest dir (typically <run>/alignment).")
+    p_align_prep.add_argument("--no-auto-stop", action="store_true")
+
+    p_align_proc = sub.add_parser(
+        "align-process",
+        help="Step 9: ingest sub-agent alignment results into alignment_edge.",
+    )
+    p_align_proc.add_argument("--output-dir", type=Path, required=True)
+    p_align_proc.add_argument("--no-auto-stop", action="store_true")
 
     return parser.parse_args(argv)
 
@@ -1334,6 +2129,24 @@ def _cmd_process(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def _cmd_align_prep(args: argparse.Namespace) -> int:
+    conn = open_writer(args.catalog, auto_stop=not args.no_auto_stop)
+    try:
+        prep_alignment(conn, args.snapshot_id, args.output_dir)
+        return 0
+    finally:
+        conn.close()
+
+
+def _cmd_align_process(args: argparse.Namespace) -> int:
+    conn = open_writer(args.catalog, auto_stop=not args.no_auto_stop)
+    try:
+        process_alignment(conn, args.output_dir)
+        return 0
+    finally:
+        conn.close()
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     """Print per-section extraction coverage for an output directory."""
     out = Path(args.output_dir)
@@ -1371,6 +2184,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         "prep": _cmd_prep,
         "process": _cmd_process,
         "status": _cmd_status,
+        "align-prep": _cmd_align_prep,
+        "align-process": _cmd_align_process,
     }
     try:
         return handlers[args.cmd](args)

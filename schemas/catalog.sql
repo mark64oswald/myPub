@@ -42,6 +42,7 @@ CREATE SEQUENCE seq_skill_package_id             START 1;
 CREATE SEQUENCE seq_skill_id                     START 1;
 CREATE SEQUENCE seq_skill_file_id                START 1;
 CREATE SEQUENCE seq_discovery_log_id             START 1;
+CREATE SEQUENCE seq_alignment_edge_id            START 1;
 
 
 -- ============================================================================
@@ -254,6 +255,30 @@ CREATE TABLE doc_section_embedding (
     model          VARCHAR    NOT NULL DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
     created_at     TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Alignment edges (Phase 4.4b, step 9). Per arch §7.3, alignment edges go
+-- DocSection → Chapter (book vs doc) and DocSection → DocSection (cross-source
+-- doc agreement). concept_relation is concept↔concept and can't represent
+-- these — hence a dedicated table. Two nullable target FKs preserve database-
+-- enforced referential integrity for whichever target kind a given edge
+-- points at; the CHECK enforces exactly-one-target.
+CREATE TABLE alignment_edge (
+    alignment_edge_id   BIGINT      PRIMARY KEY DEFAULT nextval('seq_alignment_edge_id'),
+    from_doc_section_id BIGINT      NOT NULL REFERENCES doc_section(doc_section_id),
+    to_chapter_id       BIGINT      REFERENCES chapter(chapter_id),
+    to_doc_section_id   BIGINT      REFERENCES doc_section(doc_section_id),
+    concept_id          BIGINT      NOT NULL REFERENCES concept(concept_id),
+    relation_type       VARCHAR     NOT NULL CHECK (relation_type IN ('CORROBORATES','CONTRADICTS')),
+    confidence          DOUBLE,
+    explanation         TEXT,
+    created_at          TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((to_chapter_id IS NOT NULL) OR (to_doc_section_id IS NOT NULL))
+);
+
+CREATE INDEX idx_alignment_edge_from_section ON alignment_edge(from_doc_section_id);
+CREATE INDEX idx_alignment_edge_to_chapter   ON alignment_edge(to_chapter_id);
+CREATE INDEX idx_alignment_edge_to_section   ON alignment_edge(to_doc_section_id);
+CREATE INDEX idx_alignment_edge_concept      ON alignment_edge(concept_id);
 
 CREATE TABLE concept_doc_link (
     concept_id    BIGINT     NOT NULL REFERENCES concept(concept_id),

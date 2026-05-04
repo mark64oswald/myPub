@@ -41,6 +41,7 @@ EXPECTED_TABLES = {
     "skill_file",
     "skill_relation",
     "discovery_log",
+    "alignment_edge",
 }
 
 EXPECTED_COLUMNS = {
@@ -76,6 +77,10 @@ EXPECTED_COLUMNS = {
                      "retrieved_at", "content_hash", "content"},
     "doc_section": {"doc_section_id", "snapshot_id", "parent_id",
                     "heading_level", "heading_text", "ordinal", "content"},
+    "alignment_edge": {"alignment_edge_id", "from_doc_section_id",
+                       "to_chapter_id", "to_doc_section_id", "concept_id",
+                       "relation_type", "confidence", "explanation",
+                       "created_at"},
     "procedure": {"procedure_id", "name", "preconditions", "steps",
                   "postconditions", "failure_modes", "source_type",
                   "source_id", "implements_pattern", "created_at"},

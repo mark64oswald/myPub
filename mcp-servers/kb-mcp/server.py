@@ -233,32 +233,189 @@ def _graph_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
     ]
 
 
+def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
+    """BM25 search over doc_section.content via fts_main_doc_section.
+
+    Schema mirrors the chapter version but result rows carry kind='doc_section'
+    and a doc_section_id (chapter_id is None) so the unified merger can hold
+    both kinds. ``fts_main_doc_section`` only exists once Phase 4.4 has
+    refreshed at least one source; if it's absent (greenfield catalog), we
+    return an empty list rather than erroring.
+    """
+    if not _doc_section_fts_index_exists():
+        return []
+    rows = _CONN.execute(
+        """
+        SELECT s.doc_section_id,
+               fts_main_doc_section.match_bm25(s.doc_section_id, ?) AS score,
+               src.name AS doc_source_name,
+               s.heading_text,
+               substring(s.content, 1, ?) AS excerpt
+          FROM doc_section s
+          JOIN doc_snapshot sn ON s.snapshot_id = sn.snapshot_id
+          JOIN doc_source   src ON sn.doc_source_id = src.doc_source_id
+         WHERE fts_main_doc_section.match_bm25(s.doc_section_id, ?) IS NOT NULL
+         ORDER BY score DESC
+         LIMIT ?
+        """,
+        [query, EXCERPT_CHARS, query, limit],
+    ).fetchall()
+    return [
+        {
+            "kind": "doc_section",
+            "result_id": int(r[0]),
+            "doc_section_id": int(r[0]),
+            "chapter_id": None,
+            "score": float(r[1]),
+            "doc_source_name": r[2],
+            "heading_text": r[3],
+            "excerpt": r[4],
+        }
+        for r in rows
+    ]
+
+
+def _vss_doc_section_search(qvec: list[float], limit: int) -> list[dict[str, Any]]:
+    """Cosine-distance search over doc_section_embedding."""
+    rows = _CONN.execute(
+        """
+        SELECT s.doc_section_id,
+               array_cosine_distance(e.embedding, ?::FLOAT[384]) AS distance,
+               src.name AS doc_source_name,
+               s.heading_text,
+               substring(s.content, 1, ?) AS excerpt
+          FROM doc_section_embedding e
+          JOIN doc_section s     USING (doc_section_id)
+          JOIN doc_snapshot sn   ON s.snapshot_id = sn.snapshot_id
+          JOIN doc_source   src  ON sn.doc_source_id = src.doc_source_id
+         ORDER BY distance ASC
+         LIMIT ?
+        """,
+        [qvec, EXCERPT_CHARS, limit],
+    ).fetchall()
+    return [
+        {
+            "kind": "doc_section",
+            "result_id": int(r[0]),
+            "doc_section_id": int(r[0]),
+            "chapter_id": None,
+            "score": 1.0 - float(r[1]),  # convert distance → similarity
+            "doc_source_name": r[2],
+            "heading_text": r[3],
+            "excerpt": r[4],
+        }
+        for r in rows
+    ]
+
+
+def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
+    """Concept-graph signal: doc_sections that mention concepts named in the query."""
+    cids = _query_concept_ids(query)
+    if not cids:
+        return []
+
+    placeholders = ",".join(["?"] * len(cids))
+    rows = _CONN.execute(
+        f"""
+        WITH section_hits AS (
+          SELECT cr.source_id AS doc_section_id,
+                 COUNT(DISTINCT
+                   CASE WHEN cr.from_concept_id IN ({placeholders})
+                        THEN cr.from_concept_id
+                        WHEN cr.to_concept_id   IN ({placeholders})
+                        THEN cr.to_concept_id
+                   END
+                 ) AS concept_hits,
+                 COUNT(*) AS mention_count
+            FROM concept_relation cr
+           WHERE cr.source_type = 'doc_section'
+             AND (cr.from_concept_id IN ({placeholders})
+                  OR cr.to_concept_id IN ({placeholders}))
+          GROUP BY cr.source_id
+        )
+        SELECT h.doc_section_id, h.concept_hits, h.mention_count,
+               src.name AS doc_source_name, s.heading_text,
+               substring(s.content, 1, ?) AS excerpt
+          FROM section_hits h
+          JOIN doc_section  s    ON s.doc_section_id = h.doc_section_id
+          JOIN doc_snapshot sn   ON s.snapshot_id = sn.snapshot_id
+          JOIN doc_source   src  ON sn.doc_source_id = src.doc_source_id
+         ORDER BY h.concept_hits DESC, h.mention_count DESC
+         LIMIT ?
+        """,
+        [*cids, *cids, *cids, *cids, EXCERPT_CHARS, limit],
+    ).fetchall()
+    return [
+        {
+            "kind": "doc_section",
+            "result_id": int(r[0]),
+            "doc_section_id": int(r[0]),
+            "chapter_id": None,
+            "concept_hits": int(r[1]),
+            "mention_count": int(r[2]),
+            "doc_source_name": r[3],
+            "heading_text": r[4],
+            "excerpt": r[5],
+            "score": float(r[1]) + 0.1 * float(r[2]),
+        }
+        for r in rows
+    ]
+
+
+def _doc_section_fts_index_exists() -> bool:
+    """True if the doc_section FTS index has been built (any refresh ran)."""
+    row = _CONN.execute(
+        "SELECT 1 FROM information_schema.schemata "
+        " WHERE schema_name = 'fts_main_doc_section' LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def _normalize_chapter_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Add unified (kind, result_id) keys to a chapter modality result row."""
+    out = dict(row)
+    out.setdefault("kind", "chapter")
+    out.setdefault("result_id", row["chapter_id"])
+    out.setdefault("doc_section_id", None)
+    return out
+
+
 def _rrf_merge(
     buckets: dict[str, list[dict[str, Any]]], limit: int
 ) -> list[dict[str, Any]]:
     """Merge per-modality result lists with reciprocal rank fusion.
 
-    Each modality contributes 1/(k + rank) per chapter; modalities are
-    weighted equally. The fusion formula is a placeholder until the
-    proper scoring formula from architecture §8.5 lands in Prompt 4.5.
+    Keys on (kind, result_id) so chapter and doc_section results compete in
+    the same ranked list. Modalities contribute 1/(k + rank) equally. The
+    fusion formula is a placeholder until the real scoring engine lands in
+    Prompt 4.5.
     """
-    fused: dict[int, dict[str, Any]] = {}
+    fused: dict[tuple[str, int], dict[str, Any]] = {}
     for modality, results in buckets.items():
         for rank, row in enumerate(results):
-            cid = row["chapter_id"]
+            kind = row.get("kind", "chapter")
+            rid = row.get("result_id", row.get("chapter_id") or row.get("doc_section_id"))
+            if rid is None:
+                continue
+            key = (kind, int(rid))
             contribution = 1.0 / (RRF_K + rank + 1)
-            entry = fused.get(cid)
+            entry = fused.get(key)
             if entry is None:
                 entry = {
-                    "chapter_id": cid,
+                    "kind": kind,
+                    "result_id": int(rid),
+                    "chapter_id": row.get("chapter_id"),
+                    "doc_section_id": row.get("doc_section_id"),
                     "book_title": row.get("book_title"),
                     "chapter_title": row.get("chapter_title"),
+                    "doc_source_name": row.get("doc_source_name"),
+                    "heading_text": row.get("heading_text"),
                     "excerpt": row.get("excerpt"),
                     "rrf_score": 0.0,
                     "modalities": [],
                     "modality_scores": {},
                 }
-                fused[cid] = entry
+                fused[key] = entry
             entry["rrf_score"] += contribution
             entry["modalities"].append(modality)
             entry["modality_scores"][modality] = row.get("score")
@@ -309,12 +466,28 @@ def search_chapters(
         raise ValueError("limit must be positive")
 
     qvec = _embed(query)
-    fts_hits = _fts_chapter_search(query, PER_MODALITY_LIMIT)
-    vss_hits = _vss_chapter_search(qvec, PER_MODALITY_LIMIT)
-    graph_hits = _graph_chapter_search(query, PER_MODALITY_LIMIT)
+    # Chapter modalities (book corpus)
+    fts_chapter = [_normalize_chapter_row(r)
+                   for r in _fts_chapter_search(query, PER_MODALITY_LIMIT)]
+    vss_chapter = [_normalize_chapter_row(r)
+                   for r in _vss_chapter_search(qvec, PER_MODALITY_LIMIT)]
+    graph_chapter = [_normalize_chapter_row(r)
+                     for r in _graph_chapter_search(query, PER_MODALITY_LIMIT)]
+    # Doc-section modalities (live-doc corpus). Phase 4.4b adds these so
+    # Context7 / DeepWiki / GitHub content rides in the same ranked list.
+    fts_section = _fts_doc_section_search(query, PER_MODALITY_LIMIT)
+    vss_section = _vss_doc_section_search(qvec, PER_MODALITY_LIMIT)
+    graph_section = _graph_doc_section_search(query, PER_MODALITY_LIMIT)
 
+    # Merge across all six buckets — RRF keys on (kind, result_id) so
+    # chapter and doc_section rows can co-occur in the merged ranking.
     merged = _rrf_merge(
-        {"fts": fts_hits, "vss": vss_hits, "graph": graph_hits},
+        {
+            "fts_chapter": fts_chapter, "vss_chapter": vss_chapter,
+            "graph_chapter": graph_chapter,
+            "fts_doc_section": fts_section, "vss_doc_section": vss_section,
+            "graph_doc_section": graph_section,
+        },
         limit=limit,
     )
 
@@ -325,9 +498,12 @@ def search_chapters(
     }
     if mode == "interactive":
         payload["by_modality"] = {
-            "fts": fts_hits[:limit],
-            "vss": vss_hits[:limit],
-            "graph": graph_hits[:limit],
+            "fts_chapter": fts_chapter[:limit],
+            "vss_chapter": vss_chapter[:limit],
+            "graph_chapter": graph_chapter[:limit],
+            "fts_doc_section": fts_section[:limit],
+            "vss_doc_section": vss_section[:limit],
+            "graph_doc_section": graph_section[:limit],
         }
     return payload
 
