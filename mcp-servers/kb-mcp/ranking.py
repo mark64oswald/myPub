@@ -27,10 +27,11 @@ Scope notes
   Doc → Chapter edges); a doc_section with no outbound edges defaults to a
   neutral 0.5 — they ARE the current source, but we lack the signal to say
   so positively until cross-source alignment lands.
-* ``authority`` for chapters is a fixed 0.6 default — books don't have an
-  explicit authority column today. A heuristic by publisher could refine
-  this; tracked as a Phase 4.6 follow-up. ``authority`` for doc_sections
-  flows from ``doc_source.authority_score`` directly.
+* ``authority`` for chapters is publisher-keyed via ``PUBLISHER_AUTHORITY``
+  (~14 known tech imprints; unknown / missing publisher falls back to
+  ``DEFAULT_AUTHORITY_BOOK = 0.6``). ``authority`` for doc_sections flows
+  from ``doc_source.authority_score`` directly. Empirical tuning of the
+  publisher table is tracked as a Phase 4.6 follow-up.
 * ``recency`` uses an exponential half-life of 2 years. Books published
   longer ago decay; doc snapshots retrieved within the past day are ~1.0.
 """

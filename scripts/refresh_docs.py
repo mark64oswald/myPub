@@ -854,12 +854,17 @@ def _load_default_embedder() -> Any:
 # reads the results, validates, runs EntityResolver, and writes
 # concept / concept_relation rows with source_type='doc_section'.
 #
-# Scope note: this commit implements *entity extraction* (architecture step 7)
-# only. Procedure extraction (step 8) and alignment edges (step 9) hook into
-# the same framework via additional prompt builders + result handlers — see
-# the TODO comments at ``BUILDERS`` / ``RESULT_HANDLERS`` below. The Phase
-# 4b LaunchAgent (cron-driven, no Claude Code present) skips this stage by
-# passing ``--no-extract`` to the ``refresh`` subcommand.
+# Three stages share this prep/process pattern:
+#   step 7 — entity extraction:    build_section_extraction_prompt + _process_entity_result
+#   step 8 — procedure extraction: build_section_procedure_prompt  + _process_procedure_result
+#   step 9 — alignment edges:      build_section_alignment_prompt  + align-process subcommand
+# Steps 7 and 8 share one manifest (one prep_extraction call emits both
+# prompts; process_extraction ingests both). Step 9 has its own align-prep /
+# align-process pair because alignment depends on entity extraction having
+# run first (it joins concept_relation rows produced by step 7).
+#
+# The Phase 4b LaunchAgent (cron-driven, no Claude Code present) skips all
+# three by passing ``--no-extract`` to the ``refresh`` subcommand.
 
 
 @dataclass
@@ -1090,47 +1095,8 @@ class ProcessSummary:
         return self.entity_results_unparseable
 
 
-def _validate_section_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
-    """Filter sub-agent output to well-formed entities + relations.
-
-    Mirrors ``extract_entities._validate_extraction`` (private over there;
-    duplicated here so future maintainers see the doc-section validation
-    path explicitly). Cross-tagged TODO: once both call sites stabilize,
-    promote a shared helper.
-    """
-    import extract_entities  # type: ignore[import-not-found]
-
-    entity_types = extract_entities.ENTITY_TYPES
-    relation_types = extract_entities.RELATION_TYPES
-
-    entities: list[dict] = []
-    for e in raw.get("entities", []) or []:
-        name = (e.get("name") or "").strip()
-        etype = (e.get("type") or "").strip()
-        if not name or etype not in entity_types:
-            continue
-        entities.append({
-            "name": name, "type": etype,
-            "description": (e.get("description") or "").strip(),
-        })
-    names = {e["name"] for e in entities}
-
-    relations: list[dict] = []
-    for r in raw.get("relations", []) or []:
-        src = (r.get("from") or "").strip()
-        dst = (r.get("to") or "").strip()
-        rtype = (r.get("type") or "").strip()
-        if rtype not in relation_types or src not in names or dst not in names or src == dst:
-            continue
-        try:
-            conf = float(r.get("confidence", 0.5))
-        except (TypeError, ValueError):
-            conf = 0.5
-        relations.append({
-            "from": src, "to": dst, "type": rtype,
-            "confidence": max(0.0, min(1.0, conf)),
-        })
-    return entities, relations
+# Validation is shared with chapter-level extraction —
+# see extract_entities.validate_extraction for the contract.
 
 
 def _clear_prior_doc_section_relations(
@@ -1339,7 +1305,8 @@ def _process_entity_result(
                     entry.doc_section_id, e)
         return name_to_cid
 
-    entities, relations = _validate_section_extraction(raw)
+    import extract_entities  # type: ignore[import-not-found]
+    entities, relations = extract_entities.validate_extraction(raw)
 
     for ent in entities:
         res = resolver.resolve(

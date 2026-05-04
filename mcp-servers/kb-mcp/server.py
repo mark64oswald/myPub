@@ -35,7 +35,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional
 
 from fastmcp import FastMCP
 
@@ -54,6 +54,7 @@ LOG = logging.getLogger("mypub-kb")
 EXCERPT_CHARS = 240
 RRF_K = 60                     # reciprocal-rank-fusion smoothing constant
 PER_MODALITY_LIMIT = 20        # candidates pulled from each modality before merge
+SCORING_POOL_MULTIPLIER = 5    # ranker sees limit * this many candidates before truncation
 WRITER_GRACE_SECONDS = 0.05    # OS lock-release breathing room (Topology A)
 
 # ---------------------------------------------------------------------------
@@ -67,7 +68,13 @@ _CATALOG_PATH: Path | None = None  # cached so writer-context can reopen
 
 
 def _bootstrap() -> None:
-    """Open the catalog, pre-warm the embedding model, build the resolver."""
+    """Open the catalog, pre-warm the embedding model, build the resolver.
+
+    Idempotent across partial state: if the model is already loaded but the
+    connection was torn down (e.g., a writer-context exception path left
+    ``_CONN=None``), reopen the connection without paying the cold-start
+    cost on the embedding model.
+    """
     global _CONN, _RESOLVER, _MODEL, _CATALOG_PATH
     if _CONN is not None:
         return
@@ -80,10 +87,11 @@ def _bootstrap() -> None:
     # sessions, test suite, refresh scripts) — see db.py module docstring.
     _CONN = open_catalog(_CATALOG_PATH, read_only=True)
 
-    # pylint: disable=import-outside-toplevel
-    from sentence_transformers import SentenceTransformer
-    LOG.info("loading sentence-transformers model …")
-    _MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    if _MODEL is None:
+        # pylint: disable=import-outside-toplevel
+        from sentence_transformers import SentenceTransformer
+        LOG.info("loading sentence-transformers model …")
+        _MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
     _RESOLVER = EntityResolver(_CONN, model=_MODEL)
     LOG.info("kb-mcp server ready")
@@ -105,8 +113,12 @@ def _temporarily_open_writer() -> "Iterator[Any]":
     is invisible; for multi-session setups, prefer routing inline ingestion
     through scripts/refresh_docs.py (Topology B + auto-stop) instead.
 
-    Side effect: after the writer closes, ``_CONN`` and ``_RESOLVER`` are
-    rebuilt against a fresh RO connection so the new content is visible.
+    Exception safety: the RO connection is GUARANTEED to be restored on exit
+    regardless of where a failure occurs (RW open, body, CHECKPOINT, RW
+    close). If the RW open itself fails, ``RuntimeError`` propagates after
+    the RO connection is reopened, so callers see a real error instead of a
+    silently-broken server. If the RO reopen fails, ``_CONN`` stays None and
+    the next ``_bootstrap()`` call will rebuild it.
     """
     global _CONN, _RESOLVER
     assert _CONN is not None and _MODEL is not None, "_bootstrap() must run first"
@@ -116,18 +128,34 @@ def _temporarily_open_writer() -> "Iterator[Any]":
     _RESOLVER = None
     time.sleep(WRITER_GRACE_SECONDS)
 
-    rw_conn = open_catalog(_CATALOG_PATH, read_only=False)
+    rw_conn = None
     try:
+        try:
+            rw_conn = open_catalog(_CATALOG_PATH, read_only=False)
+        except Exception as e:
+            raise RuntimeError(
+                f"failed to open RW connection for inline writer: {e}"
+            ) from e
         yield rw_conn
     finally:
-        try:
-            rw_conn.execute("CHECKPOINT")
-        except Exception as e:  # pragma: no cover - best-effort cleanup
-            LOG.warning("CHECKPOINT failed during writer close: %s", e)
-        rw_conn.close()
+        if rw_conn is not None:
+            try:
+                rw_conn.execute("CHECKPOINT")
+            except Exception as e:  # pragma: no cover - best-effort cleanup
+                LOG.warning("CHECKPOINT failed during writer close: %s", e)
+            try:
+                rw_conn.close()
+            except Exception as e:  # pragma: no cover - best-effort cleanup
+                LOG.warning("RW close failed: %s", e)
         time.sleep(WRITER_GRACE_SECONDS)
-        _CONN = open_catalog(_CATALOG_PATH, read_only=True)
-        _RESOLVER = EntityResolver(_CONN, model=_MODEL)
+        try:
+            _CONN = open_catalog(_CATALOG_PATH, read_only=True)
+            _RESOLVER = EntityResolver(_CONN, model=_MODEL)
+        except Exception as e:
+            # Leave _CONN/_RESOLVER as None; next _bootstrap() will rebuild.
+            LOG.error("failed to reopen RO connection after writer: %s", e)
+            _CONN = None
+            _RESOLVER = None
 
 
 def _embed(query: str) -> list[float]:
@@ -559,6 +587,7 @@ def search_chapters(
     query: str, mode: str = "interactive", limit: int = 10,
     weight_profile: str = DEFAULT_INTERACTIVE_PROFILE,
     auto_discover: bool = True,
+    selection_strategy: Optional[str] = None,
 ) -> dict[str, Any]:
     """Hybrid search across book chapters and live doc sections.
 
@@ -566,24 +595,42 @@ def search_chapters(
         query: Free-text search query.
         mode: 'interactive' returns the §8.1 {primary, corroborations,
             conflicts} shape with per-modality buckets and full component
-            scores. 'generation' returns just the merged ranking, sorted by
-            combined score.
-        limit: Maximum number of merged results to consider for scoring;
-            corroborations and conflicts each cap at 5 (in interactive mode).
+            scores. 'generation' returns the §8.2 selection-strategy shape:
+            a curated ``selected`` list plus ``dropped`` provenance for §8.6.
+        limit: Maximum number of results to return after scoring.
+            Corroborations and conflicts each cap at 5 in interactive mode.
         weight_profile: Name of a profile in ranking.WEIGHT_PROFILES.
             Defaults to ``currency_critical_interactive``. Use
             ``foundational_interactive`` for queries about timeless concepts
             where authority and corroboration matter more than recency.
+        selection_strategy: Generation-mode only. One of
+            ``recent_doc_anchored`` (drops chapters contradicted by current
+            docs), ``consensus_synthesis`` (keeps corroborated material),
+            ``authority_pick`` (top-1 by authority component). When omitted
+            in generation mode, returns the unfiltered combined-score-sorted
+            ranking — useful for downstream pipelines that pick their own
+            strategy. Ignored in interactive mode.
 
     Returns:
-        Dict per the §8.1 spec for interactive mode, or a flat
-        ``{query, mode, results: [...]}`` for generation mode.
+        Dict per the §8.1 spec for interactive mode, or a
+        ``{query, mode, weight_profile, selection_strategy, results, dropped}``
+        shape for generation mode.
     """
     _bootstrap()
     if mode not in ("interactive", "generation"):
         raise ValueError(
             f"mode must be 'interactive' or 'generation', got {mode!r}"
         )
+    if selection_strategy is not None:
+        if mode != "generation":
+            raise ValueError(
+                "selection_strategy is only valid when mode='generation'"
+            )
+        if selection_strategy not in ranking.SELECTION_STRATEGIES:
+            raise ValueError(
+                f"selection_strategy must be one of "
+                f"{list(ranking.SELECTION_STRATEGIES)}; got {selection_strategy!r}"
+            )
     if limit <= 0:
         raise ValueError("limit must be positive")
     if weight_profile not in ranking.WEIGHT_PROFILES:
@@ -615,6 +662,12 @@ def search_chapters(
 
     # Merge across all six buckets — RRF keys on (kind, result_id) so
     # chapter and doc_section rows can co-occur in the merged ranking.
+    # We collect a wider pool than ``limit`` so the five-factor ranker can
+    # promote a candidate that ranks lower on RRF but higher on combined
+    # score (e.g., a recent, well-corroborated, high-authority result that
+    # didn't quite win the keyword fight). Final truncation to ``limit``
+    # happens AFTER scoring.
+    scoring_pool = max(limit, limit * SCORING_POOL_MULTIPLIER)
     merged = _rrf_merge(
         {
             "fts_chapter": fts_chapter, "vss_chapter": vss_chapter,
@@ -622,7 +675,7 @@ def search_chapters(
             "fts_doc_section": fts_section, "vss_doc_section": vss_section,
             "graph_doc_section": graph_section,
         },
-        limit=limit,
+        limit=scoring_pool,
     )
 
     # Phase 4.5: feed the merged set through the ranking engine. RRF score
@@ -633,21 +686,44 @@ def search_chapters(
 
     if mode == "generation":
         gen_ranker = ranking.GenerationRanker(_CONN, weights, top_k=limit)
-        # Generation mode here exposes the ranked-by-combined-score view;
-        # selection-strategy gating lives in the Skills Factory (Phase 5).
-        max_rrf = max((float(r.get("rrf_score") or 0.0) for r in merged), default=1.0) or 1.0
-        scored = []
-        for r in merged:
-            comps = ranking.compute_components_for_result(_CONN, r, max_rrf_score=max_rrf)
-            scored.append(ranking.ScoredResult(
-                result=r, components=comps, combined=comps.combine(weights),
-            ))
-        scored.sort(key=lambda s: s.combined, reverse=True)
+        if selection_strategy is None:
+            # No strategy specified — return the combined-score-sorted view
+            # so downstream callers can pick their own filter. Same shape as
+            # before to keep API compatibility for the no-strategy case.
+            max_rrf = max(
+                (float(r.get("rrf_score") or 0.0) for r in merged), default=1.0
+            ) or 1.0
+            scored = []
+            for r in merged:
+                comps = ranking.compute_components_for_result(
+                    _CONN, r, max_rrf_score=max_rrf,
+                )
+                scored.append(ranking.ScoredResult(
+                    result=r, components=comps, combined=comps.combine(weights),
+                ))
+            scored.sort(key=lambda s: s.combined, reverse=True)
+            return {
+                "query": query,
+                "mode": mode,
+                "weight_profile": weight_profile,
+                "selection_strategy": None,
+                "results": [_scored_to_dict(s) for s in scored[:limit]],
+                "dropped": [],
+            }
+
+        # Strategy specified — let GenerationRanker apply the §8.3 selector
+        # and surface dropped-source provenance for §8.6 auditability.
+        gen_output = gen_ranker.select(merged, strategy=selection_strategy)
         return {
             "query": query,
             "mode": mode,
             "weight_profile": weight_profile,
-            "results": [_scored_to_dict(s) for s in scored[:limit]],
+            "selection_strategy": gen_output.strategy,
+            "results": [_scored_to_dict(s) for s in gen_output.selected],
+            "dropped": [
+                {**_scored_to_dict(s), "drop_reason": reason}
+                for s, reason in gen_output.dropped
+            ],
         }
 
     # Interactive mode (§8.1): primary + corroborations + conflicts.
@@ -679,19 +755,29 @@ def _run_auto_discovery(
 
     Returns one summary dict per attempted query term so callers can surface
     what was probed, what got ingested, and what needs user disambiguation.
+    Best-effort: if the RW writer can't open (another process holds it, disk
+    error, etc.), logs the failure and returns an empty list so the search
+    still completes against the existing corpus.
     """
     assert _RESOLVER is not None
     summaries: list[dict[str, Any]] = []
-    with _temporarily_open_writer() as rw_conn:
-        # The orchestrator needs an RW connection (for the InlineIngester) and
-        # a resolver (for the gap detector). Build a fresh resolver against the
-        # writer connection — the module-level _RESOLVER is None right now
-        # (cleared by _temporarily_open_writer entry).
-        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
-        orchestrator = discovery.AutoDiscoveryOrchestrator(
-            rw_conn, rw_resolver, embedder=_MODEL,
-        )
-        outcomes = orchestrator.run(query, search_response)
+    try:
+        with _temporarily_open_writer() as rw_conn:
+            # The orchestrator needs an RW connection (for the InlineIngester) and
+            # a resolver (for the gap detector). Build a fresh resolver against the
+            # writer connection — the module-level _RESOLVER is None right now
+            # (cleared by _temporarily_open_writer entry).
+            rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+            orchestrator = discovery.AutoDiscoveryOrchestrator(
+                rw_conn, rw_resolver, embedder=_MODEL,
+            )
+            outcomes = orchestrator.run(query, search_response)
+    except RuntimeError as e:
+        LOG.warning("auto-discovery skipped (writer unavailable): %s", e)
+        # _bootstrap will rebuild _CONN on the next call if the RO reopen
+        # also failed inside the context manager.
+        _bootstrap()
+        return []
     for out in outcomes:
         summaries.append({
             "query_term": out.query_term,
@@ -713,6 +799,123 @@ def _run_auto_discovery(
             "note": out.note,
         })
     return summaries
+
+
+@mcp.tool
+def disambiguate_discovery(
+    source: str, identifier: str,
+    display_name: Optional[str] = None,
+    query_term: Optional[str] = None,
+) -> dict[str, Any]:
+    """Complete an ``asked_user`` discovery outcome by ingesting the user's pick.
+
+    When ``search_chapters`` runs auto-discovery and the ConfidenceGate
+    returns ``ambiguous`` (multiple candidate libraries / repos with similar
+    scores), the response carries ``decision='asked_user'`` plus a
+    ``candidates`` list. Use this tool to commit the user's choice to the
+    catalog.
+
+    Args:
+        source: The probe source the candidate came from. One of
+            ``context7``, ``deepwiki``, ``github`` — must match the
+            ``source`` field of the asked_user outcome.
+        identifier: The candidate's source-specific ID (e.g.,
+            ``/duckdb/duckdb`` for Context7, ``redis/redis`` for DeepWiki).
+            Pulled verbatim from the candidate's ``identifier`` field.
+        display_name: Human-readable name to store in ``doc_source.name``.
+            Defaults to ``identifier`` if not provided.
+        query_term: Optional — the query term that triggered the original
+            asked_user outcome. Logged to ``discovery_log`` for audit.
+
+    Returns:
+        ``{status, source, identifier, doc_source_id, snapshot_id,
+        section_count}``. ``status`` is ``'ingested'`` on a successful
+        new ingestion, ``'already_present'`` when the doc_source row
+        already existed (idempotent re-call), or ``'error'`` with a
+        ``message`` field on failure.
+    """
+    _bootstrap()
+    if source not in discovery.DISCOVERY_AUTHORITY_DEFAULTS:
+        raise ValueError(
+            f"source must be one of "
+            f"{sorted(discovery.DISCOVERY_AUTHORITY_DEFAULTS)}; got {source!r}"
+        )
+    if not identifier or not identifier.strip():
+        raise ValueError("identifier must be non-empty")
+    name = (display_name or identifier).strip()
+    identifier = identifier.strip()
+
+    try:
+        with _temporarily_open_writer() as rw_conn:
+            already_present = rw_conn.execute(
+                "SELECT doc_source_id FROM doc_source "
+                " WHERE source_type = ? AND identifier = ?",
+                [source, identifier],
+            ).fetchone()
+
+            ingester = discovery.InlineIngester()
+            doc_source_id = ingester.ingest(
+                rw_conn,
+                source=source, identifier=identifier,
+                display_name=name, embedder=_MODEL,
+            )
+            if doc_source_id is None:
+                discovery.log_discovery_event(
+                    rw_conn,
+                    query_term=query_term or identifier,
+                    probe_source=source, probe_result="match",
+                    match_count=1, top_match_name=name, top_match_score=None,
+                    action_taken="discarded", doc_source_id=None,
+                )
+                return {
+                    "status": "error",
+                    "message": f"InlineIngester returned no doc_source_id for {source}/{identifier}",
+                    "source": source, "identifier": identifier,
+                }
+
+            # Read back the latest snapshot for this source so the caller
+            # knows what just got ingested.
+            snap_row = rw_conn.execute(
+                """
+                SELECT snapshot_id,
+                       (SELECT COUNT(*) FROM doc_section
+                          WHERE snapshot_id = ds.snapshot_id) AS sections
+                  FROM doc_snapshot ds
+                 WHERE doc_source_id = ?
+                 ORDER BY retrieved_at DESC, snapshot_id DESC
+                 LIMIT 1
+                """,
+                [doc_source_id],
+            ).fetchone()
+            snapshot_id = int(snap_row[0]) if snap_row else None
+            section_count = int(snap_row[1]) if snap_row else 0
+
+            discovery.log_discovery_event(
+                rw_conn,
+                query_term=query_term or identifier,
+                probe_source=source, probe_result="match",
+                match_count=1, top_match_name=name, top_match_score=None,
+                action_taken="ingested" if not already_present else "already_present",
+                doc_source_id=doc_source_id,
+            )
+    except RuntimeError as e:
+        LOG.warning("disambiguate_discovery: writer unavailable: %s", e)
+        _bootstrap()
+        return {
+            "status": "error",
+            "message": f"writer unavailable: {e}",
+            "source": source, "identifier": identifier,
+        }
+
+    return {
+        "status": "already_present" if already_present else "ingested",
+        "source": source,
+        "identifier": identifier,
+        "display_name": name,
+        "doc_source_id": doc_source_id,
+        "snapshot_id": snapshot_id,
+        "section_count": section_count,
+    }
 
 
 @mcp.tool

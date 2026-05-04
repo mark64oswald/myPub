@@ -212,10 +212,17 @@ def parse_llm_json(text: str) -> dict:
     return json.loads(text)
 
 
-def _validate_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
-    """Filter the raw LLM output to well-formed entities/relations."""
+def validate_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
+    """Filter the raw LLM output to well-formed entities/relations.
+
+    Shared by both chapter-level extraction (this module) and doc_section-level
+    extraction (scripts/refresh_docs.py). Missing/unparseable confidence
+    defaults to a neutral 0.5; valid values are clamped to [0, 1]. Self-
+    relations and relations referencing entities not in the extracted set are
+    dropped with a log line so prompt regressions stay observable.
+    """
     entities = []
-    for e in raw.get("entities", []):
+    for e in raw.get("entities", []) or []:
         name = (e.get("name") or "").strip()
         etype = (e.get("type") or "").strip()
         if not name:
@@ -233,11 +240,10 @@ def _validate_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
     names = {e["name"] for e in entities}
 
     relations = []
-    for r in raw.get("relations", []):
+    for r in raw.get("relations", []) or []:
         src = (r.get("from") or "").strip()
         dst = (r.get("to") or "").strip()
         rtype = (r.get("type") or "").strip()
-        conf = r.get("confidence", 0.0)
         if rtype not in RELATION_TYPES:
             LOG.warning("skip relation with invalid type %r", rtype)
             continue
@@ -245,18 +251,22 @@ def _validate_extraction(raw: dict) -> tuple[list[dict], list[dict]]:
             LOG.warning("skip relation with unknown endpoint: %r → %r (%s)",
                         src, dst, rtype)
             continue
-        try:
-            conf = float(conf)
-        except (TypeError, ValueError):
-            conf = 0.5
-        conf = max(0.0, min(1.0, conf))
         if src == dst:
             LOG.debug("skip self-relation on %r", src)
             continue
+        try:
+            conf = float(r.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            conf = 0.5
+        conf = max(0.0, min(1.0, conf))
         relations.append(
             {"from": src, "to": dst, "type": rtype, "confidence": conf}
         )
     return entities, relations
+
+
+# Backwards-compat alias for any older callers / tests using the private name.
+_validate_extraction = validate_extraction
 
 
 # ----------------------------------------------------------------------------
