@@ -748,24 +748,82 @@ mcp = FastMCP(
 DEFAULT_INTERACTIVE_PROFILE = "balanced_interactive"
 
 
+# Below this BM25 the FTS hit is too weak to be confident — typically just
+# one or two generic shared tokens. Calibrated against observed scores:
+# strong topical matches land at BM25 5+, medium at 3–5, weak at <2.5.
+THIN_BM25_THRESHOLD = 2.5
+
+
+def _max_bm25(*buckets: list[dict[str, Any]]) -> float:
+    """Return the highest score across one or more FTS modality buckets."""
+    best = 0.0
+    for b in buckets:
+        for r in b:
+            s = r.get("score") or 0.0
+            if s > best:
+                best = float(s)
+    return best
+
+
+def _has_unknown_library_terms(
+    query: str, prelim_response: dict[str, Any],
+) -> bool:
+    """True if the query contains library-shaped tokens that the corpus
+    doesn't recognize.
+
+    Pattern B fix: graph signal alone isn't a reliable "we know this topic"
+    indicator. ``_query_concept_ids`` falls back to per-token resolution,
+    so generic tokens in a novel-library query (LangGraph, Marimo, Terraform)
+    will resolve common words like "state", "machine", "workflow" and
+    surface tangential graph hits — suppressing thin-retrieval and
+    blocking discovery.
+
+    The reliable signal is ``ConceptGapDetector``: it identifies tokens
+    that LOOK like library names (capitalized, or contain digits / dots /
+    hyphens / underscores) AND don't resolve to any concept AND don't
+    appear in retrieval results. Cheap — just regex + a resolver lookup
+    per candidate token, no network calls.
+    """
+    assert _RESOLVER is not None
+    detector = discovery.ConceptGapDetector(_RESOLVER)
+    return bool(detector.detect(query, prelim_response))
+
+
 def _is_thin_retrieval(
     fts_chapter: list[dict[str, Any]], fts_section: list[dict[str, Any]],
     graph_chapter: list[dict[str, Any]], graph_section: list[dict[str, Any]],
 ) -> bool:
-    """True when keyword + concept-graph signals are all empty.
+    """True when keyword + concept-graph signals are too weak to confidently
+    answer — triggers auto-discovery.
 
-    VSS deliberately excluded — it always returns *some* result via the HNSW
-    nearest-neighbor scan, even for queries with no real corpus match
-    (semantic similarity to vaguely related chapters). Letting VSS suppress
-    auto-discovery would mean the gap detector never fires on a fresh KB.
-    Concept-graph and FTS, by contrast, return [] when there's no real hit.
+    Two cases qualify as thin:
+
+      1. **All buckets empty** — corpus literally returned nothing on FTS or
+         the concept graph for any of the query terms.
+      2. **Quality-thin** — both graph buckets are empty AND the strongest
+         FTS BM25 across chapter + doc_section is below
+         ``THIN_BM25_THRESHOLD``. This catches the case where novel terms
+         (LangGraph, Marimo, Terraform) get tangential matches because BM25
+         finds any chapter mentioning a single shared token. Without this
+         check, ANY weak match suppresses discovery and the system
+         confidently presents an irrelevant primary result.
+
+    Graph signal carrying real concept hits is treated as enough evidence
+    to NOT trigger discovery, regardless of FTS strength — the corpus
+    knows about a related concept; further probing would just create
+    duplicates.
+
+    VSS deliberately excluded — HNSW always returns nearest-neighbor noise
+    even for queries with no real corpus match. Letting VSS suppress
+    discovery would mean the gap detector never fires on a fresh KB.
     """
-    return (
-        len(fts_chapter) == 0
-        and len(fts_section) == 0
-        and len(graph_chapter) == 0
-        and len(graph_section) == 0
-    )
+    if not fts_chapter and not fts_section and not graph_chapter and not graph_section:
+        return True
+    # Case 2: graph is silent on this topic AND FTS is weak.
+    if not graph_chapter and not graph_section:
+        if _max_bm25(fts_chapter, fts_section) < THIN_BM25_THRESHOLD:
+            return True
+    return False
 
 
 def _run_modality_fanout(query: str, qvec: list[float]):
@@ -874,15 +932,21 @@ def search_chapters(
     (fts_chapter, vss_chapter, graph_chapter,
      fts_section, vss_section, graph_section) = _run_modality_fanout(query, qvec)
 
-    # Phase 4.5b: if FTS + graph all came back empty, the corpus probably
-    # doesn't know the topic — try auto-discovery before giving up.
+    # Auto-discovery fires under two conditions (Phase 4.5b + Pattern B):
+    #   (a) Retrieval is thin — FTS + graph too weak to confidently answer
+    #       (corpus genuinely doesn't have the topic).
+    #   (b) The query has library-shaped tokens the corpus doesn't recognize
+    #       (LangGraph, Marimo, Terraform) — even when retrieval found
+    #       tangential matches on generic tokens like "state" / "workflow".
+    #
+    # Both feed the same orchestrator; ConceptGapDetector inside it will
+    # decide which terms are worth probing.
     discovery_outcomes: list[dict[str, Any]] = []
-    if auto_discover and _is_thin_retrieval(
-        fts_chapter, fts_section, graph_chapter, graph_section,
+    prelim = {"results": fts_chapter + fts_section + vss_chapter + vss_section}
+    if auto_discover and (
+        _is_thin_retrieval(fts_chapter, fts_section, graph_chapter, graph_section)
+        or _has_unknown_library_terms(query, prelim)
     ):
-        # Build a preliminary search_response shape for the gap detector to
-        # inspect (it cross-references hits to skip terms already surfaced).
-        prelim = {"results": fts_chapter + fts_section + vss_chapter + vss_section}
         discovery_outcomes = _run_auto_discovery(query, prelim)
         if any(o.get("decision") == "ingested" for o in discovery_outcomes):
             # Refresh fan-out against the freshly-ingested data. _CONN was

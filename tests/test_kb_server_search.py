@@ -324,26 +324,96 @@ def test_is_thin_retrieval_true_when_all_keyword_buckets_empty():
     assert server._is_thin_retrieval([], [], [], []) is True
 
 
-def test_is_thin_retrieval_false_when_chapter_fts_has_hits():
-    assert server._is_thin_retrieval([{"chapter_id": 1}], [], [], []) is False
+def test_is_thin_retrieval_false_when_chapter_fts_has_strong_hit():
+    """Strong BM25 (>= threshold) should suppress thinness."""
+    strong = [{"chapter_id": 1, "score": 5.0}]
+    assert server._is_thin_retrieval(strong, [], [], []) is False
 
 
-def test_is_thin_retrieval_false_when_doc_section_fts_has_hits():
-    assert server._is_thin_retrieval([], [{"doc_section_id": 1}], [], []) is False
+def test_is_thin_retrieval_false_when_doc_section_fts_has_strong_hit():
+    strong = [{"doc_section_id": 1, "score": 4.0}]
+    assert server._is_thin_retrieval([], strong, [], []) is False
 
 
-def test_is_thin_retrieval_false_when_graph_has_hits():
-    """Either chapter or doc_section graph hits should suppress thinness."""
+def test_is_thin_retrieval_true_when_only_weak_fts_hits_and_no_graph():
+    """Pattern B regression: novel terms (LangGraph, Marimo, Terraform) get
+    weak BM25 matches because BM25 finds any chapter sharing one generic
+    token. Without quality threshold, those weak hits would suppress
+    discovery and the system would confidently present an irrelevant
+    primary. With the threshold, retrieval is correctly classified as
+    thin and discovery fires."""
+    weak_chapter = [{"chapter_id": 1, "score": 1.5}]
+    weak_section = [{"doc_section_id": 2, "score": 1.8}]
+    # All-weak with no graph hits → thin.
+    assert server._is_thin_retrieval(weak_chapter, weak_section, [], []) is True
+
+
+def test_is_thin_retrieval_false_when_graph_carries_signal_even_with_weak_fts():
+    """If the concept graph has any hit, treat as not-thin even if FTS is
+    weak. The corpus knows about a related concept; further discovery
+    would just create duplicates."""
+    weak = [{"chapter_id": 1, "score": 1.0}]
+    graph = [{"chapter_id": 99}]  # graph rows don't carry BM25, just presence
+    assert server._is_thin_retrieval(weak, [], graph, []) is False
+
+
+def test_is_thin_retrieval_false_when_only_graph_has_hits_no_fts():
+    """Graph-only matches still suppress thinness."""
     assert server._is_thin_retrieval([], [], [{"chapter_id": 1}], []) is False
     assert server._is_thin_retrieval([], [], [], [{"doc_section_id": 1}]) is False
 
 
+def test_is_thin_retrieval_threshold_boundary():
+    """At BM25 == threshold, treat as not-thin (we have at-least-marginal
+    signal); below threshold, thin. Boundary behavior pinned so tuning
+    the threshold is observable."""
+    just_below = [{"chapter_id": 1, "score": server.THIN_BM25_THRESHOLD - 0.01}]
+    at_threshold = [{"chapter_id": 1, "score": server.THIN_BM25_THRESHOLD}]
+    assert server._is_thin_retrieval(just_below, [], [], []) is True
+    assert server._is_thin_retrieval(at_threshold, [], [], []) is False
+
+
 def test_is_thin_retrieval_ignores_vss():
-    """VSS isn't an argument — only FTS + graph signals contribute. (Sanity
-    test for the documented behavior: VSS always returns near-neighbors so
-    it can't be used as a thinness signal without false negatives.)"""
-    # Same as the all-empty case — VSS doesn't appear in the call.
+    """VSS isn't an argument — only FTS + graph signals contribute. VSS
+    always returns near-neighbors so it can't be used as a thinness signal
+    without false negatives."""
     assert server._is_thin_retrieval([], [], [], []) is True
+
+
+# ---------------------------------------------------------------------------
+# _has_unknown_library_terms — Pattern B: novel-library detection
+# ---------------------------------------------------------------------------
+
+
+def test_has_unknown_library_terms_true_when_novel_capitalized_token(server_state):
+    """A query mentioning a novel library that doesn't resolve to any
+    concept should fire discovery, even if other tokens (state / workflow /
+    notebook) suppress thin-retrieval via tangential graph hits."""
+    prelim = {"results": [
+        {"chapter_title": "State Machines for ML Pipelines",
+         "excerpt": "state machines and workflow orchestration..."},
+    ]}
+    # 'LangGraph' isn't a concept in the test catalog, isn't in the result.
+    assert server._has_unknown_library_terms("LangGraph state machine workflow", prelim) is True
+
+
+def test_has_unknown_library_terms_false_for_natural_language(server_state):
+    """Natural-language queries with no library-shaped tokens should NOT
+    fire discovery — there's nothing to probe."""
+    prelim = {"results": []}
+    assert server._has_unknown_library_terms("event sourcing", prelim) is False
+    assert server._has_unknown_library_terms("circuit breaker pattern", prelim) is False
+
+
+def test_has_unknown_library_terms_false_when_term_in_results(server_state):
+    """If the supposedly-novel library term already appears in retrieved
+    content, the corpus knows about it — don't probe."""
+    prelim = {"results": [
+        {"chapter_title": "Apache Spark structured streaming",
+         "excerpt": "Spark DataFrames and the catalyst optimizer..."},
+    ]}
+    # 'Spark' is in the chapter title → not a gap.
+    assert server._has_unknown_library_terms("Spark performance tuning", prelim) is False
 
 
 # ---------------------------------------------------------------------------
@@ -454,12 +524,13 @@ def test_search_chapters_skips_discovery_when_auto_discover_false(server_state):
 
 
 def test_search_chapters_skips_discovery_when_results_are_not_thin(server_state):
-    """If FTS or graph found anything, don't waste a probe."""
-    # Stub the modality fan-out to return one FTS hit (so retrieval isn't thin)
-    # and patch _run_auto_discovery to track whether it was called.
+    """If FTS found something STRONG, don't waste a probe.
+
+    Score must be above THIN_BM25_THRESHOLD — weak FTS matches no longer
+    suppress discovery (Pattern B fix)."""
     fake_fanout = (
         [{"kind": "chapter", "result_id": 1, "rrf_score": 0.5,
-          "chapter_id": 1, "doc_section_id": None, "score": 0.5}],  # fts_chapter
+          "chapter_id": 1, "doc_section_id": None, "score": 5.0}],  # strong fts_chapter
         [], [], [], [], [],  # vss_chapter, graph_chapter, fts/vss/graph_section
     )
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout), \
