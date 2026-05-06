@@ -197,6 +197,10 @@ def test_not_yet_populated_tables_are_empty(conn):
         # auto-discovery probe runs (search_chapters with auto_discover=True
         # against a thin-retrieval or unknown-library query).
         "discovery_log",
+        # Phase 4.4b — alignment_edge populates when sub-agent alignment
+        # extraction has been run for any source. PostgreSQL was the
+        # first to be processed (2026-05-06).
+        "alignment_edge",
     }
     for table in EXPECTED_TABLES - populated_so_far:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]

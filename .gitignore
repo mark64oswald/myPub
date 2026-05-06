@@ -70,3 +70,5 @@ htmlcov/
 # Large exports
 exports/
 data/extraction-sessions/
+data/extraction-runs/
+data/alignment-runs/
