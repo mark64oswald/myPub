@@ -305,6 +305,69 @@ def test_validate_skill_payload_rejects_missing_fields():
 
 
 # ---------------------------------------------------------------------------
+# _strip_json_fences + _parse_skill_result — robust to model formatting
+# ---------------------------------------------------------------------------
+
+
+def test_strip_json_fences_handles_lowercase_fence():
+    src = '```json\n{"k": 1}\n```'
+    assert sg._strip_json_fences(src) == '{"k": 1}'
+
+
+def test_strip_json_fences_handles_uppercase_fence():
+    src = '```JSON\n{"k": 1}\n```'
+    assert sg._strip_json_fences(src) == '{"k": 1}'
+
+
+def test_strip_json_fences_handles_unlabeled_fence():
+    src = '```\n{"k": 1}\n```'
+    assert sg._strip_json_fences(src) == '{"k": 1}'
+
+
+def test_strip_json_fences_passthrough_when_no_fence():
+    src = '{"k": 1}'
+    assert sg._strip_json_fences(src) == '{"k": 1}'
+
+
+def test_strip_json_fences_keeps_inner_fences():
+    """A skill_md body legitimately contains a fenced code sample; we
+    only strip the outermost fence, not nested ones inside string values."""
+    src = '```json\n{"skill_md": "```python\\nx = 1\\n```"}\n```'
+    out = sg._strip_json_fences(src)
+    # The outer fence is gone; the inner ```python ... ``` survives
+    # inside the JSON string.
+    assert out.startswith("{") and out.endswith("}")
+    assert "```python" in out
+
+
+def test_parse_skill_result_clean_json():
+    out = sg._parse_skill_result('{"trigger_description": "x", "skill_md": "y"}')
+    assert out == {"trigger_description": "x", "skill_md": "y"}
+
+
+def test_parse_skill_result_fenced_json():
+    out = sg._parse_skill_result('```json\n{"trigger_description": "x", "skill_md": "y"}\n```')
+    assert out == {"trigger_description": "x", "skill_md": "y"}
+
+
+def test_parse_skill_result_with_leading_prose():
+    """Some sub-agents prepend a sentence before the JSON despite
+    instructions; the parser should still extract the object."""
+    src = (
+        'Here is the JSON for this skill:\n'
+        '{"trigger_description": "x", "skill_md": "y"}'
+    )
+    out = sg._parse_skill_result(src)
+    assert out == {"trigger_description": "x", "skill_md": "y"}
+
+
+def test_parse_skill_result_unrecoverable_raises():
+    import json as _json
+    with pytest.raises(_json.JSONDecodeError):
+        sg._parse_skill_result("this is not json at all and has no braces")
+
+
+# ---------------------------------------------------------------------------
 # build_skill_prompt
 # ---------------------------------------------------------------------------
 
@@ -365,10 +428,32 @@ def test_prep_skill_generation_writes_manifest_and_prompts(catalog, populated, t
         # result file is NOT created at prep time
         assert not Path(entry.result_path).exists()
         assert entry.selected_sources  # stub search fn returned 2
+        # Paths must be absolute so dispatched sub-agents (which may
+        # have a different CWD) can reach them unambiguously.
+        assert Path(entry.prompt_path).is_absolute()
+        assert Path(entry.result_path).is_absolute()
     # Manifest JSON is round-trippable
     on_disk = json.loads((tmp_path / "manifest.json").read_text())
     assert on_disk["package_name"] == "testpkg"
     assert len(on_disk["skills"]) == 2
+
+
+def test_prep_skill_generation_resolves_relative_output_dir(
+    catalog, populated, tmp_path, monkeypatch,
+):
+    """A relative output_dir should be resolved against CWD so the
+    manifest carries absolute paths regardless of how it was called."""
+    monkeypatch.chdir(tmp_path)
+    plan = _make_plan(populated)
+    search_fn = _stub_search_fn(populated)
+    manifest = sg.prep_skill_generation(
+        plan, catalog, Path("relative/dir"),
+        search_fn=search_fn, retrieval_limit=2,
+    )
+    for entry in manifest.skills:
+        assert Path(entry.prompt_path).is_absolute()
+        assert Path(entry.result_path).is_absolute()
+        assert str(tmp_path.resolve()) in entry.prompt_path
 
 
 def test_prep_skill_generation_strategy_to_profile_mapping(catalog, populated, tmp_path):

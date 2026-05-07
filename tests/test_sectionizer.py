@@ -27,6 +27,8 @@ if str(MCP_DIR) not in sys.path:
 
 from sectionizer import (  # noqa: E402
     Section,
+    _derive_body_heading,
+    _is_url_heading,
     sectionize,
     sectionize_context7,
     sectionize_deepwiki,
@@ -345,3 +347,122 @@ def test_sectionize_unparseable_context7_json_falls_through_cleanly():
     sections = sectionize(snap)
     assert len(sections) == 1
     assert sections[0].heading_level is None
+
+
+# ---------------------------------------------------------------------------
+# URL-shaped heading replacement (deferred fix #6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("https://github.com/foo/bar", True),
+        ("  https://example.com/page  ", True),
+        ("<https://example.com>", True),
+        ("[Example](https://example.com)", True),
+        ("[Example](https://example.com \"title\")", True),
+        ("ftp://files.example.com/dl", True),
+        ("Real Heading", False),
+        ("API Reference", False),
+        ("See https://example.com for details", False),  # not entirely a URL
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_url_heading(text, expected):
+    assert _is_url_heading(text) is expected
+
+
+def test_derive_body_heading_prefers_h3_subhead():
+    body = "Some intro paragraph.\n\n### Real Subheading\n\nMore body text."
+    assert _derive_body_heading(body) == "Real Subheading"
+
+
+def test_derive_body_heading_strips_h3_trailing_hashes():
+    body = "### Real Subheading ###\n\nMore body."
+    assert _derive_body_heading(body) == "Real Subheading"
+
+
+def test_derive_body_heading_skips_h3_thats_also_a_url():
+    body = (
+        "### https://github.com/foo/bar\n\n"
+        "### Quick Start\n\n"
+        "Body text."
+    )
+    assert _derive_body_heading(body) == "Quick Start"
+
+
+def test_derive_body_heading_falls_back_to_first_short_line():
+    body = "Quick Start Guide\n\nThis is the first paragraph of body text."
+    assert _derive_body_heading(body) == "Quick Start Guide"
+
+
+def test_derive_body_heading_skips_long_sentence_first_lines():
+    body = (
+        "This first line is far too long to be a heading and clearly "
+        "reads like a sentence with multiple clauses and a period.\n\n"
+        "Body text."
+    )
+    assert _derive_body_heading(body) is None
+
+
+def test_derive_body_heading_skips_emphasis_markers():
+    body = "**Configuration**\n\nBody text."
+    assert _derive_body_heading(body) == "Configuration"
+
+
+def test_derive_body_heading_skips_code_fence_and_list_lines():
+    body = "```python\ndef foo(): pass\n```\n\n- bullet one\n- bullet two"
+    assert _derive_body_heading(body) is None
+
+
+def test_derive_body_heading_empty_body_returns_none():
+    assert _derive_body_heading("") is None
+    assert _derive_body_heading("   \n   ") is None
+
+
+# Integration: sectionize_markdown handles URL-shaped headings end-to-end.
+
+
+def test_sectionize_markdown_replaces_url_heading_with_h3():
+    """A URL-shaped H2 with an H3 subhead inside its body should expose
+    the H3 text as the section's heading_text instead of the URL."""
+    md = (
+        "# Project\n\n"
+        "Intro paragraph.\n\n"
+        "## https://github.com/foo/bar\n\n"
+        "Body before subhead.\n\n"
+        "### Authentication\n\n"
+        "Body after subhead.\n"
+    )
+    roots = sectionize_markdown(md)
+    # H1 root has one H2 child (the URL one)
+    assert len(roots) == 1
+    h1 = roots[0]
+    assert h1.heading_text == "Project"
+    assert len(h1.children) == 1
+    h2 = h1.children[0]
+    # The URL heading was replaced with the body's H3
+    assert h2.heading_text == "Authentication"
+
+
+def test_sectionize_markdown_url_heading_with_no_recoverable_subhead_becomes_none():
+    """If neither an H3 nor a heading-shaped first line exists, the
+    section's heading_text should be None — the title-coverage scorer
+    skips Nones cleanly, whereas a URL would have to be filtered."""
+    md = (
+        "## https://github.com/foo/bar\n\n"
+        "This is a long paragraph of body text that doesn't look like a "
+        "heading because it's a full sentence with a period at the end.\n"
+    )
+    roots = sectionize_markdown(md)
+    assert len(roots) == 1
+    assert roots[0].heading_text is None
+
+
+def test_sectionize_markdown_keeps_real_heading_intact():
+    """Sanity check: non-URL headings are unchanged."""
+    md = "## Configuration\n\nBody text.\n"
+    roots = sectionize_markdown(md)
+    assert roots[0].heading_text == "Configuration"

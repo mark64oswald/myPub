@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -432,7 +433,10 @@ def prep_skill_generation(
     ``skill_recent_doc`` weight profile, ``consensus_synthesis`` uses
     ``skill_consensus``, and ``authority_pick`` uses ``skill_authority``.
     """
-    output_dir = Path(output_dir)
+    # Always resolve to absolute. Sub-agents dispatched from another
+    # session don't share our CWD assumptions; relative paths in the
+    # manifest would break read/write across processes.
+    output_dir = Path(output_dir).resolve()
     (output_dir / "prompts").mkdir(parents=True, exist_ok=True)
     (output_dir / "results").mkdir(parents=True, exist_ok=True)
 
@@ -544,6 +548,42 @@ class SkillIngestSummary:
     skill_ids: list[int] = field(default_factory=list)
 
 
+_FENCE_RE = re.compile(r"^```(?:json|JSON)?\s*\n(.*?)\n```\s*$", re.DOTALL)
+
+
+def _strip_json_fences(text: str) -> str:
+    """Strip a single ```json ... ``` fence if the sub-agent wrapped its
+    output in one. Sub-agents are instructed not to fence, but real
+    models do it occasionally regardless. Robust over the strict path.
+
+    Returns ``text`` unchanged if no fence pattern matches.
+    """
+    s = text.strip()
+    m = _FENCE_RE.match(s)
+    return m.group(1).strip() if m else s
+
+
+def _parse_skill_result(text: str) -> Any:
+    """Parse a sub-agent result file's text into a JSON object.
+
+    1. Strip optional markdown fences.
+    2. ``json.loads`` the result.
+    3. If that fails, try to locate the first ``{ … }`` block and parse
+       only that (handles the case where a sub-agent prepended a stray
+       sentence before the JSON despite the prompt's instructions).
+    Raises the original ``json.JSONDecodeError`` if all paths fail.
+    """
+    cleaned = _strip_json_fences(text)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        first = cleaned.find("{")
+        last = cleaned.rfind("}")
+        if first != -1 and last > first:
+            return json.loads(cleaned[first : last + 1])
+        raise
+
+
 def _validate_skill_payload(raw: Any) -> Optional[dict]:
     """Return a normalized payload or None on validation failure."""
     if not isinstance(raw, dict):
@@ -642,7 +682,7 @@ def process_skill_generation(
             LOG.info("skill cluster %d: no result file", entry.cluster_id)
             continue
         try:
-            raw = json.loads(result_path.read_text())
+            raw = _parse_skill_result(result_path.read_text())
         except (json.JSONDecodeError, ValueError) as e:
             summary.unparseable += 1
             LOG.warning("skill cluster %d: parse error: %s",

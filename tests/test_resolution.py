@@ -268,12 +268,61 @@ def test_concept_type_scopes_exact_match(conn, embedder, resolver):
     protocol_id = _seed_concept(conn, embedder, "Transaction",
                                 "blockchain transaction record",
                                 concept_type="Protocol")
-    # Unscoped lookup picks one (we don't care which; either is a concept
-    # with that name). Scoped lookup must pick the right one.
+    # Unscoped lookup picks the richest of the duplicates (see below for
+    # the dedicated test). Scoped lookup must pick the right one.
     r_pattern = resolver.resolve("Transaction", concept_type="Pattern")
     assert r_pattern.concept_id == pattern_id
     r_protocol = resolver.resolve("Transaction", concept_type="Protocol")
     assert r_protocol.concept_id == protocol_id
+
+
+def test_unscoped_exact_match_prefers_richest_duplicate(conn, embedder, resolver):
+    """When two concepts share a name (different concept_type), an
+    unscoped lookup should pick the one with the most concept_relation
+    edges. Real catalogs carry 5K+ such duplicates and the empty twin
+    used to win arbitrarily — that broke find_prerequisites for any
+    concept whose richer twin came second in insertion order."""
+    sparse = _seed_concept(conn, embedder, "Event Sourcing",
+                           "minimal entry", concept_type="Concept")
+    rich = _seed_concept(conn, embedder, "Event Sourcing",
+                         "pattern entry", concept_type="Pattern")
+    # Seed several REQUIRES edges on the rich one.
+    for i in range(5):
+        # Make a stub neighbour to point at.
+        nb = _seed_concept(conn, embedder, f"prereq-{i}",
+                           f"neighbour {i}", concept_type="Concept")
+        conn.execute(
+            "INSERT INTO concept_relation "
+            "(from_concept_id, to_concept_id, relation_type, "
+            " source_type, source_id) VALUES (?, ?, 'REQUIRES', 'chapter', 1)",
+            [rich, nb],
+        )
+
+    result = resolver.resolve("event sourcing")
+    assert result.concept_id == rich
+    assert result.concept_id != sparse
+
+
+def test_unscoped_alias_match_prefers_richest_duplicate(conn, embedder, resolver):
+    """Same richness preference for alias lookups — when an alias points
+    at multiple concepts (rare across concept_type variants), the
+    richer one wins."""
+    sparse = _seed_concept(conn, embedder, "Plain", "no edges",
+                           concept_type="Concept")
+    rich = _seed_concept(conn, embedder, "Plain", "rich edges",
+                         concept_type="Pattern")
+    _seed_alias(conn, sparse, "PLN")
+    _seed_alias(conn, rich, "PLN")
+    nb = _seed_concept(conn, embedder, "n", "n", concept_type="Concept")
+    conn.execute(
+        "INSERT INTO concept_relation (from_concept_id, to_concept_id, "
+        "relation_type, source_type, source_id) "
+        "VALUES (?, ?, 'CITES', 'chapter', 1)",
+        [rich, nb],
+    )
+
+    result = resolver.resolve("PLN")
+    assert result.concept_id == rich
 
 
 def test_register_alias_is_idempotent(conn, embedder, resolver):

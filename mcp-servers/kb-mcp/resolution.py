@@ -203,29 +203,67 @@ class EntityResolver:
     # Stage implementations
     # ------------------------------------------------------------------
 
+    # Lookups that find multiple rows for a name pick the *richest* one
+    # — the concept with the most concept_relation edges. The catalog
+    # carries 5K+ duplicate-name groups distinguished only by
+    # concept_type (e.g. "Event Sourcing" as both "Concept" and
+    # "Pattern"); without this ordering, an arbitrary duplicate wins
+    # and downstream tools like find_prerequisites surface zero
+    # results when the empty twin happens to come first.
+    _RICHEST_BY_NAME = """
+        SELECT c.concept_id
+          FROM concept c
+          LEFT JOIN concept_relation cr
+                 ON cr.from_concept_id = c.concept_id
+                 OR cr.to_concept_id   = c.concept_id
+         WHERE lower(c.name) = lower(?)
+        {extra_where}
+         GROUP BY c.concept_id
+         ORDER BY COUNT(cr.from_concept_id) DESC, c.concept_id ASC
+         LIMIT 1
+    """
+
     def _exact_match(
         self, candidate_name: str, concept_type: Optional[str]
     ) -> Optional[int]:
-        """Case-insensitive lookup on concept.name, optionally scoped by type."""
+        """Case-insensitive lookup on concept.name, optionally scoped by type.
+
+        When duplicate names exist, prefers the one with the most edges
+        in concept_relation (a strong proxy for "the canonical concept
+        an extractor populated first"). Falls back to lowest concept_id
+        on a tie so the result is deterministic.
+        """
         if concept_type is None:
-            row = self.conn.execute(
-                "SELECT concept_id FROM concept "
-                "WHERE lower(name) = lower(?) LIMIT 1",
-                [candidate_name],
-            ).fetchone()
+            sql = self._RICHEST_BY_NAME.format(extra_where="")
+            params = [candidate_name]
         else:
-            row = self.conn.execute(
-                "SELECT concept_id FROM concept "
-                "WHERE lower(name) = lower(?) AND concept_type = ? LIMIT 1",
-                [candidate_name, concept_type],
-            ).fetchone()
+            sql = self._RICHEST_BY_NAME.format(
+                extra_where="AND c.concept_type = ?",
+            )
+            params = [candidate_name, concept_type]
+        row = self.conn.execute(sql, params).fetchone()
         return row[0] if row else None
 
     def _alias_match(self, candidate_name: str) -> Optional[int]:
-        """Case-insensitive lookup on concept_alias.alias."""
+        """Case-insensitive lookup on concept_alias.alias.
+
+        Same richness preference as ``_exact_match`` — when an alias
+        points at multiple concepts (rare, but possible across
+        concept_type variants), the concept with the most edges wins.
+        """
         row = self.conn.execute(
-            "SELECT concept_id FROM concept_alias "
-            "WHERE lower(alias) = lower(?) LIMIT 1",
+            """
+            SELECT c.concept_id
+              FROM concept_alias a
+              JOIN concept c ON c.concept_id = a.concept_id
+              LEFT JOIN concept_relation cr
+                     ON cr.from_concept_id = c.concept_id
+                     OR cr.to_concept_id   = c.concept_id
+             WHERE lower(a.alias) = lower(?)
+             GROUP BY c.concept_id
+             ORDER BY COUNT(cr.from_concept_id) DESC, c.concept_id ASC
+             LIMIT 1
+            """,
             [candidate_name],
         ).fetchone()
         return row[0] if row else None

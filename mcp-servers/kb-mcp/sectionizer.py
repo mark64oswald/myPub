@@ -33,12 +33,103 @@ caller — this module commits nothing.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from markdown_it import MarkdownIt
 
 DEFAULT_SPLIT_LEVEL = 2  # split at H2; H3+ fold into parent content
+
+
+# A "URL-shaped" heading is one whose entire content is a hyperlink — the
+# common pattern in auto-generated READMEs / wikis where a section header
+# is just `# https://github.com/foo/bar`. Such headings carry no semantic
+# signal for retrieval (every section gets the same URL prefix), and the
+# title-coverage scorer has to zero them out at query time.
+#
+# We strip these at parse time so a meaningful body-derived heading can
+# replace them — boosting the section's chance of matching real queries.
+_URL_HEADING_RE = re.compile(
+    r"""
+    ^\s*
+    (?:
+        \[[^\]]*\]\(\s*(?:https?|ftp)://[^)\s]+\s*(?:\s+\"[^\"]*\")?\)  # markdown link
+        |
+        <?(?:https?|ftp)://[^\s>]+>?                                    # bare URL
+    )
+    \s*$
+    """,
+    re.VERBOSE,
+)
+
+# Strip leading / trailing markdown emphasis tokens off a candidate
+# replacement heading (they survive parsing because we read raw lines,
+# not the markdown-it AST). Excludes backticks — those delimit code
+# fences and should fall through to the explicit fence skip below.
+_EMPHASIS_PREFIX_RE = re.compile(r"^[\*_]+|[\*_]+$")
+
+
+def _is_url_heading(text: Optional[str]) -> bool:
+    """True if ``text`` is essentially just a URL (bare or markdown-linked)."""
+    if not text:
+        return False
+    return bool(_URL_HEADING_RE.match(text.strip()))
+
+
+def _derive_body_heading(body: str, max_words: int = 12) -> Optional[str]:
+    """Find a meaningful heading inside ``body`` when the source heading
+    was URL-shaped or otherwise unhelpful.
+
+    Strategy, in order:
+      1. The first H3+ heading inside the body (``### Subhead``) — these
+         got folded into content by the H2-split rule, so they're real
+         headings the author wrote.
+      2. The first non-empty line, if it looks heading-ish (short, no
+         block punctuation, not a URL itself).
+    Returns ``None`` if nothing reasonable surfaces — the caller should
+    leave heading_text=None rather than fall back to the URL.
+    """
+    if not body or not body.strip():
+        return None
+
+    for line in body.splitlines():
+        stripped = line.strip()
+        # H3+ heading folded into the body
+        m = re.match(r"^(#{3,6})\s+(.+?)\s*#*\s*$", stripped)
+        if m:
+            candidate = m.group(2).strip()
+            if candidate and not _is_url_heading(candidate):
+                return candidate
+
+    # First plausible non-empty line, with fence-state tracking so
+    # code blocks are skipped wholesale.
+    in_fence = False
+    for line in body.splitlines():
+        raw = line.strip()
+        if raw.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        stripped = _EMPHASIS_PREFIX_RE.sub("", raw).strip()
+        if not stripped:
+            continue
+        if _is_url_heading(stripped):
+            continue
+        # Skip blockquote markers, list bullets, table pipes —
+        # rarely good headings.
+        if stripped.startswith((">", "- ", "* ", "+ ", "|")):
+            continue
+        # Likely a sentence, not a heading: too long or ends with period.
+        words = stripped.split()
+        if len(words) > max_words:
+            continue
+        if stripped.endswith((".", "!", "?")):
+            continue
+        return stripped
+
+    return None
 
 
 @dataclass
@@ -94,10 +185,16 @@ def sectionize_markdown(
     if not breaks:
         return sectionize_shapeless(content)
 
-    flat: list[tuple[int, str, str]] = []
+    flat: list[tuple[int, Optional[str], str]] = []
     for j, (level, heading_text, _hstart, hend) in enumerate(breaks):
         next_start = breaks[j + 1][2] if j + 1 < len(breaks) else len(lines)
         body = "".join(lines[hend:next_start]).strip("\n")
+        # Replace URL-shaped headings with a body-derived alternative.
+        # If no alternative surfaces, leave the heading None — None
+        # already disables title-coverage scoring cleanly, whereas a
+        # URL string would have to be filtered downstream.
+        if _is_url_heading(heading_text):
+            heading_text = _derive_body_heading(body)
         flat.append((level, heading_text, body))
 
     return _build_tree(flat)
@@ -213,7 +310,7 @@ def sectionize(snapshot: dict[str, Any]) -> list[Section]:
 # --- internals ---------------------------------------------------------------
 
 
-def _build_tree(flat: list[tuple[int, str, str]]) -> list[Section]:
+def _build_tree(flat: list[tuple[int, Optional[str], str]]) -> list[Section]:
     """Stack-based: each section's parent is the most recent shallower-level
     section. Siblings get sequential ordinals scoped to their parent."""
     roots: list[Section] = []
