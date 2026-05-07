@@ -2216,6 +2216,83 @@ def generate_content_brief(
     }
 
 
+@mcp.tool
+def generate_tutorial(
+    target: str,
+    level: str = "intermediate",
+    max_depth: int = 4,
+    max_concepts: int = 30,
+    max_stages: int = 5,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 10 — generate a Tutorial.
+
+    Walks prerequisites of ``target``, attaches one backing procedure
+    per stage, and renders a sequenced exercise track. Each stage's
+    exercise comes from a procedure in the corpus (parsed JSON steps);
+    checkpoints derive from procedure post-conditions.
+
+    Args:
+        target: Tutorial target concept (what the learner builds toward).
+        level: "beginner" | "intermediate" | "advanced".
+        max_depth: Prerequisite chain depth cap.
+        max_concepts: Cap on concepts pulled into the path.
+        max_stages: Cap on stages in the final tutorial.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_stages,
+        n_unbacked_stages, level, file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import tutorial
+
+    gen = tutorial.make_tutorial_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, target,
+            level=level, max_depth=max_depth, max_concepts=max_concepts,
+            max_stages=max_stages,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_stages": metadata.get("n_stages", 0),
+        "n_unbacked_stages": metadata.get("n_unbacked_stages", 0),
+        "level": metadata.get("level"),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
