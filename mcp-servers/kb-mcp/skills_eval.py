@@ -12,6 +12,26 @@ most likely to produce: descriptions that are too generic, descriptions
 that overlap with siblings, descriptions that fail to mention the
 Skill's own anchor concept.
 
+## Known limitation: proxy disagrees with intent matching
+
+Empirically (cdc package regen, 2026-05-07), tightening the generation
+prompt to produce more discriminative descriptions made the eval scores
+WORSE, not better — even though the new descriptions read clearly
+better and do their real job (LLM intent matching) better.
+
+The proxy rewards token overlap. So a description that says "fires when
+the user asks about X; for Y see the Y Skill" matches queries about Y
+because Y appears in its text — the proxy can't tell that "see Y" is a
+*delegation*, not an *invocation*. A tightened description that uses
+niche vocabulary (function names, parameter names) instead of sibling
+references scores LOWER on the proxy because queries don't share that
+niche vocabulary.
+
+Treat scores as a smoke test for empty/generic descriptions, not as a
+quality ranking. R@1 < 0.3 means something is broken (empty
+description, total mis-routing). Higher scores reward the wrong thing
+for the routing layer Claude actually uses.
+
 ## Query synthesis
 
 Queries come from two non-circular signals (neither is derived from the

@@ -246,13 +246,43 @@ Generation rules:
   * Cite source material faithfully — if the source says X, the Skill
     says X. If sources disagree, present the most-corroborated view
     or call out the disagreement explicitly.
-  * The trigger description must DISCRIMINATE from siblings — describe
-    when THIS Skill should fire, not when adjacent ones should.
-  * Mention sibling Skills when relevant ("for the read-side, see the
-    Read Model Skill") instead of duplicating their coverage.
   * Length: SKILL.md should be 300-1500 words for most topics. Aim
     for actionable density, not encyclopedic breadth.
   * NO YAML frontmatter — that's added by the materialization step.
+
+TRIGGER DESCRIPTION RULES (this is what routes queries — discrimination matters):
+
+  * Length cap: ≤ 250 characters. Hard limit. A long description
+    drifts into shared package vocabulary; a short one is forced to
+    name what's UNIQUE to this Skill.
+  * Lead with the most discriminative phrase first — the term, API,
+    or sub-concept that ONLY this Skill is about. Not the package
+    name, not the broad domain.
+  * Do NOT repeat sibling Skill names or their distinguishing terms
+    inside the trigger. If sibling A's anchor is "Kafka Connect", the
+    word "kafka connect" must NOT appear in any other Skill's trigger
+    — even in a "see also" clause. Cross-references belong in the
+    skill_md body, NOT in the trigger.
+  * Do NOT say "for X, see the Y Skill" inside the trigger. That
+    pattern repeats sibling vocabulary (X) and inflates embedding
+    similarity to siblings — defeating the discrimination this trigger
+    is supposed to provide.
+  * Use vocabulary the OTHER Skills in the package would NOT use —
+    specific function names, error codes, parameter names, internal
+    sub-mechanisms — rather than the package-wide vocabulary the
+    siblings already saturate.
+  * Sentence shape: "Use when <specific signal>. Covers <specific
+    sub-concepts>." Active voice, present tense, declarative.
+
+SKILL.MD BODY RULES:
+
+  * The body is where you cite sources, walk through mechanism, and
+    cross-reference siblings. Mention sibling Skills here when
+    relevant ("the Read Model Skill covers the query side") — NOT in
+    the trigger description.
+  * Be terse but specific. Prefer concrete API/parameter names over
+    generic prose. If the source material gives an exact configuration
+    flag, name it.
 
 Strategy guidance (you've been given one of three §8.3 strategies):
 
@@ -268,8 +298,8 @@ Strategy guidance (you've been given one of three §8.3 strategies):
 Output JSON only. Schema:
 
 {
-  "trigger_description": "1-2 sentences, present-tense. Describes
-                          when Claude should invoke this Skill.",
+  "trigger_description": "≤250 chars. Discriminative; no sibling
+                          names; no 'see also' clauses.",
   "skill_md": "Full SKILL.md body in Markdown. No frontmatter."
 }
 """

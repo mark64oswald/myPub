@@ -130,25 +130,26 @@ Call `eval_skills_routing` with `package_id` from Stage 3. Leave
 
 The eval is a *proxy* — it embeds synthesized queries and ranks Skill
 descriptions by cosine similarity. Real Claude Code uses an LLM
-router, so high scores here are necessary but not sufficient. Treat
-the metrics as a smoke test for description quality:
+router, so high scores here mean "high vocabulary overlap with concept
+queries", not "this routes correctly under the real router".
 
-- **`overall.recall_at_1 ≥ 0.8`** → descriptions discriminate cleanly,
-  report success and stop.
-- **`0.5 ≤ overall.recall_at_1 < 0.8`** → some descriptions overlap.
-  Walk `per_skill` and surface the 1–2 lowest-scoring Skills by name.
-  Suggest the user inspect those SKILL.md files and re-dispatch with
-  a tighter prompt if they want a clean run.
-- **`overall.recall_at_1 < 0.5`** → bad. Either the descriptions are
-  too generic or the package was over-decomposed (too many similar
-  Skills). Surface the lowest 3 by name with their queries that
-  mis-routed (`per_query[].rank > 1`). Recommend either re-running
-  with a coarser `min_cluster_size` or rewriting the offending
-  descriptions manually.
+**Empirically the proxy can disagree with intent matching** (cdc
+regen, 2026-05-07): tightening the generation prompt to produce
+clearly better descriptions DROPPED the proxy scores, because the
+better descriptions used niche vocabulary that doesn't overlap with
+broad concept-name queries. So treat the proxy as a **smoke test for
+empty/generic descriptions**, not as a quality ranking:
+
+- **`overall.recall_at_1 < 0.3`** → red flag. Either descriptions
+  are empty, or the package decomposed badly (too many near-duplicate
+  Skills). Surface the lowest 3 by name and recommend re-running.
+- **`overall.recall_at_1 ≥ 0.3`** → eval is silent on whether
+  descriptions are good. Read 2–3 SKILL.md files yourself and judge:
+  do they lead with discriminative vocabulary? Do they avoid
+  cross-referencing siblings inside the trigger? If yes, ship.
 
 Always surface `notes` from the eval — they catch empty descriptions
-and concept-budget shortfalls that would otherwise hide behind a
-deceptively reasonable score.
+and concept-budget shortfalls that hide behind any score.
 
 ## Guidance
 

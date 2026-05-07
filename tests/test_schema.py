@@ -201,6 +201,15 @@ def test_not_yet_populated_tables_are_empty(conn):
         # extraction has been run for any source. PostgreSQL was the
         # first to be processed (2026-05-06).
         "alignment_edge",
+        # Phase 5 — Skills Factory has been driven against the live
+        # corpus (first dogfood run: 2026-05-07).
+        # skill_package: one row per generated package
+        # skill: one row per Skill within a package
+        # skill_source: §8.6 provenance, both selected and dropped
+        # skill_relation: REQUIRES + REFERENCES edges between Skills
+        # skill_file remains empty until per-Skill auxiliary files
+        # (Phase 5+ extension) are introduced.
+        "skill_package", "skill", "skill_source", "skill_relation",
     }
     for table in EXPECTED_TABLES - populated_so_far:
         count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
