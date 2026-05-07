@@ -2622,6 +2622,106 @@ def generate_author_panel(
     }
 
 
+@mcp.tool
+def generate_project_bootstrap(
+    description: str,
+    technologies: Optional[list[str]] = None,
+    patterns: Optional[list[str]] = None,
+    project_name: Optional[str] = None,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 15 — generate a Project Bootstrap scaffold.
+
+    Composes Concept→Pattern→Procedure into a project tree with
+    placeholder files + sub-agent prompts ready to dispatch. v1 ships
+    the structural skeleton; sub-agent dispatch (to fill in real code)
+    is the user's manual follow-up.
+
+    Args:
+        description: Project description / canonical request.
+        technologies: List of technology names to include in the stack.
+        patterns: List of pattern names to anchor the design.
+        project_name: Output folder name (defaults to slug of description).
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import project_bootstrap
+    gen = project_bootstrap.make_project_bootstrap_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, description,
+            technologies=technologies, patterns=patterns,
+            project_name=project_name,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {"package_id": -1,
+                    "validation_issues": [
+                        {"severity": i.severity, "message": i.message} for i in issues],
+                    "notes": list(report.notes)}
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "n_elements": metadata.get("n_elements", 0),
+        "n_files": metadata.get("n_files", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
+def generate_refactoring_playbook(
+    topic: str,
+    max_findings: int = 12,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 15 — generate a Refactoring Playbook.
+
+    Detects anti-patterns in the topic's neighborhood (Pattern-typed
+    concepts with CONTRASTS_WITH neighbors) and pairs each with a
+    refactor target plus available refactor procedures.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import refactoring_playbook
+    gen = refactoring_playbook.make_refactoring_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, topic, max_findings=max_findings,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {"package_id": -1,
+                    "validation_issues": [
+                        {"severity": i.severity, "message": i.message} for i in issues],
+                    "notes": list(report.notes)}
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "n_findings": metadata.get("n_findings", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
