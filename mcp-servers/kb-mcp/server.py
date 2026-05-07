@@ -2431,6 +2431,103 @@ def generate_tech_assessment(
     }
 
 
+@mcp.tool
+def generate_migration_guide(
+    subject: str,
+    max_depth: int = 1,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 13 — generate a Migration Guide.
+
+    Walks alignment_edge rows of relation_type=CONTRADICTS in the
+    subject's neighborhood. The catalog currently has 0 CONTRADICTS
+    edges; the generator infrastructure is correct but produces an
+    empty deliverable until alignment runs surface contradictions.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import migration_guide
+    gen = migration_guide.make_migration_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, subject, max_depth=max_depth,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message}
+                    for i in issues],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "n_diffs": metadata.get("n_diffs", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
+def generate_currency_report(
+    scope: str = "all-sources",
+    source_filter: Optional[str] = None,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 13 — generate a Currency Report.
+
+    Audits doc_snapshot freshness across all (or one) doc_source.
+    Surfaces volatility per source.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import currency_report
+    gen = currency_report.make_currency_report_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, scope,
+            source_filter=source_filter,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message}
+                    for i in issues],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "n_sources": metadata.get("n_sources", 0),
+        "n_snapshots": metadata.get("n_snapshots", 0),
+        "max_volatility": metadata.get("max_volatility", 0.0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
