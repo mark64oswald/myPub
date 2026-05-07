@@ -1,15 +1,17 @@
 # myPub v2
 
-This project is a knowledge base system indexing ~345 technical ePubs,
-with live-doc augmentation (Context7 / DeepWiki / GitHub) and a Skills
-Factory for generating Claude Skills packages.
+This project is a knowledge base system indexing ~541 technical ePubs,
+with live-doc augmentation (Context7 / DeepWiki / GitHub) and a
+generator program covering 13+ output types built on a shared Phase 7
+framework.
 
 ## Key locations
 
 - Local DuckDB: `data/catalog.ddb`
 - ePub collection: `~/Documents/eBooks`
-- Generated Skills packages: `data/generated-packages/`
+- Generated packages (all generators): `data/generated-packages/`
 - Architecture spec: `docs/mypub-v2-architecture.md`
+- Generator spec: `docs/mypub-v2-generators.md`
 - Execution plan: `docs/mypub-v2-execution-plan.md`
 
 ## How to interact with the knowledge base
@@ -48,24 +50,40 @@ A slash command is here only when it composes multiple tools, drives an
 interactive multi-step flow, or carries workflow context that natural
 language wouldn't reliably reproduce.
 
+**Search + admin:**
 - **`/kb-discover <term>`** — hybrid search with the explicit discovery
   loop wired in. If discovery returns `asked_user`, presents candidates,
   waits for the user to pick, runs `disambiguate_discovery`, and
-  re-runs the search. Surfaces conflicts prominently.
+  re-runs the search.
 - **`/kb-review-concepts`** — interactive review of borderline
   entity-resolution items in the EntityResolver queue.
 
-### Planned slash commands (not yet wired)
+**Generators (Phases 5, 7-16) — the substrate's product surface:**
 
-These appear in the architecture spec but are scheduled for later phases.
-Don't try to invoke them yet:
+All generators land in `data/generated-packages/<package_name>/` and
+persist provenance to `generated_*` tables (or `skill_*` for the
+original Skills Factory). Each is fully deterministic except where
+noted; sub-agent dispatch is layered on top for those that need prose.
 
-- `/kb-index <book-path>` — Phase 2/3 ingest workflow (drive ePub
-  parse + extraction sub-agents)
-- `/kb-refresh-docs [domain]`, `/kb-focus <domain>`,
-  `/kb-pin-source <name>`, `/kb-unpin-source <name>`,
-  `/kb-refresh-status` — Phase 4b proactive refresh + tier management
-- `/kb-generate-skills <domain>` — Phase 5 Skills Factory
+| Slash command | Generator | Notes |
+|---|---|---|
+| `/kb-generate-skills` | Skills Factory (Phase 5) | Sub-agent driven; ranking_mode=generation |
+| `/kb-concept-map` | Concept Neighborhood Map (7.2) | Mermaid + Graphviz |
+| `/kb-learning-path` | Learning Path (8) | Prereq traversal + reading list |
+| `/kb-cheatsheet` | Cheatsheet (9.4) | One-page procedure reference |
+| `/kb-slides` | Slide-deck Outline (9.5) | 15-60 min talk skeleton |
+| `/kb-content-brief` | Content Brief (9.1-9.3) | Blog/talk/design-doc/chapter outline |
+| `/kb-tutorial` | Tutorial (10) | Procedure-backed exercise track |
+| `/kb-pattern-catalog` | Pattern + Anti-Pattern Catalog (11) | Foundational for Bootstrap |
+| `/kb-adr` | Architecture Decision Record (12) | CONTRASTS_WITH-driven options |
+| `/kb-tech-assessment` | Tech Assessment (12) | Comparison matrix + recommendation |
+| `/kb-migration-guide` | Migration Guide (13) | CONTRADICTS-driven; data-starved until alignment surfaces contradictions |
+| `/kb-currency-report` | Currency Report (13) | doc_snapshot history audit |
+| `/kb-dialog` | Dialog (14) | Architect/Practitioner divergence |
+| `/kb-author-panel` | Author Panel (14) | N≥2 characters, per-topic positions |
+| `/kb-bootstrap` | Project Bootstrap (15) | **User #1.** Composes Concept→Pattern→Procedure into a project tree + sub-agent prompts |
+| `/kb-refactoring` | Refactoring Playbook (15) | Anti-pattern → refactor target |
+| `/kb-curriculum` | Curriculum (16) | Multi-week composite |
 
 ## Other MCP servers
 
