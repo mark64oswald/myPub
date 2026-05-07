@@ -2293,6 +2293,144 @@ def generate_tutorial(
     }
 
 
+@mcp.tool
+def generate_adr(
+    question: str,
+    max_options: int = 5,
+    max_references: int = 4,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 12 — generate an Architecture Decision Record.
+
+    Anchor + CONTRASTS_WITH neighbors become candidate options; per-
+    option pros/cons heuristically derived from concept descriptions
+    + ranked source excerpts.
+
+    Args:
+        question: Decision question. The question's anchor concept
+            (e.g. "event sourcing" inside "Adopt event sourcing for
+            billing service?") is resolved via EntityResolver.
+        max_options: Cap on candidate options (default 5).
+        max_references: Top-K chapters per option.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_options,
+        file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import adr
+
+    gen = adr.make_adr_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, question,
+            max_options=max_options, max_references=max_references,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_options": metadata.get("n_options", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
+def generate_tech_assessment(
+    title: str,
+    candidates: list[str],
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 12 — generate a Tech Assessment (feature-matrix comparison).
+
+    For each candidate, computes coverage metrics from the graph
+    (chapter count, doc_section count, neighborhood size, procedure
+    count) and a composite score. Renders a comparison matrix +
+    per-candidate deep dives + a deterministic recommendation.
+
+    Args:
+        title: Assessment title (e.g. "Streaming engines").
+        candidates: List of technology names (e.g.
+            ["Kafka Streams", "Apache Flink", "Apache Spark"]).
+
+    Returns:
+        ``{package_id, package_name, output_root, n_candidates,
+        winner, file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import tech_assessment
+
+    gen = tech_assessment.make_tech_assessment_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, title,
+            candidates=candidates, title=title,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_candidates": metadata.get("n_candidates", 0),
+        "winner_concept_id": metadata.get("winner_concept_id"),
+        "winner_score": metadata.get("winner_score"),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
