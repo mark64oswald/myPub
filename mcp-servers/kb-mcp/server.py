@@ -2722,6 +2722,50 @@ def generate_refactoring_playbook(
     }
 
 
+@mcp.tool
+def generate_curriculum(
+    topic: str,
+    n_weeks: int = 12,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 16 — generate a multi-week Curriculum.
+
+    Composes Learning Path stages → weeks. Adds tutorial activities
+    starting week 2 and pattern catalogs in the last third of the
+    schedule.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import curriculum
+    gen = curriculum.make_curriculum_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, topic, n_weeks=n_weeks,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {"package_id": -1,
+                    "validation_issues": [
+                        {"severity": i.severity, "message": i.message} for i in issues],
+                    "notes": list(report.notes)}
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "n_weeks": metadata.get("n_weeks", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
