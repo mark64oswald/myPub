@@ -1982,6 +1982,83 @@ def generate_cheatsheet(
     }
 
 
+@mcp.tool
+def generate_slide_deck(
+    topic: str,
+    duration_min: int = 30,
+    audience: str = "engineers",
+    n_insights: int = 3,
+    thesis: Optional[str] = None,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 9.5 — generate a Slide-deck Outline.
+
+    Produces a talk skeleton: title / agenda / N insights × 3-6 slides /
+    takeaways / Q&A. Each slide has ≤5 bullets (≤10 words each) plus
+    presenter notes. Fully deterministic.
+
+    Args:
+        topic: Talk topic (e.g. "Change Data Capture", "Lakehouse Architecture").
+        duration_min: Talk duration in minutes (default 30).
+        audience: "engineers" | "executives" | "mixed".
+        n_insights: Number of major insights/sections (default 3).
+        thesis: Optional one-line thesis.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_slides, n_insights,
+        duration_min, audience, file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import slide_deck
+
+    gen = slide_deck.make_slide_deck_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, topic,
+            duration_min=duration_min, audience=audience,
+            n_insights=n_insights, thesis=thesis,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_slides": metadata.get("n_slides", 0),
+        "n_insights": metadata.get("n_insights", 0),
+        "duration_min": metadata.get("duration_min"),
+        "audience": metadata.get("audience"),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
