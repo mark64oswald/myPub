@@ -43,6 +43,9 @@ CREATE SEQUENCE seq_skill_id                     START 1;
 CREATE SEQUENCE seq_skill_file_id                START 1;
 CREATE SEQUENCE seq_discovery_log_id             START 1;
 CREATE SEQUENCE seq_alignment_edge_id            START 1;
+CREATE SEQUENCE seq_generated_package_id         START 1;
+CREATE SEQUENCE seq_generated_unit_id            START 1;
+CREATE SEQUENCE seq_generated_file_id            START 1;
 
 
 -- ============================================================================
@@ -375,6 +378,68 @@ CREATE TABLE skill_relation (
     relation_type VARCHAR  NOT NULL,
     PRIMARY KEY (from_skill_id, to_skill_id, relation_type)
 );
+
+
+-- ============================================================================
+-- GENERATOR FRAMEWORK OUTPUT TABLES (Phase 7+)
+-- Generalized parallel to skill_package / skill / skill_source / skill_file
+-- distinguished by a generator_type discriminator (concept_map, learning_path,
+-- etc.). Skills Factory continues using its existing skill_* tables; new
+-- generators land here. Migration of skill_* into these tables is deferred.
+-- ============================================================================
+
+CREATE TABLE generated_package (
+    package_id      BIGINT     PRIMARY KEY DEFAULT nextval('seq_generated_package_id'),
+    generator_type  VARCHAR    NOT NULL,           -- 'concept_map', 'learning_path', etc.
+    name            VARCHAR    NOT NULL,
+    domain          VARCHAR,
+    target_audience VARCHAR,
+    source_query    TEXT,
+    metadata_json   TEXT,                          -- generator-specific knobs (depth, edge filter, …)
+    created_at      TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (generator_type, name)
+);
+
+CREATE INDEX idx_generated_package_type ON generated_package(generator_type);
+
+CREATE TABLE generated_unit (
+    unit_id          BIGINT     PRIMARY KEY DEFAULT nextval('seq_generated_unit_id'),
+    package_id       BIGINT     NOT NULL REFERENCES generated_package(package_id),
+    unit_type        VARCHAR    NOT NULL,          -- 'concept_node', 'learning_stage', etc.
+    name             VARCHAR    NOT NULL,
+    ordinal          INTEGER,                      -- position within package
+    parent_unit_id   BIGINT,                       -- nested structures; FK omitted (DuckDB 1.5
+                                                   -- per-row FK checker mis-blocks NULL updates)
+    content_markdown TEXT,
+    metadata_json    TEXT,                         -- per-generator unit fields
+    generation_notes TEXT,
+    created_at       TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_generated_unit_package ON generated_unit(package_id);
+CREATE INDEX idx_generated_unit_type    ON generated_unit(unit_type);
+
+CREATE TABLE generated_source (
+    unit_id      BIGINT   NOT NULL REFERENCES generated_unit(unit_id),
+    source_type  VARCHAR  NOT NULL,                -- 'chapter', 'doc_section', 'concept', …
+    source_id    BIGINT   NOT NULL,
+    score        DOUBLE,
+    weight       DOUBLE   DEFAULT 0,
+    drop_reason  VARCHAR,
+    PRIMARY KEY (unit_id, source_type, source_id)
+);
+
+CREATE TABLE generated_file (
+    file_id   BIGINT     PRIMARY KEY DEFAULT nextval('seq_generated_file_id'),
+    package_id BIGINT    NOT NULL REFERENCES generated_package(package_id),
+    unit_id   BIGINT     REFERENCES generated_unit(unit_id),
+    filename  VARCHAR    NOT NULL,
+    purpose   VARCHAR,                             -- 'mermaid', 'dot', 'svg', 'overview', etc.
+    content   TEXT
+);
+
+CREATE INDEX idx_generated_file_package ON generated_file(package_id);
+CREATE INDEX idx_generated_file_unit    ON generated_file(unit_id);
 
 
 -- ============================================================================

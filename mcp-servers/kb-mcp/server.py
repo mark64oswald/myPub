@@ -1715,6 +1715,98 @@ def eval_skills_routing(
     return skills_eval.report_to_dict(report)
 
 
+@mcp.tool
+def generate_concept_map(
+    concept: str,
+    depth: int = 2,
+    max_nodes: int = 60,
+    relation_filter: Optional[list[str]] = None,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 7.2 — generate a Concept Neighborhood Map package.
+
+    Produces a Mermaid + Graphviz DOT visualization of a concept's
+    k-hop graph neighborhood. Nodes are colored by source-type
+    coverage (book chapter / doc section / procedure-only); edges
+    are styled by relation type (REQUIRES, EXTENDS, CONTRASTS_WITH,
+    IMPLEMENTS, CITES). Useful for orienting on an unfamiliar topic
+    or embedding in design docs.
+
+    Fully deterministic — no sub-agent dispatch. Runs end-to-end in
+    one call.
+
+    Args:
+        concept: Seed concept name. Resolved via EntityResolver
+            (case-insensitive, alias-aware).
+        depth: BFS depth in hops (default 2).
+        max_nodes: Cap on neighborhood size (default 60). Larger
+            neighborhoods are pruned to the highest-degree nodes
+            within the radius.
+        relation_filter: Optional subset of relation types to follow
+            (default: all of REQUIRES, EXTENDS, CONTRASTS_WITH,
+            IMPLEMENTS, CITES). Pass e.g. ["REQUIRES", "EXTENDS"]
+            for a learning-prerequisites view.
+        output_root: Where to write the package folder
+            (default ``data/generated-packages/``).
+        overwrite: When False, skip files that already exist.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_nodes, n_edges,
+        pruned_node_count, file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import concept_map
+
+    gen = concept_map.make_concept_map_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, concept,
+            depth=depth, max_nodes=max_nodes,
+            relation_filter=relation_filter,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        # Pull metadata back for the response.
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+        n_nodes = rw_conn.execute(
+            "SELECT COUNT(*) FROM generated_unit WHERE package_id = ?",
+            [package_id],
+        ).fetchone()[0]
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_nodes": int(n_nodes),
+        "depth": metadata.get("depth"),
+        "pruned_node_count": metadata.get("pruned_node_count", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
