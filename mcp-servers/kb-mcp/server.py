@@ -1670,6 +1670,51 @@ def generate_skills_materialize(
     }
 
 
+@mcp.tool
+def eval_skills_routing(
+    package_id: int,
+    queries_per_skill: int = 5,
+) -> dict[str, Any]:
+    """Phase 5.5 — proxy eval for trigger-routing accuracy.
+
+    For the package, synthesize per-Skill eval queries from the Skill
+    name + concept-graph signals, embed them with the project's
+    sentence-transformers model, and rank every Skill description by
+    cosine similarity. Returns recall@1, recall@3, and MRR — overall
+    and per-Skill — plus per-query detail for failure diagnosis.
+
+    This is a *proxy* for what Claude Code's trigger router does at
+    runtime; high scores here are necessary but not sufficient for
+    real routing quality. Treat <0.7 recall@1 as a red flag and walk
+    the per-Skill table to find which Skill's description is muddy.
+
+    Args:
+        package_id: The skill_package row to evaluate.
+        queries_per_skill: Synthesized queries per Skill (default 5).
+
+    Returns:
+        ``{package_id, package_name, n_skills, overall: {recall_at_1,
+        recall_at_3, mrr, n_queries}, per_skill: {<id>: {...}},
+        per_query: [...], notes: [...]}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import skills_eval
+
+    assert _MODEL is not None, "_bootstrap() must run first"
+
+    def _embed(texts: list[str]) -> list[list[float]]:
+        vecs = _MODEL.encode(texts, convert_to_numpy=True)
+        return [v.astype("float32").tolist() for v in vecs]
+
+    report = skills_eval.run_routing_eval(
+        _CONN, package_id,
+        queries_per_skill=queries_per_skill,
+        embed_fn=_embed,
+    )
+    return skills_eval.report_to_dict(report)
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
