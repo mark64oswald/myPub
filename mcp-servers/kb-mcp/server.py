@@ -1895,6 +1895,93 @@ def generate_learning_path(
     }
 
 
+@mcp.tool
+def generate_cheatsheet(
+    subject: str,
+    extends_depth: int = 1,
+    max_per_section: int = 6,
+    max_words: int = 1200,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 9.4 — generate a Cheatsheet package.
+
+    Distills procedures linked to ``subject`` (and optional EXTENDS
+    descendants) into a one-page reference: procedures grouped by
+    category (CRUD, Configuration, Performance, Errors, Integration,
+    Install, Operations, General), each entry showing the canonical
+    steps as a code block, with a Gotchas section aggregating
+    failure modes.
+
+    Fully deterministic — no sub-agent dispatch. Best for subjects
+    with substantial procedure coverage (≥10 procedures); the live
+    catalog has 4,341 procedures so subjects like Delta Lake,
+    LangChain, Apache Spark, Docker have ample material.
+
+    Args:
+        subject: Library, tool, or technology name. Resolved via
+            EntityResolver.
+        extends_depth: How far to walk EXTENDS to pull descendant
+            concepts' procedures (default 1; e.g. for "Apache Spark"
+            this includes Spark Structured Streaming, etc.).
+        max_per_section: Procedures per category (default 6); keeps
+            the page on one screen.
+        max_words: Page-fit cap (default 1200 words); flagged as a
+            warning if exceeded, not blocking.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_procedures_total,
+        n_clusters, file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import cheatsheet
+
+    gen = cheatsheet.make_cheatsheet_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, subject,
+            extends_depth=extends_depth,
+            max_per_section=max_per_section,
+            max_words=max_words,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_procedures_total": metadata.get("n_procedures_total", 0),
+        "n_clusters": metadata.get("n_clusters", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
