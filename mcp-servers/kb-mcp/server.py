@@ -2139,6 +2139,83 @@ def generate_pattern_catalog(
     }
 
 
+@mcp.tool
+def generate_content_brief(
+    topic: str,
+    fmt: str = "blog",
+    audience: str = "engineers",
+    angle: Optional[str] = None,
+    max_sources: int = 4,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 9.1-9.3 — generate a Content Brief.
+
+    Produces the deterministic research skeleton for an article: outline +
+    per-section anchor + ranked sources + angle hints (CONTRASTS_WITH
+    positions to consider). The author fills in the prose.
+
+    Args:
+        topic: Article topic.
+        fmt: "blog" | "talk" | "design-doc" | "chapter".
+        audience: Target audience.
+        angle: Optional one-line thesis.
+        max_sources: Max sources per section (default 4).
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_sections,
+        n_sources_total, fmt, audience, file_paths,
+        validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import content_brief
+
+    gen = content_brief.make_content_brief_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, topic,
+            fmt=fmt, audience=audience, angle=angle, max_sources=max_sources,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_sections": metadata.get("n_sections", 0),
+        "n_sources_total": metadata.get("n_sources_total", 0),
+        "fmt": metadata.get("format"),
+        "audience": metadata.get("audience"),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
