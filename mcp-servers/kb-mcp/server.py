@@ -2528,6 +2528,100 @@ def generate_currency_report(
     }
 
 
+@mcp.tool
+def generate_dialog(
+    topic: str,
+    max_beats: int = 6,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 14 — generate a Dialog between Architect + Practitioner."""
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import dialog
+    gen = dialog.make_dialog_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, topic,
+            max_beats=max_beats,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {"package_id": -1,
+                    "validation_issues": [
+                        {"severity": i.severity, "message": i.message} for i in issues],
+                    "notes": list(report.notes)}
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "n_beats": metadata.get("n_beats", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
+def generate_author_panel(
+    panel_name: str,
+    topics: list[str],
+    characters: Optional[list[dict[str, Any]]] = None,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 14 — generate an Author Panel debating per-topic positions
+    across N≥2 characters.
+
+    Args:
+        panel_name: Title of the panel (e.g. "How to learn distributed systems").
+        topics: List of topic concept names to score.
+        characters: Optional N>2 character profiles. Each dict has:
+            name, bio, preferred_relations, preferred_concept_types,
+            preferred_era. Defaults to [Architect, Practitioner].
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import author_panel
+    import character as char_mod
+    chars = char_mod.parse_character_json(characters) if characters else None
+    gen = author_panel.make_author_panel_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, panel_name,
+            topics=topics, characters=chars, panel_name=panel_name,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {"package_id": -1,
+                    "validation_issues": [
+                        {"severity": i.severity, "message": i.message} for i in issues],
+                    "notes": list(report.notes)}
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "n_characters": metadata.get("n_characters", 0),
+        "n_topics": metadata.get("n_topics", 0),
+        "max_spread": metadata.get("max_spread", 0.0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
