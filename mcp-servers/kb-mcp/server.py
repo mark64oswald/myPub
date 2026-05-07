@@ -2059,6 +2059,86 @@ def generate_slide_deck(
     }
 
 
+@mcp.tool
+def generate_pattern_catalog(
+    domain: str,
+    max_depth: int = 2,
+    max_patterns: int = 30,
+    max_anti_patterns: int = 20,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 11 — generate a Pattern + Anti-Pattern Catalog.
+
+    Discovers Pattern-typed concepts in the domain neighborhood,
+    groups them by IMPLEMENTS-target overlap (families), and surfaces
+    CONTRASTS_WITH neighbors as anti-patterns. Per-pattern docs
+    include When-To-Use / When-NOT-To-Use / References.
+
+    Foundational for Phase 15 Project Bootstrap.
+
+    Args:
+        domain: Domain name (e.g. "resilience", "data ingestion",
+            "domain modeling"). Resolved via EntityResolver.
+        max_depth: BFS depth from domain seed (default 2).
+        max_patterns: Cap on pattern count (default 30).
+        max_anti_patterns: Cap on anti-pattern count (default 20).
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_patterns,
+        n_families, n_anti_patterns, file_paths, validation_issues,
+        notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import pattern_catalog
+
+    gen = pattern_catalog.make_pattern_catalog_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, domain,
+            max_depth=max_depth,
+            max_patterns=max_patterns,
+            max_anti_patterns=max_anti_patterns,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_patterns": metadata.get("n_patterns", 0),
+        "n_families": metadata.get("n_families", 0),
+        "n_anti_patterns": metadata.get("n_anti_patterns", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
