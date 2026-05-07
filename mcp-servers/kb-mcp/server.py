@@ -1807,6 +1807,94 @@ def generate_concept_map(
     }
 
 
+@mcp.tool
+def generate_learning_path(
+    target: str,
+    start: Optional[str] = None,
+    max_depth: int = 4,
+    max_concepts: int = 30,
+    target_stage_size: int = 5,
+    max_chapters_per_stage: int = 4,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 8 — generate a Learning Path package.
+
+    Walks REQUIRES + EXTENDS edges backward from ``target`` to surface
+    its prerequisite chain, groups concepts into ordered learning
+    stages by depth, and assigns the strongest book chapters per
+    stage. Optional ``start`` clips the path to material the user
+    doesn't already know.
+
+    Fully deterministic — no sub-agent dispatch. Output is a folder
+    with ``_path.md`` overview and ``stage-N-<slug>/reading-list.md``
+    per stage. Coverage gaps (concepts with zero book chapter
+    coverage) are flagged inline.
+
+    Args:
+        target: Target concept name (e.g. "CDC Pipeline Design").
+        start: Optional starting concept (already-known) to clip the
+            path at. Pass None for the full prerequisite tree.
+        max_depth: Cap on prerequisite chain length (default 6).
+        target_stage_size: Target concepts per stage (3-7 typical).
+        max_chapters_per_stage: Top-K chapters recommended per stage.
+        output_root: Output folder root (default
+            ``data/generated-packages/``).
+        overwrite: When False, skip existing files.
+
+    Returns:
+        ``{package_id, package_name, output_root, n_stages, n_concepts,
+        file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import learning_path
+
+    gen = learning_path.make_learning_path_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, target,
+            start=start,
+            max_depth=max_depth,
+            max_concepts=max_concepts,
+            target_size=target_stage_size,
+            max_chapters=max_chapters_per_stage,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_stages": metadata.get("n_stages", 0),
+        "n_concepts": metadata.get("n_concepts", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------

@@ -39,8 +39,7 @@ backward compatibility; new generators land in ``generated_*``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Sequence
+from typing import Any, Optional, Protocol
 
 import duckdb
 
@@ -138,7 +137,9 @@ class Decomposer(Protocol):
         resolver: Any,
         query: str,
         **kwargs: Any,
-    ) -> Any: ...
+    ) -> Any:
+        """Run the decomposition; return data shaped for the matching Planner."""
+        raise NotImplementedError
 
 
 class Planner(Protocol):
@@ -158,7 +159,9 @@ class Planner(Protocol):
         *,
         package_name: Optional[str],
         **kwargs: Any,
-    ) -> GenPlan: ...
+    ) -> GenPlan:
+        """Render the decomposition into a ``GenPlan`` ready to persist."""
+        raise NotImplementedError
 
 
 class Validator(Protocol):
@@ -170,7 +173,9 @@ class Validator(Protocol):
         self,
         conn: duckdb.DuckDBPyConnection,
         plan: GenPlan,
-    ) -> list[ValidationIssue]: ...
+    ) -> list[ValidationIssue]:
+        """Return validation issues; severity='error' fails persistence."""
+        raise NotImplementedError
 
 
 class Materializer(Protocol):
@@ -185,7 +190,9 @@ class Materializer(Protocol):
         output_root: str,
         *,
         overwrite: bool = True,
-    ) -> "MaterializeReport": ...
+    ) -> "MaterializeReport":
+        """Write the package's persisted artifacts to disk."""
+        raise NotImplementedError
 
 
 @dataclass
@@ -216,18 +223,32 @@ def upsert_package(
     """
     import json as _json
 
+    metadata_json = (
+        _json.dumps(plan.package_metadata, sort_keys=True)
+        if plan.package_metadata else None
+    )
     existing = conn.execute(
         "SELECT package_id FROM generated_package "
         " WHERE generator_type = ? AND name = ?",
         [plan.generator_type, plan.package_name],
     ).fetchone()
     if existing:
-        return int(existing[0])
+        # Refresh metadata + domain on re-run; tunables may have changed
+        # (depth, max_concepts, etc.) and the row's metadata_json should
+        # reflect what's actually persisted now.
+        pkg_id = int(existing[0])
+        conn.execute(
+            """
+            UPDATE generated_package
+               SET domain = ?, target_audience = ?, source_query = ?,
+                   metadata_json = ?
+             WHERE package_id = ?
+            """,
+            [plan.domain, plan.target_audience, plan.source_query,
+             metadata_json, pkg_id],
+        )
+        return pkg_id
 
-    metadata_json = (
-        _json.dumps(plan.package_metadata, sort_keys=True)
-        if plan.package_metadata else None
-    )
     row = conn.execute(
         """
         INSERT INTO generated_package
