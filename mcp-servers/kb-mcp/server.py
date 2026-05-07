@@ -1508,6 +1508,169 @@ def find_prerequisites(
 
 
 # ---------------------------------------------------------------------------
+# Skills Factory MCP tools (Phase 5.4)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def generate_skills_prep(
+    domain: str,
+    package_name: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    retrieval_limit: int = 12,
+    max_depth: int = 3,
+    max_neighborhood: int = 200,
+    min_cluster_size: int = 3,
+) -> dict[str, Any]:
+    """Phase 5.4 step 1+2 — decompose, plan, and write per-Skill prompts.
+
+    Call this first. The slash-command driver (``/kb-generate-skills``)
+    then dispatches one Claude Code sub-agent per prompt. Each
+    sub-agent reads ``prompt_skill_<id>.txt`` and writes
+    ``result_skill_<id>.json``.
+
+    Args:
+        domain: Free-text domain string (e.g. "CDC with Databricks").
+        package_name: Optional override; defaults to a slug of ``domain``.
+        output_dir: Where to write the prompt manifest. Defaults to
+            ``data/skill-runs/<package_name>/``.
+        retrieval_limit: Top-N candidates per Skill for ranking.
+        max_depth, max_neighborhood, min_cluster_size:
+            Decomposition tunables — usually leave defaults.
+
+    Returns:
+        ``{package_name, domain, output_dir, n_skills, prompt_paths,
+        result_paths, planned_skills, notes}``.
+        ``planned_skills`` is a compact summary the slash command can
+        render to the user when listing Skills to dispatch.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import skills_factory
+
+    plan, prep = skills_factory.run_full_package(
+        _CONN, _RESOLVER, domain,
+        search_fn=search_chapters,
+        package_name=package_name,
+        output_dir=Path(output_dir) if output_dir else None,
+        retrieval_limit=retrieval_limit,
+        max_depth=max_depth,
+        max_neighborhood=max_neighborhood,
+        min_cluster_size=min_cluster_size,
+    )
+    planned_summary = [
+        {
+            "cluster_id": ps.proposed.cluster_id,
+            "name": ps.proposed.suggested_name or ps.proposed.anchor_concept_name,
+            "anchor": ps.proposed.anchor_concept_name,
+            "strategy": ps.strategy,
+            "strategy_rationale": ps.strategy_rationale,
+            "folder_name": ps.folder_name,
+            "n_concepts": len(ps.proposed.concept_ids),
+            "requires_cluster_ids": list(ps.requires_cluster_ids),
+            "references_cluster_ids": list(ps.references_cluster_ids),
+        }
+        for ps in plan.planned_skills
+    ]
+    return {
+        "package_name": prep.package_name,
+        "domain": prep.domain,
+        "output_dir": prep.output_dir,
+        "n_skills": prep.n_skills,
+        "prompt_paths": prep.skill_prompt_paths,
+        "result_paths": prep.skill_result_paths,
+        "planned_skills": planned_summary,
+        "package_folder_root": plan.folder_root,
+        "notes": prep.notes,
+    }
+
+
+@mcp.tool
+def generate_skills_process(output_dir: str) -> dict[str, Any]:
+    """Phase 5.4 step 3 — ingest sub-agent results into the catalog.
+
+    Reads ``<output_dir>/results/result_skill_<id>.json`` for every
+    skill in the manifest, validates, and writes the Skill rows +
+    full §8.6 provenance. Idempotent: re-running clears prior skills
+    for the package and re-ingests fresh.
+
+    Args:
+        output_dir: Same path passed to ``generate_skills_prep``.
+
+    Returns:
+        ``{package_id, package_name, total, processed, missing,
+        unparseable, skill_ids}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import skills_factory
+
+    with _temporarily_open_writer() as rw_conn:
+        summary = skills_factory.process_package(rw_conn, Path(output_dir))
+        # Pull the package name once we have the id, before the writer
+        # context closes.
+        pkg_name = ""
+        if summary.package_id is not None:
+            row = rw_conn.execute(
+                "SELECT name FROM skill_package WHERE package_id = ?",
+                [summary.package_id],
+            ).fetchone()
+            if row:
+                pkg_name = row[0]
+    return {
+        "package_id": summary.package_id,
+        "package_name": pkg_name,
+        "total": summary.total,
+        "processed": summary.processed,
+        "missing": summary.missing,
+        "unparseable": summary.unparseable,
+        "skill_ids": list(summary.skill_ids),
+    }
+
+
+@mcp.tool
+def generate_skills_materialize(
+    package_id: Optional[int] = None,
+    package_name: Optional[str] = None,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 5.4 step 4 — write SKILL.md files to disk.
+
+    Walks the ``skill`` rows for the package and writes one
+    ``SKILL.md`` per skill plus a ``_provenance.json`` audit file.
+    Also writes a package-level ``_package.md`` summary.
+
+    Args:
+        package_id, package_name: Identify the package. Provide one.
+        output_root: Where the package folder goes. Defaults to
+            ``data/generated-packages/``.
+        overwrite: When False, skip existing files and report them.
+
+    Returns:
+        ``{package_id, package_name, output_root, skill_md_paths,
+        provenance_paths, package_md_path}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import skills_factory
+
+    report = skills_factory.materialize_package(
+        _CONN,
+        package_id=package_id, package_name=package_name,
+        output_root=output_root, overwrite=overwrite,
+    )
+    return {
+        "package_id": report.package_id,
+        "package_name": report.package_name,
+        "output_root": report.output_root,
+        "skill_md_paths": report.skill_md_paths,
+        "provenance_paths": report.provenance_paths,
+        "package_md_path": report.package_md_path,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
