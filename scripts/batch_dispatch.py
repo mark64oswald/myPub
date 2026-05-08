@@ -1228,6 +1228,37 @@ def do_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_request_with_max_tokens(custom_id: str, user_text: str,
+                                    model: str, task: str,
+                                    max_tokens: int) -> dict:
+    """Like _build_request but caller specifies max_tokens.
+
+    Used by recovery to bump the per-request output budget — the
+    most common failure mode at scale is truncated JSON when the
+    model hits 2048 max_tokens before finishing the entities/
+    relations/procedures list.
+    """
+    prompt, schema = TASKS[task]
+    return {
+        "custom_id": custom_id,
+        "params": {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": [
+                {
+                    "type": "text",
+                    "text": prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "messages": [{"role": "user", "content": user_text}],
+            "output_config": {
+                "format": {"type": "json_schema", "schema": schema}
+            },
+        },
+    }
+
+
 def _build_request_no_strict_schema(custom_id: str, user_text: str,
                                      model: str, task: str) -> dict:
     """Like _build_request but drops output_config.format.
@@ -1258,27 +1289,24 @@ def _build_request_no_strict_schema(custom_id: str, user_text: str,
 
 
 def do_recover(args: argparse.Namespace) -> int:
-    """Resubmit chapters that errored in a prior run.
+    """Resubmit chapters that need recovery.
 
-    Walks each batch in the source state file, queries the API for
-    error results, and resubmits those custom_ids in a single
-    recovery batch. For grammar-compilation timeouts (Anthropic's
-    schema FSM can't process certain inputs), ``--no-strict-schema``
-    drops ``output_config.format`` so the request goes through.
+    Recovery scope = chapters in the source manifest whose result
+    file is (a) missing, (b) replaced by a ``.error.json`` sidecar,
+    or (c) present but doesn't parse as JSON. The third case is the
+    common one at scale: requests that hit ``max_tokens`` produce
+    truncated output that fails JSON parse downstream.
+
+    The recovery batch resubmits with ``max_tokens=4096`` by default
+    (vs the 2048 production default), giving the model headroom to
+    finish the entity / relation / procedure list. ``--no-strict-schema``
+    drops ``output_config.format`` for cases where Anthropic's FSM
+    compilation times out.
 
     Writes a new state file at ``<state>.recovery[.no-schema].json``
     so the original state is preserved. Result files land in the
     same results/ directory used by the original run, overwriting
     any prior ``.error.json`` sidecars.
-
-    Workflow:
-
-        # First pass — retries everything; transients usually clear
-        batch_dispatch.py recover --state <state> --task concepts
-
-        # Second pass — for any remaining grammar-timeout chapters
-        batch_dispatch.py recover --state <state> --task concepts \\
-            --no-strict-schema --only-grammar-timeouts
     """
     _verify_cache_eligibility(args.task)
 
@@ -1286,73 +1314,85 @@ def do_recover(args: argparse.Namespace) -> int:
     state = _load_state(state_path)
     client = anthropic.Anthropic()
 
-    # Gather errored custom_ids (and their error types) from the API.
-    LOG.info("scanning %d batches for errors...", len(state.batches))
-    errored: list[tuple[str, str]] = []  # (custom_id, error_type)
-    for be in state.batches:
-        for result in client.messages.batches.results(be.batch_id):
-            if result.result.type == "errored":
-                err = result.result.error
-                etype = err.error.type if hasattr(err, "error") else "unknown"
-                errored.append((result.custom_id, etype))
-    LOG.info("found %d errored requests", len(errored))
+    # Audit which chapters need recovery — work from disk, not the API.
+    # Catches the common case (parse failures from max_tokens
+    # truncation) that the API doesn't flag as errors.
+    manifest_path = Path(state.manifest_path)
+    manifest = json.loads(manifest_path.read_text())
+    LOG.info("auditing %d chapters in manifest...", len(manifest["chapters"]))
 
-    # Optionally narrow to grammar-timeout-only.
-    if args.only_grammar_timeouts:
-        errored = [(cid, t) for (cid, t) in errored
-                   if t == "invalid_request_error"]
-        LOG.info("filtered to %d grammar-timeout requests "
-                 "(--only-grammar-timeouts)", len(errored))
+    needs_recovery: list[int] = []  # chapter_ids
+    parse_fail = error_sidecar = missing = 0
+    for entry in manifest["chapters"]:
+        cid = entry["chapter_id"]
+        rp_str = entry["result_path"]
+        rp = Path(rp_str)
+        if not rp.is_absolute():
+            rp = PROJECT_ROOT / rp
+        ep = rp.with_suffix(".error.json")
+        if rp.exists():
+            try:
+                json.loads(rp.read_text())  # plain parse — no markdown stripping
+            except json.JSONDecodeError:
+                parse_fail += 1
+                needs_recovery.append(cid)
+        elif ep.exists():
+            error_sidecar += 1
+            needs_recovery.append(cid)
+        else:
+            missing += 1
+            needs_recovery.append(cid)
+    LOG.info("recovery scope: %d chapters (%d parse-fail, "
+             "%d error-sidecar, %d missing)",
+             len(needs_recovery), parse_fail, error_sidecar, missing)
 
-    if not errored:
-        LOG.info("no errors to recover")
+    if not needs_recovery:
+        LOG.info("no chapters to recover")
         return 0
 
-    # Map custom_id 'chapter-<id>' back to chapter_id.
-    chapter_ids = []
-    for cid, _et in errored:
-        if not cid.startswith("chapter-"):
-            LOG.warning("skip unrecognized custom_id format: %s", cid)
-            continue
-        chapter_ids.append((cid, int(cid.split("-", 1)[1])))
-
-    # Load chapters and build requests. Uses RO catalog access — must
-    # not run while another process holds the RW lock.
+    # Load chapter content + build requests. RO catalog access —
+    # must not run while another process holds the RW lock.
     import duckdb  # pylint: disable=import-outside-toplevel
     catalog = PROJECT_ROOT / "data" / "catalog.ddb"
     conn = duckdb.connect(str(catalog), read_only=True)
 
     requests = []
-    builder = (_build_request_no_strict_schema if args.no_strict_schema
-               else _build_request)
-    for cid, chapter_id in chapter_ids:
+    for chapter_id in needs_recovery:
         try:
             chapter = _load_chapter(conn, chapter_id)
         except ValueError as exc:
             LOG.warning("skip chapter_id=%d: %s", chapter_id, exc)
             continue
+        custom_id = f"chapter-{chapter_id}"
         user_text = (
             f"--- CHAPTER TO EXTRACT ---\n\n"
             f"{_build_user_prompt(chapter)}\n\n"
             f"Respond with JSON only. No prose, no markdown fences."
         )
-        requests.append(builder(cid, user_text, args.model, args.task))
+        if args.no_strict_schema:
+            req = _build_request_no_strict_schema(
+                custom_id, user_text, args.model, args.task
+            )
+            req["params"]["max_tokens"] = args.max_tokens
+        else:
+            req = _build_request_with_max_tokens(
+                custom_id, user_text, args.model, args.task, args.max_tokens
+            )
+        requests.append(req)
     conn.close()
 
     if not requests:
         LOG.warning("no requests built — nothing to dispatch")
         return 0
-    LOG.info("submitting recovery batch of %d requests "
-             "(no_strict_schema=%s)", len(requests), args.no_strict_schema)
+    LOG.info("submitting recovery: %d requests, max_tokens=%d, "
+             "no_strict_schema=%s",
+             len(requests), args.max_tokens, args.no_strict_schema)
 
     if args.dry_run:
         LOG.info("DRY-RUN — not submitting")
         return 0
 
-    batch = client.messages.batches.create(requests=requests)
-    LOG.info("batch_id=%s status=%s", batch.id, batch.processing_status)
-
-    # Sidecar state for the recovery run.
+    # Chunk into batches of <= 5000 to stay under 256MB-per-batch limit.
     suffix = ".no-schema" if args.no_strict_schema else ""
     recovery_state_path = state_path.with_suffix(
         f".recovery{suffix}.json"
@@ -1362,15 +1402,25 @@ def do_recover(args: argparse.Namespace) -> int:
         output_dir=state.output_dir,
         model=state.model,
         created_at=datetime.now(timezone.utc).isoformat(),
-        batches=[BatchEntry(
-            batch_id=batch.id,
-            custom_ids=[cid for cid, _ in chapter_ids],
-            submitted_at=datetime.now(timezone.utc).isoformat(),
-        )],
     )
-    _save_state(recovery_state, recovery_state_path)
+    chunk_size = args.batch_size
+    for i in range(0, len(requests), chunk_size):
+        chunk = requests[i:i + chunk_size]
+        chunk_cids = [r["custom_id"] for r in chunk]
+        LOG.info("submitting recovery batch %d (%d requests)",
+                 i // chunk_size + 1, len(chunk))
+        batch = client.messages.batches.create(requests=chunk)
+        LOG.info("  -> batch_id=%s status=%s",
+                 batch.id, batch.processing_status)
+        recovery_state.batches.append(BatchEntry(
+            batch_id=batch.id,
+            custom_ids=chunk_cids,
+            submitted_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        _save_state(recovery_state, recovery_state_path)
+
     LOG.info("recovery state saved to %s", recovery_state_path)
-    LOG.info("next steps: poll then fetch:")
+    LOG.info("next: poll + fetch:")
     LOG.info("  batch_dispatch.py poll  --state %s", recovery_state_path)
     LOG.info("  batch_dispatch.py fetch --state %s", recovery_state_path)
     return 0
@@ -1439,14 +1489,18 @@ def main() -> int:
                            required=True)
     p_recover.add_argument("--model", default=DEFAULT_MODEL)
     p_recover.add_argument(
-        "--no-strict-schema", action="store_true",
-        help="Drop output_config.format; use this for grammar-timeout "
-             "fallback retries.",
+        "--max-tokens", type=int, default=4096,
+        help="Per-request output budget (default 4096; production "
+             "default was 2048; truncation is the common failure).",
     )
     p_recover.add_argument(
-        "--only-grammar-timeouts", action="store_true",
-        help="Limit recovery to invalid_request_error (grammar-timeout) "
-             "rows only — pair with --no-strict-schema.",
+        "--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+        help="Chunk requests into batches of this size",
+    )
+    p_recover.add_argument(
+        "--no-strict-schema", action="store_true",
+        help="Drop output_config.format; use this as a follow-up "
+             "for any chapters that still fail with grammar timeouts.",
     )
     p_recover.add_argument("--dry-run", action="store_true")
     p_recover.set_defaults(func=do_recover)
