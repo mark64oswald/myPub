@@ -92,12 +92,16 @@ from ebooklib import epub
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+MCP_DIR = PROJECT_ROOT / "mcp-servers" / "kb-mcp"
 DEFAULT_CATALOG = PROJECT_ROOT / "data" / "catalog.ddb"
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+if str(MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR))
 
 import index_books as ib  # noqa: E402  # pylint: disable=wrong-import-position
+from db import open_catalog  # noqa: E402  # pylint: disable=wrong-import-position
 
 LOG = logging.getLogger("migrate_phase1_splitter")
 
@@ -523,7 +527,10 @@ def main() -> int:
         LOG.error("catalog not found: %s", args.catalog)
         return 1
 
-    conn = duckdb.connect(str(args.catalog), read_only=False)
+    # open_catalog loads VSS / FTS / DuckPGQ — required to DELETE from
+    # HNSW-indexed tables like chapter_embedding (otherwise: "Cannot
+    # bind index 'chapter_embedding', unknown index type 'HNSW'").
+    conn = open_catalog(catalog_path=args.catalog, read_only=False)
     try:
         books = select_books(conn, book_id=args.book_id, limit=args.limit)
         if not books:
