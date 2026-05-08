@@ -76,3 +76,7 @@ data/batch-runs/
 data/dedupe-runs/
 data/skill-runs/
 data/generated-packages/
+data/refresh/
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
