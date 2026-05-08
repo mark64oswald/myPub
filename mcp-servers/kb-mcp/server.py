@@ -859,7 +859,7 @@ def _rrf_merge(
 mcp = FastMCP(
     "mypub-kb",
     instructions=(
-        "myPub knowledge base: hybrid retrieval over ~345 technical eBooks. "
+        "myPub knowledge base: hybrid retrieval over ~540 technical eBooks. "
         "search_chapters fans out BM25, vector, and concept-graph queries; "
         "compare_concept_across_authors and find_prerequisites read the "
         "concept graph directly."
