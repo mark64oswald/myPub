@@ -49,6 +49,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -382,7 +383,14 @@ class Context7Fetcher:
         return asyncio.run(self._fetch_async(identifier, qs))
 
     async def _fetch_async(self, identifier: str, queries: list[str]) -> FetchResult:
-        params = StdioServerParameters(command=self.NPX_COMMAND, args=list(self.NPX_ARGS))
+        # Pass --api-key from env (anonymous access has a low quota; the
+        # MCP server reads CONTEXT7_API_KEY but stdio_client's env
+        # propagation is unreliable, so passing as a CLI arg is the fix).
+        args = list(self.NPX_ARGS)
+        api_key = os.environ.get("CONTEXT7_API_KEY")
+        if api_key:
+            args.extend(["--api-key", api_key])
+        params = StdioServerParameters(command=self.NPX_COMMAND, args=args)
         try:
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:

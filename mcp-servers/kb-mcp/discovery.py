@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -223,7 +224,15 @@ def _text_signals_from_row(r: dict[str, Any]) -> list[str]:
 
 
 class Context7Prober:
-    """Probes Context7 via ``resolve-library-id`` to find matching libraries."""
+    """Probes Context7 via ``resolve-library-id`` to find matching libraries.
+
+    If ``CONTEXT7_API_KEY`` is set in the environment, it's appended as
+    ``--api-key <key>`` to the npx args. Anonymous usage hits a low
+    monthly quota; an API key (free tier sufficient for our scale)
+    raises that. The MCP server reads CONTEXT7_API_KEY natively too,
+    but only if the environment is propagated through stdio_client —
+    passing it as a CLI arg is the reliable path.
+    """
 
     NPX_COMMAND = "npx"
     NPX_ARGS = ("-y", "@upstash/context7-mcp")
@@ -233,8 +242,12 @@ class Context7Prober:
         return asyncio.run(self._probe_async(query_term))
 
     async def _probe_async(self, query_term: str) -> ProbeResult:
+        args = list(self.NPX_ARGS)
+        api_key = os.environ.get("CONTEXT7_API_KEY")
+        if api_key:
+            args.extend(["--api-key", api_key])
         params = StdioServerParameters(
-            command=self.NPX_COMMAND, args=list(self.NPX_ARGS),
+            command=self.NPX_COMMAND, args=args,
         )
         try:
             async with stdio_client(params) as (read, write):
