@@ -29,6 +29,19 @@ from typing import Iterator
 
 import duckdb
 
+# Load db.open_catalog so we get VSS/FTS/DuckPGQ on the connection.
+# Required because chapter_embedding / concept_embedding / etc. carry
+# HNSW indexes — DuckDB refuses INSERT/UPDATE/DELETE on HNSW-indexed
+# tables when the VSS extension isn't loaded:
+#   _duckdb.Error: Cannot bind index 'chapter_embedding',
+#   unknown index type 'HNSW'.
+# This script writes embeddings, so it must use open_catalog.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MCP_DIR = PROJECT_ROOT / "mcp-servers" / "kb-mcp"
+if str(MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR))
+from db import open_catalog  # noqa: E402  # pylint: disable=wrong-import-position
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CATALOG = PROJECT_ROOT / "data" / "catalog.ddb"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -214,7 +227,7 @@ def main() -> int:
              model.max_seq_length, model.get_embedding_dimension())
     assert model.get_embedding_dimension() == EMBED_DIM
 
-    conn = duckdb.connect(str(args.catalog))
+    conn = open_catalog(catalog_path=args.catalog, read_only=False)
     try:
         total_start = time.time()
 
