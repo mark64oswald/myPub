@@ -85,14 +85,26 @@ from extract_entities import (  # noqa: E402  # pylint: disable=wrong-import-pos
 from extract_procedures import (  # noqa: E402  # pylint: disable=wrong-import-position
     SYSTEM_PROMPT as PROCEDURE_SYSTEM_PROMPT,
 )
+from refresh_docs import (  # noqa: E402  # pylint: disable=wrong-import-position
+    ALIGNMENT_SYSTEM_PROMPT,
+)
 
 LOG = logging.getLogger("batch_dispatch")
 
 DEFAULT_MODEL = "claude-haiku-4-5"
+ALIGNMENT_MODEL = "claude-sonnet-4-6"
 DEFAULT_BATCH_SIZE = 15000
-CACHE_MIN_HAIKU = 4096
+CACHE_MIN_HAIKU = 4096   # Haiku 4.5 / Opus 4.6 / Opus 4.5 minimum
+CACHE_MIN_SONNET = 2048  # Sonnet 4.6 minimum
 DEFAULT_MAX_TOKENS = 2048
 POLL_INTERVAL_SECONDS = 60
+
+# Per-task cache minimum (depends on the model that task uses).
+TASK_CACHE_MIN: dict[str, int] = {
+    "concepts":   CACHE_MIN_HAIKU,
+    "procedures": CACHE_MIN_HAIKU,
+    "alignment":  CACHE_MIN_SONNET,
+}
 
 # Output schemas — guarantee the response is valid JSON of the right shape.
 CONCEPT_OUTPUT_SCHEMA = {
@@ -875,11 +887,422 @@ no concrete action like "edit a config file" or "run a command.")
 End of guidance. Now extract procedures from the chapter provided below."""
 
 
+# Alignment uses Sonnet 4.6 (better at nuanced CORROBORATES/CONTRADICTS
+# judgment) with a 2048-token cache minimum. Base ALIGNMENT_SYSTEM_PROMPT
+# is ~445 tokens; padding adds disambiguation guidance + worked examples
+# until the prompt is comfortably above 2048.
+EXTENDED_ALIGNMENT_PROMPT = ALIGNMENT_SYSTEM_PROMPT + """
+
+
+--- DISAMBIGUATION ---
+
+CORROBORATES is the right call when the doc and the chapter are
+saying *the same specific thing* about the concept. Two questions
+disambiguate:
+
+1. Is the agreement specific or generic?
+   "Both mention concept X" is generic — every chapter that names X
+   technically corroborates the doc. That's not useful. Look for
+   agreement on a *mechanism*, *defaulted behavior*, *recommended
+   approach*, or *exact API shape*.
+
+2. Could the chapter conceivably contradict the doc on this point,
+   even though it doesn't? If the chapter is too high-level to
+   support OR contradict the doc's specific claim, skip — there's
+   no real alignment to judge.
+
+CONTRADICTS is the right call when the doc and the chapter make
+substantively *different* claims:
+  * Different mechanism for the same outcome (and they each describe
+    why their mechanism is correct)
+  * Different defaults / required configuration
+  * The doc shows an API the chapter labels deprecated, or vice versa
+  * Different recommendations for the same scenario
+
+NOT contradictions:
+  * Different vocabulary for the same idea ("idempotent producer" in
+    the doc vs. "exactly-once producer" in the chapter)
+  * The doc covers a feature the chapter doesn't mention
+  * The chapter discusses a pre-version of the doc's feature
+
+(skip) — the most-common correct answer. Use it when:
+  * Confidence is below ~0.7
+  * The chapter excerpt is too short to support the claim
+  * The concept is generic ("data", "system", "process")
+  * The chapter happens to mention the concept in passing without
+    describing it
+
+Specificity beats coverage. A handful of high-confidence edges is
+worth more than a list of weak ones.
+
+--- WORKED EXAMPLES ---
+
+EXAMPLE 1 — strong corroboration on a specific mechanism.
+
+DOC: Apache Kafka, "Producer Configuration" (2026 snapshot)
+"To enable exactly-once delivery, set enable.idempotence=true on
+the producer. The broker assigns a producer ID and a sequence
+number; duplicate writes from a retry are dropped on the broker
+side."
+
+CHAPTER excerpt: Confluent's "Designing Event-Driven Systems" by
+Stopford (chapter "Idempotent Producers"):
+"The Kafka idempotent producer prevents duplicate writes on retry
+by tagging each request with a producer ID and a per-partition
+sequence number. The broker tracks the last sequence per producer
+ID and rejects out-of-order or repeated writes."
+
+Expected output:
+{
+  "alignments": [
+    {
+      "concept_id": <Idempotent Producer concept_id>,
+      "to_chapter_id": <Stopford ch concept_id>,
+      "relation_type": "CORROBORATES",
+      "confidence": 0.92,
+      "explanation": "Both attribute idempotency to producer-ID + sequence-number tracking on the broker side."
+    }
+  ]
+}
+
+EXAMPLE 2 — contradiction on a default-behavior claim.
+
+DOC: Apache Kafka 3.x, "Producer Configuration" (2026 snapshot)
+"enable.idempotence is true by default starting Kafka 3.0. No
+explicit configuration is needed for the basic exactly-once
+producer."
+
+CHAPTER excerpt: "Kafka: The Definitive Guide" 1st ed. (2017),
+chapter on producer configs:
+"By default, Kafka producers do not enable idempotence. To opt in,
+set enable.idempotence=true and verify acks=all. Without this
+configuration, the producer will silently duplicate messages on
+retry."
+
+Expected output:
+{
+  "alignments": [
+    {
+      "concept_id": <Idempotent Producer concept_id>,
+      "to_chapter_id": <Definitive Guide 1st ed ch>,
+      "relation_type": "CONTRADICTS",
+      "confidence": 0.88,
+      "explanation": "Doc states idempotence is default in Kafka 3.0+; the 2017 chapter states it is off by default and must be opted in."
+    }
+  ]
+}
+
+EXAMPLE 3 — generic mention, no real alignment.
+
+DOC: PostgreSQL, "Backup and Restore" (2026 snapshot)
+"PostgreSQL supports several backup strategies including pg_dump
+for logical backups, pg_basebackup for physical backups, and PITR
+via WAL archiving."
+
+CHAPTER excerpt: A general "Database Internals" book chapter
+that says: "Most databases offer multiple backup strategies; the
+choice depends on RTO/RPO requirements." (no specifics about
+PostgreSQL)
+
+Expected output:
+{
+  "alignments": []
+}
+
+(The chapter mentions backup strategies generically. There's
+nothing specific to corroborate or contradict.)
+
+EXAMPLE 4 — multiple alignments per section.
+
+DOC: Apache Spark, "Structured Streaming" (2026 snapshot, fragment)
+"Structured Streaming uses micro-batches by default; switch to
+continuous processing mode with .trigger(continuous='1 second')
+for sub-second latency. Watermarks must be specified to drop
+late events. Output mode 'append' is the default; use 'update'
+for in-place updates and 'complete' to replay the entire result
+table."
+
+CHAPTER excerpts:
+  * Karau et al., "Learning Spark" 2nd ed., ch. on Structured
+    Streaming: "Structured Streaming defaults to micro-batch
+    processing. The trigger() method controls batch frequency..."
+    (matches micro-batch claim, no continuous-mode discussion)
+  * Damji et al., "Learning Spark" 2nd ed. (different chapter):
+    "Watermarks tell Spark when to drop late-arriving data. Without
+    a watermark, Spark must keep all state indefinitely."
+    (matches watermark claim)
+
+Expected output:
+{
+  "alignments": [
+    {"concept_id": <Structured Streaming>, "to_chapter_id": <Karau ch>,
+     "relation_type": "CORROBORATES", "confidence": 0.85,
+     "explanation": "Both describe Structured Streaming as micro-batch by default."},
+    {"concept_id": <Watermark>, "to_chapter_id": <Damji ch>,
+     "relation_type": "CORROBORATES", "confidence": 0.90,
+     "explanation": "Both explain watermarks as the mechanism that lets Spark drop late-arriving data and bound state."}
+  ]
+}
+
+EXAMPLE 5 — passing-mention false candidate.
+
+DOC: LangChain, "Memory" (2026 snapshot)
+"LangChain provides several memory implementations:
+ConversationBufferMemory stores the entire conversation;
+ConversationSummaryMemory keeps an LLM-generated summary;
+VectorStoreRetrieverMemory pulls relevant context from a
+vector store via semantic search."
+
+CHAPTER excerpt: A general LLM book that has a paragraph in an
+intro chapter saying: "LangChain offers a memory abstraction
+that we'll explore in chapter 12." (no actual content about
+memory mechanisms)
+
+Expected output:
+{
+  "alignments": []
+}
+
+(The chapter only mentions LangChain memory in passing. Nothing
+substantive to corroborate.)
+
+EXAMPLE 6 — corroboration that's lower-confidence due to
+overlap-not-equality.
+
+DOC: Delta Lake, "Time Travel" (2026 snapshot)
+"Delta Lake lets you query a table as of a specific version or
+timestamp. Use VERSION AS OF or TIMESTAMP AS OF in SQL, or the
+.option('versionAsOf', N) on the DataFrame reader."
+
+CHAPTER excerpt: "Lakehouse" book, ch. on Delta Lake:
+"Delta Lake's transaction log enables time-travel queries by
+keeping all historical commits. Older versions can be queried
+either by version number (VERSION AS OF) or timestamp."
+
+Expected output:
+{
+  "alignments": [
+    {
+      "concept_id": <Time Travel concept_id>,
+      "to_chapter_id": <Lakehouse ch>,
+      "relation_type": "CORROBORATES",
+      "confidence": 0.78,
+      "explanation": "Both describe time travel as version- or timestamp-based queries enabled by the Delta transaction log; chapter doesn't include the DataFrame reader option but covers the SQL form."
+    }
+  ]
+}
+
+(Confidence at 0.78 because the chapter covers the SQL form but
+not the .option() form — partial overlap. Still CORROBORATES on
+the SQL claim, which is the bulk of the doc's content.)
+
+--- CONFIDENCE CALIBRATION ---
+
+0.95–1.00  Identical claim, almost-identical wording. Rare.
+0.85–0.94  Same mechanism / default / recommendation, different
+           phrasing. Most explicit alignments land here.
+0.70–0.84  Same mechanism but partial overlap (chapter covers the
+           main case, doc covers a few extras the chapter doesn't
+           mention). Or: clear alignment but the chapter excerpt
+           is shorter than ideal.
+0.60–0.69  Plausible alignment but the chapter is somewhat tangential.
+           Use sparingly.
+< 0.60     Skip — confidence isn't there.
+
+For CONTRADICTS specifically, lean on the higher end. A
+weak-confidence contradiction is usually better skipped than
+recorded as low-confidence — false-positive contradictions
+mislead the Migration Guide and Currency Report generators.
+
+EXAMPLE 7 — a near-miss that should NOT contradict.
+
+DOC: PostgreSQL, "Vacuuming Basics" (2026 snapshot)
+"PostgreSQL automatically runs autovacuum to reclaim storage and
+update statistics. The default schedule triggers autovacuum on a
+table when more than 20% of its rows have been updated/deleted.
+You can tune autovacuum_vacuum_scale_factor to adjust this."
+
+CHAPTER excerpt: "PostgreSQL: Up and Running" 3rd ed., ch. on
+maintenance:
+"VACUUM in PostgreSQL reclaims storage from dead tuples. You can
+run it manually with VACUUM FULL or rely on the autovacuum daemon
+to keep tables in good shape."
+
+Expected output:
+{
+  "alignments": [
+    {
+      "concept_id": <Autovacuum concept_id>,
+      "to_chapter_id": <PUR ch>,
+      "relation_type": "CORROBORATES",
+      "confidence": 0.72,
+      "explanation": "Both describe autovacuum as the daemon that reclaims dead-tuple storage; chapter doesn't cover the 20% threshold detail but corroborates the general mechanism."
+    }
+  ]
+}
+
+(Lower confidence 0.72 because the chapter is at a higher level
+than the doc — they agree, but the chapter doesn't engage with
+the specific tuning detail.)
+
+EXAMPLE 8 — a concept that is too generic to align.
+
+DOC: Apache Kafka, "Reliability" (2026 snapshot)
+"Kafka achieves reliable message delivery via replication, acks,
+and idempotent producers."
+
+CHAPTER excerpt: A book chapter that has the word "reliability"
+in its title but discusses general distributed-systems theory:
+"Reliability in distributed systems is achieved through
+redundancy, consensus, and failure detection."
+
+Expected output:
+{
+  "alignments": []
+}
+
+("Reliability" is too generic for an alignment edge here. Both
+mention it but they're operating on different levels — Kafka's
+specific implementation vs. general theory. Skip.)
+
+--- COMMON ALIGNMENT TRAPS ---
+
+Trap 1: Treating any topical overlap as CORROBORATES.
+  If two passages happen to discuss the same broad topic but
+  don't make matching specific claims, that's not corroboration.
+  Skip it.
+
+Trap 2: Calling something a CONTRADICTS when it's just an
+  evolution/version difference that the doc itself acknowledges.
+  If the doc says "since version X, behavior changed" and the
+  chapter describes the pre-X behavior accurately, the chapter
+  isn't wrong — it's just dated. This case CAN be CONTRADICTS
+  if the chapter still presents itself as current best-practice
+  for the user; otherwise skip.
+
+Trap 3: Creating duplicate edges for the same (concept,
+  chapter) pair. Emit at most one alignment per pair.
+
+Trap 4: Hallucinating a concept_id or chapter_id. Use ONLY
+  the ids the prompt provided.
+
+Trap 5: Padding with skip-grade alignments to "look thorough."
+  Empty alignments is a valid, common, correct answer.
+
+EXAMPLE 9 — handling deprecated / replaced APIs.
+
+DOC: Apache Spark, "DataFrame API" (2026 snapshot)
+"For row counting, use df.count() or df.cache().count() if you'll
+reuse the DataFrame. The deprecated df.persist().count() pattern
+should be replaced with df.cache().count()."
+
+CHAPTER excerpt: "Learning Spark" 1st ed. (2015):
+"To force a DataFrame into memory before counting, use
+df.persist().count(). This both materializes the DataFrame and
+returns the row count."
+
+Expected output:
+{
+  "alignments": [
+    {
+      "concept_id": <DataFrame concept_id>,
+      "to_chapter_id": <Learning Spark 1st ed ch>,
+      "relation_type": "CONTRADICTS",
+      "confidence": 0.85,
+      "explanation": "Doc deprecates df.persist().count() in favor of df.cache().count(); the 2015 chapter still recommends df.persist().count() as the canonical pattern."
+    }
+  ]
+}
+
+(This is a genuine CONTRADICTS — the doc explicitly labels the
+chapter's recommendation as deprecated. The 0.85 confidence is
+warranted because the doc is unambiguous.)
+
+EXAMPLE 10 — a section discussing concept the chapter introduces
+but doesn't elaborate.
+
+DOC: MLflow, "Model Registry" (2026 snapshot)
+"The Model Registry tracks model versions, manages stage
+transitions (Staging → Production → Archived), and supports
+webhooks for CI/CD integration."
+
+CHAPTER excerpt: An MLOps overview book that lists Model Registry
+in a table of MLflow features but only describes it in one
+sentence: "MLflow Model Registry — a centralized model store for
+managing the model lifecycle."
+
+Expected output:
+{
+  "alignments": []
+}
+
+(The chapter mentions Model Registry but doesn't engage with any
+specific claim from the doc — stage transitions, webhooks, CI/CD
+integration. Skip.)
+
+--- WHEN TO LEAVE alignments EMPTY ---
+
+It's correct (and common) to return an empty alignments array.
+Emit alignments: [] when:
+
+  * No candidate chapter contains substantive content matching
+    the doc's specific claims.
+  * The chapter excerpts only mention the concept generically.
+  * Confidence on every potential alignment is below 0.70.
+  * The concept itself is too generic ("data", "process", "system",
+    "user").
+
+Doing fewer high-confidence edges is far more useful than padding
+the response with weak ones.
+
+--- FINAL CHECKS BEFORE EMITTING ---
+
+Before adding an alignment to the output, verify:
+  1. The concept_id you're attaching the edge to is one of the
+     concept_ids in CONCEPTS_WITH_CANDIDATES — don't synthesize one.
+  2. The to_chapter_id is one of the candidate chapter ids the
+     prompt provided for that concept.
+  3. The relation_type is exactly "CORROBORATES" or "CONTRADICTS"
+     (case-sensitive). Skip = emit no row, not a different relation.
+  4. The explanation cites the specific point of agreement /
+     disagreement (one sentence, not a summary of the chapter).
+
+End of guidance. Now classify each (concept, candidate_chapter) pair below."""
+
+ALIGNMENT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "alignments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "concept_id": {"type": "integer"},
+                    "to_chapter_id": {"type": "integer"},
+                    "relation_type": {
+                        "type": "string",
+                        "enum": ["CORROBORATES", "CONTRADICTS"],
+                    },
+                    "confidence": {"type": "number"},
+                    "explanation": {"type": "string"},
+                },
+                "required": ["concept_id", "to_chapter_id",
+                             "relation_type", "confidence", "explanation"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["alignments"],
+    "additionalProperties": False,
+}
+
+
 # Task spec — pairs a (padded) system prompt with its output schema. Add a
-# new entry here when adding a new task type (e.g., alignment).
+# new entry here when adding a new task type.
 TASKS: dict[str, tuple[str, dict]] = {
     "concepts":   (EXTENDED_ENTITY_PROMPT,    CONCEPT_OUTPUT_SCHEMA),
     "procedures": (EXTENDED_PROCEDURE_PROMPT, PROCEDURE_OUTPUT_SCHEMA),
+    "alignment":  (EXTENDED_ALIGNMENT_PROMPT, ALIGNMENT_OUTPUT_SCHEMA),
 }
 
 
@@ -950,16 +1373,18 @@ _TOKENIZER = tiktoken.get_encoding("cl100k_base")
 
 
 def _verify_cache_eligibility(task: str) -> None:
-    """Hard-fail at startup if the padded system prompt isn't ≥4096 tokens."""
+    """Hard-fail at startup if the padded system prompt is below the
+    cache minimum for the model this task uses."""
     prompt, _ = TASKS[task]
     n = len(_TOKENIZER.encode(prompt))
-    LOG.info("EXTENDED %s prompt: %d tokens (Haiku cache min: %d)",
-             task.upper(), n, CACHE_MIN_HAIKU)
-    if n < CACHE_MIN_HAIKU:
+    threshold = TASK_CACHE_MIN[task]
+    LOG.info("EXTENDED %s prompt: %d tokens (cache min: %d)",
+             task.upper(), n, threshold)
+    if n < threshold:
         raise RuntimeError(
             f"EXTENDED {task.upper()} prompt is {n} tokens; "
-            f"need ≥{CACHE_MIN_HAIKU} to clear Haiku 4.5's cache "
-            f"minimum. Fix by extending the prompt."
+            f"need ≥{threshold} to clear the cache minimum. "
+            f"Fix by extending the prompt."
         )
 
 
@@ -1288,6 +1713,141 @@ def _build_request_no_strict_schema(custom_id: str, user_text: str,
     }
 
 
+_ALIGNMENT_BOUNDARY = "--- DOC SECTION TO CLASSIFY ---"
+
+
+def _build_alignment_request(custom_id: str, dynamic_user_text: str,
+                              model: str) -> dict:
+    """Build one Batch API request for alignment.
+
+    The on-disk prompt files were written by ``refresh_docs.py
+    align-prep`` and contain the *unpadded* ALIGNMENT_SYSTEM_PROMPT
+    as a prefix. We discard that prefix and use the padded
+    EXTENDED_ALIGNMENT_PROMPT as the system block instead — gives
+    cache eligibility plus richer disambiguation guidance.
+    """
+    prompt, schema = TASKS["alignment"]
+    return {
+        "custom_id": custom_id,
+        "params": {
+            "model": model,
+            "max_tokens": 4096,  # alignment outputs can be longer
+            "system": [
+                {
+                    "type": "text",
+                    "text": prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "messages": [{"role": "user", "content": dynamic_user_text}],
+            "output_config": {
+                "format": {"type": "json_schema", "schema": schema}
+            },
+        },
+    }
+
+
+def do_submit_alignment(args: argparse.Namespace) -> int:
+    """Submit alignment requests via Batch API.
+
+    Reads an alignment manifest (the ``manifest.json`` that
+    ``refresh_docs.py align-prep`` writes — different shape from
+    the chapter-extraction manifest: ``sections`` not ``chapters``,
+    and each entry has a pre-built ``prompt_path`` on disk).
+    Splits each prompt at the static/dynamic boundary, uses the
+    padded EXTENDED_ALIGNMENT_PROMPT as the cached system block,
+    and submits.
+
+    Custom_id format: ``section-<doc_section_id>-align``.
+    """
+    _verify_cache_eligibility("alignment")
+
+    manifest_path = Path(args.manifest).resolve()
+    if not manifest_path.exists():
+        LOG.error("manifest not found: %s", manifest_path)
+        return 1
+    manifest = json.loads(manifest_path.read_text())
+    sections = manifest.get("sections", [])
+    output_dir = manifest_path.parent
+    LOG.info("alignment manifest: %d sections", len(sections))
+
+    state_path = manifest_path.parent / "batch_state.json"
+    if state_path.exists() and not args.force:
+        LOG.error("state file already exists at %s; pass --force",
+                  state_path)
+        return 1
+
+    requests = []
+    skipped_existing = 0
+    for entry in sections:
+        section_id = entry["doc_section_id"]
+        rp_str = entry["result_path"]
+        rp = Path(rp_str)
+        if not rp.is_absolute():
+            rp = PROJECT_ROOT / rp
+        if rp.exists() and not args.force:
+            skipped_existing += 1
+            continue
+        prompt_path = Path(entry["prompt_path"])
+        if not prompt_path.is_absolute():
+            prompt_path = PROJECT_ROOT / prompt_path
+        if not prompt_path.exists():
+            LOG.warning("prompt file missing for section %d: %s",
+                        section_id, prompt_path)
+            continue
+        full_prompt = prompt_path.read_text()
+        # Split out the dynamic per-section content.
+        if _ALIGNMENT_BOUNDARY in full_prompt:
+            _static, dynamic = full_prompt.split(_ALIGNMENT_BOUNDARY, 1)
+            dynamic_text = _ALIGNMENT_BOUNDARY + dynamic
+        else:
+            # Fallback: use the whole prompt as user content.
+            dynamic_text = full_prompt
+        custom_id = f"section-{section_id}-align"
+        requests.append(_build_alignment_request(
+            custom_id, dynamic_text, args.model
+        ))
+
+    if skipped_existing:
+        LOG.info("skipping %d sections with existing results", skipped_existing)
+    if not requests:
+        LOG.warning("no requests built — nothing to dispatch")
+        return 0
+    LOG.info("submitting alignment: %d requests with model=%s",
+             len(requests), args.model)
+
+    if args.dry_run:
+        LOG.info("DRY-RUN — not submitting")
+        return 0
+
+    client = anthropic.Anthropic()
+    state = DispatchState(
+        manifest_path=str(manifest_path),
+        output_dir=str(output_dir),
+        model=args.model,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    chunk_size = args.batch_size
+    for i in range(0, len(requests), chunk_size):
+        chunk = requests[i:i + chunk_size]
+        chunk_cids = [r["custom_id"] for r in chunk]
+        LOG.info("submitting batch %d (%d requests)",
+                 i // chunk_size + 1, len(chunk))
+        batch = client.messages.batches.create(requests=chunk)
+        LOG.info("  -> batch_id=%s status=%s",
+                 batch.id, batch.processing_status)
+        state.batches.append(BatchEntry(
+            batch_id=batch.id,
+            custom_ids=chunk_cids,
+            submitted_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        _save_state(state, state_path)
+
+    LOG.info("submitted %d batches; state saved to %s",
+             len(state.batches), state_path)
+    return 0
+
+
 def do_recover(args: argparse.Namespace) -> int:
     """Resubmit chapters that need recovery.
 
@@ -1431,11 +1991,12 @@ def do_check_prefix(args: argparse.Namespace) -> int:
     all_ok = True
     for name, (prompt, _schema) in TASKS.items():
         n = len(_TOKENIZER.encode(prompt))
-        ok = n >= CACHE_MIN_HAIKU
-        print(f"  {name:<12}  {n:>5} tokens  cache eligible: {ok}")
+        threshold = TASK_CACHE_MIN[name]
+        ok = n >= threshold
+        print(f"  {name:<12}  {n:>5} tokens  min={threshold}  "
+              f"cache eligible: {ok}")
         if not ok:
             all_ok = False
-    print(f"Haiku 4.5 cache min:  {CACHE_MIN_HAIKU} tokens")
     return 0 if all_ok else 1
 
 
@@ -1478,6 +2039,19 @@ def main() -> int:
     p_check = sub.add_parser("check-prefix",
                              help="Verify cache-eligible prefix length")
     p_check.set_defaults(func=do_check_prefix)
+
+    p_align = sub.add_parser(
+        "submit-alignment",
+        help="Submit alignment requests (different manifest format)",
+    )
+    p_align.add_argument("--manifest", required=True,
+                         help="alignment manifest written by align-prep")
+    p_align.add_argument("--model", default=ALIGNMENT_MODEL)
+    p_align.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    p_align.add_argument("--dry-run", action="store_true")
+    p_align.add_argument("--force", action="store_true",
+                         help="Overwrite existing state file and resubmit")
+    p_align.set_defaults(func=do_submit_alignment)
 
     p_recover = sub.add_parser(
         "recover",
