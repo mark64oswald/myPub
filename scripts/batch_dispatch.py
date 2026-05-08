@@ -1228,6 +1228,154 @@ def do_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_request_no_strict_schema(custom_id: str, user_text: str,
+                                     model: str, task: str) -> dict:
+    """Like _build_request but drops output_config.format.
+
+    Used as a fallback for chapters that hit ``Grammar compilation
+    timed out`` errors — Anthropic's structured-output schema
+    compiler can't process those particular inputs in its time
+    budget. The system prompt already instructs JSON-only output;
+    parse_llm_json on the receiving side handles markdown fences.
+    """
+    prompt, _schema = TASKS[task]
+    return {
+        "custom_id": custom_id,
+        "params": {
+            "model": model,
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "system": [
+                {
+                    "type": "text",
+                    "text": prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "messages": [{"role": "user", "content": user_text}],
+            # NO output_config.format — relax structured output
+        },
+    }
+
+
+def do_recover(args: argparse.Namespace) -> int:
+    """Resubmit chapters that errored in a prior run.
+
+    Walks each batch in the source state file, queries the API for
+    error results, and resubmits those custom_ids in a single
+    recovery batch. For grammar-compilation timeouts (Anthropic's
+    schema FSM can't process certain inputs), ``--no-strict-schema``
+    drops ``output_config.format`` so the request goes through.
+
+    Writes a new state file at ``<state>.recovery[.no-schema].json``
+    so the original state is preserved. Result files land in the
+    same results/ directory used by the original run, overwriting
+    any prior ``.error.json`` sidecars.
+
+    Workflow:
+
+        # First pass — retries everything; transients usually clear
+        batch_dispatch.py recover --state <state> --task concepts
+
+        # Second pass — for any remaining grammar-timeout chapters
+        batch_dispatch.py recover --state <state> --task concepts \\
+            --no-strict-schema --only-grammar-timeouts
+    """
+    _verify_cache_eligibility(args.task)
+
+    state_path = Path(args.state).resolve()
+    state = _load_state(state_path)
+    client = anthropic.Anthropic()
+
+    # Gather errored custom_ids (and their error types) from the API.
+    LOG.info("scanning %d batches for errors...", len(state.batches))
+    errored: list[tuple[str, str]] = []  # (custom_id, error_type)
+    for be in state.batches:
+        for result in client.messages.batches.results(be.batch_id):
+            if result.result.type == "errored":
+                err = result.result.error
+                etype = err.error.type if hasattr(err, "error") else "unknown"
+                errored.append((result.custom_id, etype))
+    LOG.info("found %d errored requests", len(errored))
+
+    # Optionally narrow to grammar-timeout-only.
+    if args.only_grammar_timeouts:
+        errored = [(cid, t) for (cid, t) in errored
+                   if t == "invalid_request_error"]
+        LOG.info("filtered to %d grammar-timeout requests "
+                 "(--only-grammar-timeouts)", len(errored))
+
+    if not errored:
+        LOG.info("no errors to recover")
+        return 0
+
+    # Map custom_id 'chapter-<id>' back to chapter_id.
+    chapter_ids = []
+    for cid, _et in errored:
+        if not cid.startswith("chapter-"):
+            LOG.warning("skip unrecognized custom_id format: %s", cid)
+            continue
+        chapter_ids.append((cid, int(cid.split("-", 1)[1])))
+
+    # Load chapters and build requests. Uses RO catalog access — must
+    # not run while another process holds the RW lock.
+    import duckdb  # pylint: disable=import-outside-toplevel
+    catalog = PROJECT_ROOT / "data" / "catalog.ddb"
+    conn = duckdb.connect(str(catalog), read_only=True)
+
+    requests = []
+    builder = (_build_request_no_strict_schema if args.no_strict_schema
+               else _build_request)
+    for cid, chapter_id in chapter_ids:
+        try:
+            chapter = _load_chapter(conn, chapter_id)
+        except ValueError as exc:
+            LOG.warning("skip chapter_id=%d: %s", chapter_id, exc)
+            continue
+        user_text = (
+            f"--- CHAPTER TO EXTRACT ---\n\n"
+            f"{_build_user_prompt(chapter)}\n\n"
+            f"Respond with JSON only. No prose, no markdown fences."
+        )
+        requests.append(builder(cid, user_text, args.model, args.task))
+    conn.close()
+
+    if not requests:
+        LOG.warning("no requests built — nothing to dispatch")
+        return 0
+    LOG.info("submitting recovery batch of %d requests "
+             "(no_strict_schema=%s)", len(requests), args.no_strict_schema)
+
+    if args.dry_run:
+        LOG.info("DRY-RUN — not submitting")
+        return 0
+
+    batch = client.messages.batches.create(requests=requests)
+    LOG.info("batch_id=%s status=%s", batch.id, batch.processing_status)
+
+    # Sidecar state for the recovery run.
+    suffix = ".no-schema" if args.no_strict_schema else ""
+    recovery_state_path = state_path.with_suffix(
+        f".recovery{suffix}.json"
+    )
+    recovery_state = DispatchState(
+        manifest_path=state.manifest_path,
+        output_dir=state.output_dir,
+        model=state.model,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        batches=[BatchEntry(
+            batch_id=batch.id,
+            custom_ids=[cid for cid, _ in chapter_ids],
+            submitted_at=datetime.now(timezone.utc).isoformat(),
+        )],
+    )
+    _save_state(recovery_state, recovery_state_path)
+    LOG.info("recovery state saved to %s", recovery_state_path)
+    LOG.info("next steps: poll then fetch:")
+    LOG.info("  batch_dispatch.py poll  --state %s", recovery_state_path)
+    LOG.info("  batch_dispatch.py fetch --state %s", recovery_state_path)
+    return 0
+
+
 def do_check_prefix(args: argparse.Namespace) -> int:
     """Sanity-check each task's EXTENDED prompt length and cache-readiness."""
     all_ok = True
@@ -1280,6 +1428,28 @@ def main() -> int:
     p_check = sub.add_parser("check-prefix",
                              help="Verify cache-eligible prefix length")
     p_check.set_defaults(func=do_check_prefix)
+
+    p_recover = sub.add_parser(
+        "recover",
+        help="Resubmit chapters that errored in a prior run",
+    )
+    p_recover.add_argument("--state", required=True,
+                           help="Source state file from the original run")
+    p_recover.add_argument("--task", choices=list(TASKS.keys()),
+                           required=True)
+    p_recover.add_argument("--model", default=DEFAULT_MODEL)
+    p_recover.add_argument(
+        "--no-strict-schema", action="store_true",
+        help="Drop output_config.format; use this for grammar-timeout "
+             "fallback retries.",
+    )
+    p_recover.add_argument(
+        "--only-grammar-timeouts", action="store_true",
+        help="Limit recovery to invalid_request_error (grammar-timeout) "
+             "rows only — pair with --no-strict-schema.",
+    )
+    p_recover.add_argument("--dry-run", action="store_true")
+    p_recover.set_defaults(func=do_recover)
 
     args = parser.parse_args()
 
