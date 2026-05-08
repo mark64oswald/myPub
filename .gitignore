@@ -72,6 +72,7 @@ exports/
 data/extraction-sessions/
 data/extraction-runs/
 data/alignment-runs/
+data/batch-runs/
 data/dedupe-runs/
 data/skill-runs/
 data/generated-packages/
