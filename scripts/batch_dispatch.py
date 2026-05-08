@@ -1586,11 +1586,25 @@ def do_fetch(args: argparse.Namespace) -> int:
                 rp = PROJECT_ROOT / rp
             custom_id_to_result_path[f"chapter-{entry['chapter_id']}"] = rp
     elif "sections" in manifest:
+        # Two flavors of section manifest:
+        #   - alignment manifest: one prompt/result per section
+        #   - refresh-extraction manifest: each section has both an
+        #     entity prompt (result_path) and a procedure prompt
+        #     (procedure_result_path). Register both custom_ids so the
+        #     same fetch handles either run type.
         for entry in manifest["sections"]:
+            sid = entry["doc_section_id"]
             rp = Path(entry["result_path"])
             if not rp.is_absolute():
                 rp = PROJECT_ROOT / rp
-            custom_id_to_result_path[f"section-{entry['doc_section_id']}-align"] = rp
+            custom_id_to_result_path[f"section-{sid}-align"] = rp
+            custom_id_to_result_path[f"section-{sid}-concept"] = rp
+            proc_rp_str = entry.get("procedure_result_path")
+            if proc_rp_str:
+                proc_rp = Path(proc_rp_str)
+                if not proc_rp.is_absolute():
+                    proc_rp = PROJECT_ROOT / proc_rp
+                custom_id_to_result_path[f"section-{sid}-proc"] = proc_rp
     else:
         LOG.error("manifest has neither 'chapters' nor 'sections' key")
         return 1
@@ -1862,6 +1876,178 @@ def do_submit_alignment(args: argparse.Namespace) -> int:
     return 0
 
 
+# Boundaries used by refresh_docs.py when it writes per-section prompt files.
+# Both the entity prompt and the procedure prompt embed a payload header
+# whose first line is ``DOC_SECTION_ID:`` — that's our reliable split point
+# (the unpadded SYSTEM_PROMPT prefix above never contains that token).
+_SECTION_PAYLOAD_MARKER = "DOC_SECTION_ID:"
+
+
+def _strip_unpadded_prefix(prompt_text: str) -> str:
+    """Return the dynamic per-section payload from a refresh-written prompt.
+
+    refresh_docs.py writes prompts as
+        ``{UNPADDED_SYSTEM_PROMPT}\\n\\n[boundary]{header}\\n...``
+    where the header always begins with ``DOC_SECTION_ID:``. We discard
+    everything up to (but not including) that marker so we can substitute
+    the padded EXTENDED_* prompt as the cached system block instead.
+    """
+    idx = prompt_text.find(_SECTION_PAYLOAD_MARKER)
+    if idx < 0:
+        raise ValueError(
+            f"malformed section prompt: no {_SECTION_PAYLOAD_MARKER!r} marker"
+        )
+    return prompt_text[idx:]
+
+
+def do_submit_doc_extraction(args: argparse.Namespace) -> int:
+    """Submit per-section concept + procedure extraction via Batch API.
+
+    Reads a refresh-style manifest (``sections[]`` shape with both
+    ``prompt_path`` for entity extraction and ``procedure_prompt_path``
+    for procedure extraction) and dispatches up to two requests per
+    section:
+        custom_id ``section-<id>-concept`` (concepts task, Haiku 4.5)
+        custom_id ``section-<id>-proc``    (procedures task, Haiku 4.5)
+
+    The on-disk prompt files contain the *unpadded* SYSTEM_PROMPT plus the
+    per-section payload. We strip the prefix and use the padded
+    ``EXTENDED_ENTITY_PROMPT`` / ``EXTENDED_PROCEDURE_PROMPT`` as the cached
+    system block — same trick as ``submit-alignment``.
+
+    Both tasks share the same model (Haiku 4.5) and 4096-token cache
+    minimum, so they go in a single batch_state.json.
+
+    Skips entries whose result_path / procedure_result_path already
+    exists, so re-running this after a partial fetch resumes cleanly.
+    """
+    _verify_cache_eligibility("concepts")
+    _verify_cache_eligibility("procedures")
+
+    manifest_path = Path(args.manifest).resolve()
+    if not manifest_path.exists():
+        LOG.error("manifest not found: %s", manifest_path)
+        return 1
+    manifest = json.loads(manifest_path.read_text())
+    sections = manifest.get("sections", [])
+    if not sections:
+        LOG.error("manifest has no 'sections' entries: %s", manifest_path)
+        return 1
+    output_dir = manifest_path.parent
+    LOG.info("doc-extraction manifest: %d sections", len(sections))
+
+    state_path = manifest_path.parent / "batch_state.json"
+    if state_path.exists() and not args.force:
+        LOG.error("state file already exists at %s; pass --force to override",
+                  state_path)
+        return 1
+
+    requests: list[dict] = []
+    skipped_existing_concept = 0
+    skipped_existing_proc = 0
+    skipped_no_proc = 0
+    for entry in sections:
+        section_id = entry["doc_section_id"]
+
+        # Concept request
+        ent_rp_str = entry.get("result_path")
+        ent_pp_str = entry.get("prompt_path")
+        if ent_rp_str and ent_pp_str:
+            ent_rp = Path(ent_rp_str)
+            if not ent_rp.is_absolute():
+                ent_rp = PROJECT_ROOT / ent_rp
+            if ent_rp.exists() and not args.force:
+                skipped_existing_concept += 1
+            else:
+                ent_pp = Path(ent_pp_str)
+                if not ent_pp.is_absolute():
+                    ent_pp = PROJECT_ROOT / ent_pp
+                if not ent_pp.exists():
+                    LOG.warning("concept prompt missing for section %d: %s",
+                                section_id, ent_pp)
+                else:
+                    dynamic = _strip_unpadded_prefix(ent_pp.read_text())
+                    user_text = (
+                        f"--- DOC SECTION TO EXTRACT ---\n\n{dynamic}"
+                    )
+                    requests.append(_build_request(
+                        f"section-{section_id}-concept",
+                        user_text, args.model, "concepts",
+                    ))
+
+        # Procedure request
+        proc_rp_str = entry.get("procedure_result_path")
+        proc_pp_str = entry.get("procedure_prompt_path")
+        if not (proc_rp_str and proc_pp_str):
+            skipped_no_proc += 1
+            continue
+        proc_rp = Path(proc_rp_str)
+        if not proc_rp.is_absolute():
+            proc_rp = PROJECT_ROOT / proc_rp
+        if proc_rp.exists() and not args.force:
+            skipped_existing_proc += 1
+            continue
+        proc_pp = Path(proc_pp_str)
+        if not proc_pp.is_absolute():
+            proc_pp = PROJECT_ROOT / proc_pp
+        if not proc_pp.exists():
+            LOG.warning("procedure prompt missing for section %d: %s",
+                        section_id, proc_pp)
+            continue
+        dynamic = _strip_unpadded_prefix(proc_pp.read_text())
+        user_text = f"--- DOC SECTION TO EXTRACT ---\n\n{dynamic}"
+        requests.append(_build_request(
+            f"section-{section_id}-proc",
+            user_text, args.model, "procedures",
+        ))
+
+    if skipped_existing_concept:
+        LOG.info("skipping %d sections with existing concept results",
+                 skipped_existing_concept)
+    if skipped_existing_proc:
+        LOG.info("skipping %d sections with existing procedure results",
+                 skipped_existing_proc)
+    if skipped_no_proc:
+        LOG.info("%d sections lack procedure prompt entries (older manifest)",
+                 skipped_no_proc)
+    if not requests:
+        LOG.warning("no requests built — nothing to dispatch")
+        return 0
+    LOG.info("dispatching %d requests with model=%s, batch-size=%d",
+             len(requests), args.model, args.batch_size)
+
+    if args.dry_run:
+        LOG.info("DRY-RUN — not submitting")
+        return 0
+
+    client = anthropic.Anthropic()
+    state = DispatchState(
+        manifest_path=str(manifest_path),
+        output_dir=str(output_dir),
+        model=args.model,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    for i in range(0, len(requests), args.batch_size):
+        chunk = requests[i:i + args.batch_size]
+        chunk_cids = [r["custom_id"] for r in chunk]
+        LOG.info("submitting batch %d (%d requests, custom_ids %s..%s)",
+                 i // args.batch_size + 1, len(chunk),
+                 chunk[0]["custom_id"], chunk[-1]["custom_id"])
+        batch = client.messages.batches.create(requests=chunk)
+        LOG.info("  -> batch_id=%s status=%s",
+                 batch.id, batch.processing_status)
+        state.batches.append(BatchEntry(
+            batch_id=batch.id,
+            custom_ids=chunk_cids,
+            submitted_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        _save_state(state, state_path)
+
+    LOG.info("submitted %d batches; state saved to %s",
+             len(state.batches), state_path)
+    return 0
+
+
 def do_recover(args: argparse.Namespace) -> int:
     """Resubmit chapters that need recovery.
 
@@ -2066,6 +2252,21 @@ def main() -> int:
     p_align.add_argument("--force", action="store_true",
                          help="Overwrite existing state file and resubmit")
     p_align.set_defaults(func=do_submit_alignment)
+
+    p_doc_ext = sub.add_parser(
+        "submit-doc-extraction",
+        help="Submit per-section concept + procedure extraction "
+             "(refresh_docs sections[] manifest)",
+    )
+    p_doc_ext.add_argument("--manifest", required=True,
+                           help="refresh manifest at "
+                                "data/refresh/<ts>/snapshot_<id>/manifest.json")
+    p_doc_ext.add_argument("--model", default=DEFAULT_MODEL)
+    p_doc_ext.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    p_doc_ext.add_argument("--dry-run", action="store_true")
+    p_doc_ext.add_argument("--force", action="store_true",
+                           help="Overwrite existing state file and resubmit")
+    p_doc_ext.set_defaults(func=do_submit_doc_extraction)
 
     p_recover = sub.add_parser(
         "recover",
