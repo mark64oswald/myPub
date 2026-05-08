@@ -206,12 +206,19 @@ Project Bootstrap is the user's #1 — see [docs/generators.md#project-bootstrap
 
 ## Concurrency model
 
-DuckDB has a sharp edge: a single process cannot hold an open RO connection while a second connection wants to write. The `mypub-kb` MCP server is a long-lived RO reader; the ingestion scripts are RW writers. Two patterns handle this:
+DuckDB takes a single-writer file lock that **excludes all other processes**, including read-only ones. So the rule is: writers and readers cannot coexist at the file level.
 
-| Pattern | When | Implementation |
-|---|---|---|
-| **Close-before-write** | Single process writing then reading | `_temporarily_open_writer` context manager: closes RO → opens RW → writes → closes RW → reopens RO lazily |
-| **Lock-holder kill** | Cross-process: writer detects an RO process holding the lock | Writer reads lock-holder PID, verifies it's the expected reader, sends SIGTERM, lets the supervisor respawn |
+The MCP server's `db.py` enforces this with one knob — `read_only=True` is the default. Writers (`refresh_docs`, `index_books`, `extract_*`, `migrate_*`, `build_*`) must pass `read_only=False` explicitly, which makes the "I am about to mutate" intent visible at every write site. Multiple readers can coexist; one writer excludes everyone.
+
+Practical consequences:
+
+| Scenario | What happens |
+|---|---|
+| MCP server running, you start a writer script | Writer fails to acquire the lock; close the MCP session first (or kill the process) |
+| Writer running, you query from another shell | Reader fails to acquire the lock; wait for the writer or open `read_only=True` after it finishes |
+| MCP server's own `find_prerequisites` walk | Uses recursive SQL CTEs — no `CREATE PROPERTY GRAPH` write, so RO is enough |
+
+`open_catalog()` in `db.py` is the single place that knows the full incantation: open with the right mode, `LOAD vss / fts / duckpgq`, set `hnsw_enable_experimental_persistence`, and (in RW mode only) re-execute the property-graph DDL since DuckPGQ doesn't persist graph definitions across reopens.
 
 Reference: see the global `~/Developer/notes/duckdb-concurrent-access.md`.
 

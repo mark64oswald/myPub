@@ -7,7 +7,7 @@
 
 ## 1. Purpose
 
-myPub transforms a collection of ~345 technical ePub books into an intelligent, queryable knowledge base for Claude. The v1 design preserves document structure, captures concept relationships manually, and loads full chapters into Claude's context rather than chunking them into embeddings.
+myPub transforms a collection of ~540 technical ePub books into an intelligent, queryable knowledge base for Claude. The v1 design preserves document structure, captures concept relationships manually, and loads full chapters into Claude's context rather than chunking them into embeddings.
 
 v2 extends this foundation in four directions:
 
@@ -39,7 +39,7 @@ The philosophy is **native-first retrieval**: rather than chunking books into ve
 
 ### 2.3 Gaps Motivating v2
 
-- **Manual concept curation doesn't scale** to 345 books.
+- **Manual concept curation doesn't scale** to ~540 books.
 - **No semantic or graph query capability.** The catalog is relational; "find chapters discussing X conceptually" requires keyword matches; "find prerequisite chains" requires recursive CTEs.
 - **No procedure extraction.** Books teach concepts; Skills need actions.
 - **No currency layer.** Books go stale. A 2022 Databricks book doesn't cover Lakeflow Connect.
@@ -952,7 +952,7 @@ At the project root, `CLAUDE.md` tells Claude Code how to use myPub:
 ```markdown
 # myPub v2
 
-This project is a knowledge base system indexing ~345 technical ePubs,
+This project is a knowledge base system indexing ~540 technical ePubs,
 with a Skills Factory for generating Claude Skills packages.
 
 ## Key locations
@@ -1037,7 +1037,7 @@ A single Python process using FastMCP, stdio transport. Exposes tools for the kn
 - `pin_doc_source(doc_source_id)` / `unpin_doc_source(doc_source_id)` — manual tier lock
 - `refresh_status()` — report per-tier inventory, next scheduled refresh, stale sources
 
-The server opens the local DuckDB on startup, loads the FTS, VSS, and DuckPGQ extensions, and warms caches. FTS and VSS indexes may need to be rebuilt on startup if HNSW persistence is unstable — for 345 books this is a minutes-not-hours operation.
+The server opens the local DuckDB on startup, loads the FTS, VSS, and DuckPGQ extensions, and warms caches. FTS and VSS indexes may need to be rebuilt on startup if HNSW persistence is unstable — for ~540 books this is a minutes-not-hours operation.
 
 Claude Code invokes the tools through stdio. No network hop, no auth complexity, no deployment.
 
@@ -1153,7 +1153,7 @@ Evaluation set curation. Weight profile tuning against evaluation. Schema refine
 
 **Auto-discovery scope management.** Over months of use, auto-discovered sources accumulate. Some will be one-off queries that never get touched again. Build a cleanup mechanism: sources with zero queries in 90 days and no concept links used by other sources can be proposed for removal via a `/kb-cleanup` command. Don't auto-delete — let the user decide.
 
-**HNSW persistence.** Still experimental in DuckDB. If unstable, fall back to in-memory indexes rebuilt on MCP server startup. For 345 books this is minutes, acceptable for development; revisit if cold start becomes annoying.
+**HNSW persistence.** Still experimental in DuckDB. If unstable, fall back to in-memory indexes rebuilt on MCP server startup. For ~540 books this is minutes, acceptable for development; revisit if cold start becomes annoying.
 
 **Embedding model choice.** `sentence-transformers/all-MiniLM-L6-v2` is a reasonable default (fast, 384-dim, decent quality). Higher-quality embeddings improve semantic retrieval but at storage cost.
 

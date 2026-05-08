@@ -12,58 +12,43 @@ The five-factor ranker (`relevance × recency × authority × corroboration × d
 
 ### Built-in profiles
 
+The actual definitions live in [`mcp-servers/kb-mcp/ranking.py`](../mcp-servers/kb-mcp/ranking.py) as `Weights(w_rec, w_doc, w_rel, w_corr, w_auth)` rows in the `WEIGHT_PROFILES` dict. Reproduced here for reference:
+
 ```python
-WEIGHT_PROFILES = {
-    "currency_critical_interactive": {
-        "rec":  0.30,   "doc":  0.20,   "rel":  0.30,
-        "corr": 0.10,   "auth": 0.10,
-    },
-    "foundational_interactive": {
-        "rec":  0.05,   "doc":  0.05,   "rel":  0.40,
-        "corr": 0.20,   "auth": 0.30,
-    },
-    "balanced_interactive": {
-        "rec":  0.10,   "doc":  0.10,   "rel":  0.45,
-        "corr": 0.15,   "auth": 0.20,
-    },
-    "skill_recent_doc_anchored": {
-        "rec":  0.40,   "doc":  0.30,   "rel":  0.20,
-        "corr": 0.05,   "auth": 0.05,
-    },
-    "skill_consensus_synthesis": {
-        "rec":  0.10,   "doc":  0.10,   "rel":  0.35,
-        "corr": 0.30,   "auth": 0.15,
-    },
+WEIGHT_PROFILES: dict[str, Weights] = {
+    "balanced_interactive":          Weights(0.10, 0.10, 0.45, 0.15, 0.20),
+    "currency_critical_interactive": Weights(0.40, 0.25, 0.20, 0.10, 0.05),
+    "foundational_interactive":      Weights(0.05, 0.10, 0.35, 0.30, 0.20),
+    "skill_recent_doc":              Weights(0.30, 0.30, 0.25, 0.05, 0.10),
+    "skill_consensus":               Weights(0.05, 0.10, 0.30, 0.35, 0.20),
+    "skill_authority":               Weights(0.05, 0.10, 0.25, 0.10, 0.50),
 }
 ```
 
-(`rec` = recency, `doc` = doc_alignment, `rel` = relevance, `corr` = corroboration, `auth` = authority.)
+(`w_rec` = recency, `w_doc` = doc_alignment, `w_rel` = relevance, `w_corr` = corroboration, `w_auth` = authority. The `Weights` dataclass enforces that the five values sum to ~1.0 in `__post_init__` — typo'd profiles fail loudly rather than silently producing out-of-range scores.)
 
 ### When to pick which
 
 | Use case | Profile | Why |
 |---|---|---|
-| "What does Kafka do *now*?" | `currency_critical_interactive` | Recency + doc_alignment dominate; old book content can't drown out current docs |
-| "Explain the CAP theorem" | `foundational_interactive` | Recency irrelevant; relevance and authority should win; corroboration is welcome |
 | Daily Q&A, mixed | `balanced_interactive` | Best default for natural-language search |
-| Skill package for current vendor | `skill_recent_doc_anchored` | Pin to current docs; books supplement |
-| Skill package for foundational topic | `skill_consensus_synthesis` | Restrict to where book + doc agree |
+| "What does Kafka do *now*?" | `currency_critical_interactive` | Recency leads (0.40); doc_alignment supports it (0.25) |
+| "Explain the CAP theorem" | `foundational_interactive` | Recency near-zero; relevance + corroboration win |
+| Skill package for current vendor | `skill_recent_doc` | Pin to current docs; books supplement |
+| Skill package, restrict to consensus | `skill_consensus` | Corroboration leads (0.35) — only where book + doc agree |
+| Skill package, defer to authority | `skill_authority` | Authority leads (0.50) — when the most authoritative source should win outright |
 
 ### Defining a new profile
 
-Profiles live in [`mcp-servers/kb-mcp/ranking.py`](../mcp-servers/kb-mcp/ranking.py) under `WEIGHT_PROFILES`. Add a new key:
+Add a new entry to `WEIGHT_PROFILES` in [`mcp-servers/kb-mcp/ranking.py`](../mcp-servers/kb-mcp/ranking.py):
 
 ```python
-WEIGHT_PROFILES["my_custom_profile"] = {
-    "rec":  0.50,
-    "doc":  0.10,
-    "rel":  0.30,
-    "corr": 0.05,
-    "auth": 0.05,
-}
+WEIGHT_PROFILES["my_custom_profile"] = Weights(
+    w_rec=0.50, w_doc=0.10, w_rel=0.30, w_corr=0.05, w_auth=0.05
+)
 ```
 
-The five values must sum to 1.0 (the ranker doesn't currently enforce this — it's a discipline). Restart the MCP server for the new profile to be picked up.
+The five values must sum to ~1.0 — `Weights.__post_init__` raises if they don't, so a typo fails loudly at import time. Restart the MCP server for the new profile to be picked up.
 
 ### Other ranking knobs
 
@@ -92,55 +77,61 @@ Characters are *view functions* over the ranking engine. The same chapter can be
 
 ### Built-in characters
 
-| Character | Filter |
-|---|---|
-| **Architect** | Concepts of type `Pattern`, `Concept`, `Algorithm`; chapters that emphasize "why" and "tradeoff" framing |
-| **Practitioner** | Chapters with linked procedures; emphasis on `failure_modes` and configuration specifics |
+Two module-level `Character` instances ship in [`mcp-servers/kb-mcp/character.py`](../mcp-servers/kb-mcp/character.py):
 
-Definitions live in [`mcp-servers/kb-mcp/character.py`](../mcp-servers/kb-mcp/character.py).
+| Constant | Preferred relations | Preferred concept types | Preferred era |
+|---|---|---|---|
+| `ARCHITECT` | `IMPLEMENTS`, `EXTENDS`, `REQUIRES` | `Pattern`, `Concept` | `classical` |
+| `PRACTITIONER` | `CITES` | `Tool`, `Framework`, `Technique` | `current` |
 
 ### Anatomy of a character
 
-A character is a class implementing two methods:
+`Character` is a frozen dataclass — all configuration, no methods:
 
 ```python
+@dataclass
 class Character:
-    def filter(self, candidates: list[Candidate]) -> list[Candidate]:
-        """Drop candidates this character wouldn't bring up."""
-
-    def reweight(self, candidate: Candidate) -> float:
-        """Adjust a candidate's score in line with character preference."""
+    name: str
+    bio: str = ""
+    preferred_relations: list[str] = field(default_factory=list)
+    preferred_concept_types: list[str] = field(default_factory=list)
+    preferred_era: str = "current"   # 'classical' | 'recent' | 'current'
 ```
 
-For example, the Practitioner character prefers chapters that link to a procedure — its `reweight` adds 0.15 if `candidate.has_linked_procedure`, and its `filter` drops any candidate where the chapter has no procedure links *and* no failure-mode-shaped paragraphs.
+Scoring is done by a free function in the same module:
+
+```python
+def score_concept_for_character(
+    conn: duckdb.DuckDBPyConnection,
+    concept_id: int,
+    character: Character,
+) -> float:
+    # +2 per outgoing relation matching preferred_relations
+    # +3 if concept_type matches preferred_concept_types
+    # +1 per chapter that mentions the concept (baseline coverage)
+    ...
+```
+
+`preferred_era` is reserved for v2 ranking-mode integration and isn't enforced today.
 
 ### Adding a new character
 
-1. Subclass `Character` in `character.py`.
-2. Implement `filter` and `reweight`.
-3. Register the character in `CHARACTERS` registry.
-4. Optionally add a slash command that pre-selects the character pair.
+1. Add a new module-level `Character(...)` constant in `character.py`, or
+2. Build one at runtime from a JSON spec via `parse_character_json(payload)`, which is how the Dialog and Author Panel generators accept user-supplied character pairs.
 
-Example: a "Skeptic" character that prefers chapters that explicitly discuss limitations or anti-patterns:
+Example: a "Skeptic" character that anchors on anti-patterns and contrasts:
 
 ```python
-class Skeptic(Character):
-    def filter(self, candidates):
-        return [
-            c for c in candidates
-            if c.has_concept_type("AntiPattern")
-            or "limitation" in c.chapter.content.lower()
-            or "tradeoff" in c.chapter.content.lower()
-        ]
-
-    def reweight(self, candidate):
-        boost = 0.0
-        if candidate.has_concept_type("AntiPattern"):
-            boost += 0.20
-        return boost
+SKEPTIC = Character(
+    name="Skeptic",
+    bio="Doubts before adopting; anchors on anti-patterns and tradeoffs.",
+    preferred_relations=["CONTRASTS_WITH"],
+    preferred_concept_types=["AntiPattern", "Concept"],
+    preferred_era="classical",
+)
 ```
 
-Then in `Dialog`, swap `Architect` for `Skeptic` to get an Architect-vs-Skeptic dialog.
+To use it, pass the new constant (or a JSON spec) into the Dialog generator's character-pair argument.
 
 ---
 
@@ -290,27 +281,23 @@ Common reasons to customize:
 
 ## Tuning the auto-discovery loop
 
-Discovery probe order, authority defaults, and novel-library detection live in [`mcp-servers/kb-mcp/discovery.py`](../mcp-servers/kb-mcp/discovery.py).
+Discovery probe order, authority defaults, and library-name detection live in [`mcp-servers/kb-mcp/discovery.py`](../mcp-servers/kb-mcp/discovery.py).
 
-To change probe order (e.g., to prefer DeepWiki over Context7 for your domain):
-
-```python
-PROBE_ORDER = [
-    ("deepwiki", 0.50),
-    ("context7", 0.60),
-    ("github_raw", 0.40),
-]
-```
-
-To change novel-library detection (the heuristic that decides when a query mentions an unknown library):
+To change the default probe order (e.g., to prefer DeepWiki over Context7 for your domain), edit the module-level constants:
 
 ```python
-NOVEL_LIBRARY_PATTERNS = [
-    re.compile(r"\b(?:install|setup|configure)\s+(?P<lib>\w+)"),
-    re.compile(r"\b(?P<lib>\w+(?:\.\w+)+)\b"),  # foo.bar style
-    # add custom patterns here
-]
+DEFAULT_PROBE_ORDER: tuple[str, ...] = ("deepwiki", "context7", "github")
+
+DISCOVERY_AUTHORITY_DEFAULTS: dict[str, float] = {
+    "context7": 0.60,
+    "deepwiki": 0.50,
+    "github":   0.40,
+}
 ```
+
+The probe order can also be overridden per-call via `search_chapters(probe_order=...)`. The default stays in `DEFAULT_PROBE_ORDER`.
+
+Library-name detection is a pair of regex constants, `_TOKEN_RE` (which words look like library names) and `_LIBRARY_NAME_HINT_RE` (heuristics for capitalization and dot-separated identifiers). Adjust those if the discovery loop is missing or over-firing on a class of queries.
 
 Restart the MCP server after changes.
 

@@ -119,7 +119,7 @@ Known debt as of the last push. See `~/.claude/projects/-Users-markoswald-Develo
 
 ### Concept-name duplicate hygiene
 
-5,597 concept-name groups have duplicates across `concept_type` variants (e.g., "Event Sourcing" as both `Concept` and `Pattern`). The resolver bug that picked the empty twin was fixed in `ecc74f4` — the duplicates themselves are now harmless, but consolidating them would tighten the graph. Run `scripts/dedupe_concepts.py --merge-duplicate-types` when iterating on concept hygiene.
+5,597 concept-name groups have duplicates across `concept_type` variants (e.g., "Event Sourcing" as both `Concept` and `Pattern`). The resolver bug that picked the empty twin was fixed in `ecc74f4` — the duplicates themselves are now harmless, but consolidating them would tighten the graph. `scripts/dedupe_concepts.py` is the script for this; its flags (`--catalog`, `--dry-run`, `--limit`, `--report-file`) let you preview a merge run and capture a report before applying. Start with `--dry-run` to see what would change.
 
 ### Ranking weight tuning
 

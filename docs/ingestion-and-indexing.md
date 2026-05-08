@@ -175,12 +175,12 @@ WITH (metric = 'cosine');
 
 The pragma must be set on every connection that creates or queries an HNSW index against a file-backed catalog (DuckDB documents this as experimental for 1.5.x).
 
-Side-table indexes built:
+Side-table indexes built by `build_vss_index.py`:
 
 - `chapter_embedding_hnsw`
-- `doc_section_embedding_hnsw`
-- `doc_snapshot_embedding_hnsw`
 - `concept_embedding_hnsw`
+
+`doc_section_embedding` is populated by `refresh_docs.py` and indexed via the same VSS pragma there. `doc_snapshot_embedding` is populated for whole-doc relevance but isn't HNSW-indexed today (the section-level embeddings are the practical retrieval surface).
 
 VSS queries return `vector <=> :query_vector` cosine distance; the ranker subtracts from 1 to convert to a similarity score before fusion.
 
@@ -204,15 +204,18 @@ concept               ← concept_id
 doc_section           ← doc_section_id
 ```
 
-Edge tables (relations):
+Edge tables (relations) — see [`schemas/property_graph.sql`](../schemas/property_graph.sql):
 
 ```text
-wrote                 author    →  book
-book_contains         book      →  chapter
-chapter_discusses     chapter   →  concept       (from concept_query_log)
-concept_relates_to    concept   →  concept       (relation_type from concept_relation)
-doc_corroborates      doc_section ↔ chapter      (from alignment_edge)
+wrote                 author        →  book           (book_author edge table)
+book_contains         book          →  chapter        (chapter.book_id)
+snapshot_contains     doc_snapshot  →  doc_section    (doc_section.snapshot_id)
+package_contains      skill_package →  skill          (skill.package_id)
+concept_relates_to    concept       →  concept        (concept_relation rows)
+skill_relates_to      skill         →  skill          (skill_relation rows)
 ```
+
+Phase 2+ stubs commented in the SQL but not yet wired (because the backing tables either weren't populated when the graph was declared, or because read traversals lean on SQL CTEs instead of DuckPGQ): `chapter_concept` (chapter discusses concept), `chapter_procedure` (chapter explains procedure), `doc_cross_ref` (doc section corroborates / contradicts chapter or another section), `skill_source` (skill derived_from chapter / procedure / doc_section).
 
 ### Constraints and gotchas
 

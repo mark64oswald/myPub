@@ -181,7 +181,7 @@ Write scripts/generate_embeddings.py that:
 Start with a batch of 10 chapters first as a timing test. Then run the full
 corpus. Log progress every 50 chapters.
 
-This will take a while for 345 books. That's fine.
+This will take a while for ~540 books. That's fine.
 ```
 
 **Validate:**
@@ -445,7 +445,7 @@ sub-agents are subscription-covered, iteration is free.
 ### Prompt 2.4 — Full corpus extraction
 
 ```text
-Run the entity extractor against the full corpus (~345 books) using sub-agents.
+Run the entity extractor against the full corpus (~540 books) using sub-agents.
 This will span multiple Claude Code sessions over several days.
 
 Batch strategy:
@@ -459,7 +459,7 @@ Batch strategy:
 
 Session management:
 - Each session processes as many books as rate limits allow
-- At session end, record progress: "completed through book N of 345"
+- At session end, record progress: "completed through book N of ~540"
 - Next session picks up where the last left off
 - Expect 10-20 sessions to complete the full corpus
 
