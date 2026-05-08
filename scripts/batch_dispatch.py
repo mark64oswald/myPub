@@ -1145,11 +1145,15 @@ def do_fetch(args: argparse.Namespace) -> int:
 
     manifest_path = Path(state.manifest_path)
     manifest = json.loads(manifest_path.read_text())
+    # extract_batch.py prep writes result_path as project-root-relative
+    # (e.g., "data/batch-runs/<dir>/results/result_<id>.json"). Resolve
+    # relative to PROJECT_ROOT, not to manifest_path.parent — otherwise
+    # the path doubles up.
     custom_id_to_result_path: dict[str, Path] = {}
     for entry in manifest["chapters"]:
         rp = Path(entry["result_path"])
         if not rp.is_absolute():
-            rp = manifest_path.parent / rp
+            rp = PROJECT_ROOT / rp
         custom_id_to_result_path[f"chapter-{entry['chapter_id']}"] = rp
 
     written = 0
