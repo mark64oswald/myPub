@@ -1574,12 +1574,26 @@ def do_fetch(args: argparse.Namespace) -> int:
     # (e.g., "data/batch-runs/<dir>/results/result_<id>.json"). Resolve
     # relative to PROJECT_ROOT, not to manifest_path.parent — otherwise
     # the path doubles up.
+    #
+    # Two manifest shapes: extract_batch / extract_procedures use
+    # ``chapters`` keyed by ``chapter_id``; refresh_docs alignment uses
+    # ``sections`` keyed by ``doc_section_id``.
     custom_id_to_result_path: dict[str, Path] = {}
-    for entry in manifest["chapters"]:
-        rp = Path(entry["result_path"])
-        if not rp.is_absolute():
-            rp = PROJECT_ROOT / rp
-        custom_id_to_result_path[f"chapter-{entry['chapter_id']}"] = rp
+    if "chapters" in manifest:
+        for entry in manifest["chapters"]:
+            rp = Path(entry["result_path"])
+            if not rp.is_absolute():
+                rp = PROJECT_ROOT / rp
+            custom_id_to_result_path[f"chapter-{entry['chapter_id']}"] = rp
+    elif "sections" in manifest:
+        for entry in manifest["sections"]:
+            rp = Path(entry["result_path"])
+            if not rp.is_absolute():
+                rp = PROJECT_ROOT / rp
+            custom_id_to_result_path[f"section-{entry['doc_section_id']}-align"] = rp
+    else:
+        LOG.error("manifest has neither 'chapters' nor 'sections' key")
+        return 1
 
     written = 0
     errored = 0
