@@ -25,11 +25,11 @@ myPub keeps both. The `alignment_edge` table records where they corroborate or c
 |---|---|
 | Location | `~/Documents/eBooks/` (configurable per command) |
 | Format | EPUB 2 / EPUB 3 |
-| Books at this writing | 541 |
-| Authors | ~600+ unique |
-| Publishers | O'Reilly (270), Manning (48), Packt (28), Addison-Wesley (12), Apress (9), Wiley (9), Elsevier (12), … |
-| Total chapters | 113,165 |
-| Chapters with content | 112,968 |
+| Books indexed | 572 |
+| Authors | 820 unique |
+| Publishers | O'Reilly (283), Manning (52), Packt (71 across imprints), Addison-Wesley (12), Elsevier (12), Apress (9), Wiley (9), … |
+| Total chapters | 118,447 |
+| Chapters with content + embeddings | 118,110 |
 | Total tokens | several hundred million (rough estimate from chapter content) |
 
 Books are personal copies; the catalog stores metadata, structure, derived embeddings, and chapter content. The original ePub files are not redistributed via this repository.
@@ -50,24 +50,26 @@ Special cases the indexer handles:
 
 - **Front-matter filtering.** "Cover", "Copyright", "About the Author" chapters are detected and indexed but flagged so retrieval can deprioritize them.
 - **Heading-only chapters.** Some ePubs have heading-only entries; these get `token_count = 0` and are skipped by FTS / VSS but kept for structural completeness.
-- **Author placeholder.** A historical "AUTHOR NAMES HERE" placeholder author was deleted in commit `ecc74f4`; three books currently have NO author rather than a misleading placeholder. These are tracked for future re-extraction.
-- **Content-hash duplicates.** A book's chapter is identified by hash; re-running ingestion is idempotent.
+- **Author recovery via ISBN lookup.** When `<dc:creator>` is missing or contains a placeholder ("AUTHOR NAMES HERE"), the indexing flow falls back to OpenLibrary + Google Books ISBN lookup. 19 of 20 historically-unauthored books were recovered this way; one residual case (Platform Enterprise, ISBN 9798341643444) is genuinely unknown — no public catalog has author info for that ISBN.
+- **Author smush.** Some ePubs encode all co-authors in a single `<dc:creator>` element separated by ", " or " and ". The post-ingest splitter handles this with credential-suffix re-merging (M.D., Ph.D., Jr., II) so "Stephen Buxton, Lowell Fryman, Ralf Hartmut Güting, …" becomes individual rows.
+- **Empty-OPF recovery.** Some Packt ePubs ship with a 0-byte `OEBPS/content.opf`. ebooklib refuses to open them. The recovery indexer parses the TOC xhtml directly and synthesizes the spine — see [README → Engineering depth](../README.md#engineering-depth--the-things-that-didnt-go-in-the-spec).
+- **Content-hash duplicates.** Each chapter's content has a SHA256; re-running ingestion is idempotent. Macro-level duplicates (a Safari "(1).epub" auto-rename of an already-indexed book) are caught by chapter-content-hash overlap during extraction prep — the duplicate book is dropped from the catalog before extraction runs.
 
 ### Top of the library by author and publisher
 
-Top authors by book count: Martin Fowler (4), Joe Celko (4), Brian W. Kernighan (4), Denis Rothman (3), Tom Taulli (3), Jay Wengrow (3), Bruce Schneier (3), Roberto Infante (3), Addy Osmani (3), Ole Olesen-Bagneux (3).
+Top authors by book count: Mark Richards (6), Valliappa Lakshmanan (6), Joe Celko (5), Neal Ford (5), Brian W. Kernighan (4), Khaled El Emam (4), Martin Fowler (4), Ralph Kimball (4).
 
 Top publishers (by book count, with their authority tier used in ranking):
 
 | Publisher | Books | Authority tier (default) |
 |---|---|---|
-| O'Reilly Media, Inc. | 270 | high |
-| Manning Publications | 48 | high |
-| Packt | 28 | medium |
+| O'Reilly Media, Inc. | 283 | high |
+| Manning Publications | 52 | high |
+| Packt (all imprints) | 71 | medium |
 | Addison-Wesley Professional | 12 | high |
-| Apress | 9 | medium |
-| John Wiley & Sons | 9 | medium |
 | Elsevier | 12 | medium |
+| John Wiley & Sons | 9 | medium |
+| Apress | 9 | medium |
 
 Authority tiers feed the `authority` factor in the ranker — see [docs/architecture.md](architecture.md#five-factor-re-scoring).
 
@@ -77,22 +79,35 @@ Authority tiers feed the `authority` factor in the ranker — see [docs/architec
 
 The live-doc layer ingests current vendor documentation through MCP servers, snapshots the sections into the same DuckDB catalog, and re-indexes them on a TTL schedule.
 
-### The ten currently-indexed sources
+### Registered sources
 
-| Source | Provider | Sections | Snapshot age |
+**54 sources, 1,909 sections.** 52 served via Context7, 2 via DeepWiki. Below is the high-density subset by alignment-edge count; the full list spans data platforms (Spark / Kafka / Snowflake / BigQuery / Iceberg / Delta Lake / Hive / Trino), ML frameworks (PyTorch / TensorFlow / Keras / scikit-learn / spaCy), web frameworks (React / Next.js / FastAPI), AI/LLM tooling (LangChain / LangGraph / LlamaIndex / Haystack / MLflow / Stable Diffusion), cloud services (AWS Glue / S3 / Redshift / SageMaker / Lambda, GCP BigQuery, Databricks), databases (PostgreSQL / MySQL / SQLite / Redis / Neo4j / DuckDB / DuckPGQ), and dev tooling (Docker / Kubernetes / Terraform / Airflow / dbt / OpenAPI / gRPC / Jupyter / GitHub / GitHub Copilot / FastMCP).
+
+| Source | Provider | Sections | Alignment edges |
 |---|---|---|---|
-| PostgreSQL | Context7 | 22 | snapshot |
-| Apache Kafka | Context7 | 22 | snapshot |
-| Apache Spark | Context7 | 22 | snapshot |
-| LangChain | Context7 | 22 | snapshot |
-| MLflow | Context7 | 26 | snapshot |
-| Databricks | Context7 | 28 | snapshot |
-| Delta Lake | Context7 | 21 | snapshot |
-| DuckDB | Context7 | 20 | snapshot |
-| DuckPGQ | DeepWiki | 282 | snapshot |
-| FastMCP | DeepWiki | 437 | snapshot |
+| FastMCP | DeepWiki | 437 | 221 |
+| DuckPGQ | DeepWiki | 282 | 151 |
+| MLflow | Context7 | 26 | 36 |
+| React | Context7 | 23 | 31 |
+| FastAPI | Context7 | 23 | 32 |
+| scikit-learn | Context7 | 22 | 31 |
+| Apache Kafka | Context7 | 22 | 29 |
+| OpenAPI | Context7 | 24 | 28 |
+| spaCy | Context7 | 24 | 28 |
+| LangChain | Context7 | 22 | 28 |
+| SQLite | Context7 | 21 | 28 |
+| Stable Diffusion | Context7 | 23 | 25 |
+| GitHub | Context7 | 22 | 25 |
+| Haystack | Context7 | 23 | 24 |
+| Delta Lake | Context7 | 21 | 24 |
+| PostgreSQL | Context7 | 22 | 23 |
+| Apache Spark | Context7 | 22 | 22 |
+| dbt | Context7 | 22 | 22 |
+| Docker | Context7 | 21 | 22 |
+| Databricks | Context7 | 28 | 20 |
+| (34 more sources, 5–20 edges each) | | ~840 | ~480 |
 
-902 doc sections total at this writing.
+The DeepWiki sources (FastMCP, DuckPGQ) have anomalously high section counts because DeepWiki returns full repo trees rather than the 20-25 top topics that Context7 returns by default. The two stranded-then-recovered sources (Phase 1: snapshot only; Phase 2: extraction; Phase 3: alignment) contributed 391 of today's 1,320 alignment edges.
 
 ### Why three providers (Context7, DeepWiki, GitHub raw)
 
@@ -100,9 +115,9 @@ The probe order and authority defaults match how trustworthy each source typical
 
 | Provider | Authority default | Best at | Worst at |
 |---|---|---|---|
-| **Context7** | 0.60 | Vendor docs for popular OSS (Postgres, Kafka, Spark, Databricks, MLflow, …) | Long-tail libraries it hasn't indexed |
-| **DeepWiki** | 0.50 | AI-generated docs for any public GitHub repo (DuckPGQ, FastMCP, smaller libs) | Authoritativeness — it's *generated*, so we trust it less than vendor docs |
-| **GitHub raw** | 0.40 | Last-resort fetch of README / docs/ directory | No structure, manual section parsing |
+| **Context7** | 0.85 | Vendor docs for popular OSS, indexed and curated (Postgres, Kafka, Spark, Databricks, MLflow, FastAPI, React, …) | Long-tail libraries it hasn't indexed |
+| **DeepWiki** | 0.70 | AI-generated docs for any public GitHub repo (FastMCP, DuckPGQ, niche libs not on Context7) | Authoritativeness — it's *generated*, so we trust it less than vendor docs |
+| **GitHub raw** | 0.65 | Last-resort fetch of README / docs/ directory | No structure, manual section parsing |
 
 Probe order is Context7 → DeepWiki → GitHub raw. First confident hit wins. If multiple candidates score similarly, the discovery loop returns `asked_user` and waits for the user to pick.
 
@@ -158,22 +173,11 @@ alignment_edge
   explanation           → human-readable snippet
 ```
 
-Today's catalog: **120 CORROBORATES edges** across 7 of 10 sources:
+Today's catalog: **1,320 alignment edges** across all 54 sources — 1,296 CORROBORATES (avg confidence 0.72) and 24 CONTRADICTS (avg confidence 0.16). The full per-source breakdown is the table at the top of [Live documentation → Registered sources](#registered-sources).
 
-| Source | Alignment edges |
-|---|---|
-| LangChain | 24 |
-| Apache Kafka | 22 |
-| Delta Lake | 20 |
-| Apache Spark | 17 |
-| DuckDB | 14 |
-| PostgreSQL | 12 |
-| Databricks | 11 |
-| MLflow | (pending — alignment run not yet executed) |
-| DuckPGQ | (pending — narrow vendor surface; deferred) |
-| FastMCP | (pending — narrow vendor surface; deferred) |
+CORROBORATES dominates because narrow vendor docs tend to agree with or be unrelated to book content; high-confidence CONTRADICTS edges (vendor doc explicitly supersedes book guidance) are rare but valuable when they appear. Examples live in the catalog: FastMCP allowing breaking changes in minor versions vs. SemVer textbooks; React Compiler being installable now vs. "experimental" in older books; DuckPGQ's logical-graph-over-SQL approach vs. native graph databases' index-free adjacency.
 
-CONTRADICTS edges are 0 today: narrow vendor docs tend to corroborate or be unrelated to book content, not contradict it. The `Migration Guide` and `Currency Report` generators are designed to surface contradictions when they appear — see [docs/generators.md](generators.md#migration-guide).
+The `Migration Guide` and `Currency Report` generators consume CONTRADICTS edges — see [docs/generators.md → Migration Guide](generators.md#migration-guide). Quality of those generators improves as alignment is re-run with contradiction-tuned prompts; the alignment-rerun-after-new-books loop is described in [docs/operations.md → Deferred work](operations.md#deferred-work).
 
 ### Where alignment shows up in retrieval
 
@@ -248,12 +252,13 @@ Use `/kb-discover <library-name>` interactively, or seed manually:
 
 ## Corpus gaps (acknowledged)
 
-A few topics return tangential content because the corpus simply doesn't cover them well:
+A few topics still return tangential content because the corpus doesn't cover them deeply yet:
 
-- **TLS certificate pinning.** No chapter title in the corpus matches all three tokens; PostgreSQL SSL doc wins as a defensible-but-not-canonical answer. A security-focused book would close this.
-- **FHIR / HL7 / EHR integration patterns.** Healthcare data exchange topics return tangential content; FHIR and HL7 are real registered libraries on Context7 / DeepWiki and a `/kb-discover` workflow during dogfooding would probe them.
+- **TLS certificate pinning + low-level network security.** No chapter title in the corpus matches all three tokens; PostgreSQL SSL doc wins as a defensible-but-not-canonical answer. A security-focused book would close this.
+- **HL7-FHIR / clinical-trial / EHR integration patterns.** Healthcare data exchange topics return tangential content. FHIR ships its specs as JSON/XML resource definitions (one per `Patient`, `Observation`, etc.); HL7 v2 ships as schema documents. Both fit the `doc_section` model better than the `chapter` model and would be a natural extension of the live-doc layer once a `source_type='fhir_resource'` ingestion path is added. Recently-ingested life-sciences books (Biology for Engineers, NGS Data Analysis, Zero to Genetic Engineering Hero, Biophysics) cover the underlying biology; the integration / interop layer is the gap.
+- **Peer-reviewed life-sciences research (PubMed Central JATS XML).** A different ingestion path than ePub — JATS XML is structured and consistent, would map cleanly to a `paper` table that mirrors `book`. Worthwhile when the corpus needs to support life-sciences research workflows.
 
-These are known gaps — see [docs/operations.md](operations.md#corpus-gaps) for the running list.
+Tracking: [docs/operations.md → Deferred work](operations.md#deferred-work).
 
 ---
 

@@ -98,7 +98,7 @@ prints which sources are stale, which are pinned, and which were most recently r
 | Device | Apple MPS (Apple Silicon) / CUDA / CPU fallback |
 | Cold-start | ~90 MB downloaded into HuggingFace cache on first run |
 
-Why this model: small enough to load locally, fast enough on MPS to embed 113K chapters in under an hour, and the 384-dim output keeps the VSS index file under a few hundred megabytes.
+Why this model: small enough to load locally, fast enough on MPS to embed 118K chapters in under an hour, and the 384-dim output keeps the VSS index file under a few hundred megabytes.
 
 ### Generating embeddings (`scripts/generate_embeddings.py`)
 
@@ -228,23 +228,31 @@ Phase 2+ stubs commented in the SQL but not yet wired (because the backing table
 
 ## Stage 6 — concept extraction
 
-Concept extraction populates the 85K-concept graph. It's the only stage that uses sub-agent dispatch rather than a single Python script.
+Concept extraction populates the 312K-concept graph. The pipeline supports two dispatch backends: Claude Code sub-agents (the original path) or the Anthropic Batch API via `scripts/batch_dispatch.py` (the production path used for the corpus-wide extraction passes).
 
 ### Two-phase pattern: prep + process
 
 ```bash
-# Phase A — prep: write one prompt file per chapter
-.venv/bin/python3 scripts/extract_batch.py prep --limit 100
+# Phase A — prep: write one prompt file per chapter to a run directory
+.venv/bin/python3 scripts/extract_batch.py prep \
+    --books 542,543,...,571 \
+    --output-dir data/batch-runs/concepts-new-books-20260508
 
-# Phase B — sub-agents process the prompts (manual or via Claude Code dispatch)
+# Phase B — dispatch via Anthropic Batch API (Haiku 4.5 + prompt caching)
+.venv/bin/python3 scripts/batch_dispatch.py submit \
+    --manifest data/batch-runs/concepts-new-books-20260508/manifest.json \
+    --task concepts
+.venv/bin/python3 scripts/batch_dispatch.py poll  --state .../batch_state.json
+.venv/bin/python3 scripts/batch_dispatch.py fetch --state .../batch_state.json
 
 # Phase C — process: ingest the JSON results back into the catalog
-.venv/bin/python3 scripts/extract_batch.py process
+.venv/bin/python3 scripts/extract_batch.py process \
+    --output-dir data/batch-runs/concepts-new-books-20260508
 ```
 
 `prep` writes prompts under a run directory (gitignored) — one per chapter — including the chapter content, the existing concept catalog, and the resolver's contextual hints. `process` reads each result JSON, parses it, runs the EntityResolver to dedupe against existing concepts, and inserts new `concept` and `concept_relation` rows.
 
-The full extraction lifecycle is in [docs/concept-graph.md](concept-graph.md#extraction-pipeline). The same prep/process pattern is used for procedures (`scripts/extract_procedures.py`) and book-doc alignment (`scripts/migrate_phase4_4b_alignment.py`).
+The full extraction lifecycle is in [docs/concept-graph.md](concept-graph.md#extraction-pipeline). The same prep/process pattern is used for procedures (`scripts/extract_procedures.py`) and book-doc alignment (`scripts/refresh_docs.py align-prep` / `align-process`). The `submit-doc-extraction` subcommand of `batch_dispatch.py` handles the refresh-style `sections[]` manifest for doc-section concept + procedure extraction in one pass.
 
 ---
 
@@ -257,7 +265,7 @@ The full extraction lifecycle is in [docs/concept-graph.md](concept-graph.md#ext
 .venv/bin/python3 scripts/extract_procedures.py process
 ```
 
-Today's catalog: **4,341 procedures**, all chapter-sourced. Procedures from doc sections are not yet extracted — known debt in [docs/operations.md](operations.md#deferred-work).
+Today's catalog: **47,874 procedures** with 175,106 procedure-concept links. 46,904 are chapter-sourced and 970 are doc-section-sourced.
 
 The procedure schema:
 
@@ -279,21 +287,23 @@ Procedures are the backbone of the Tutorial generator and Project Bootstrap — 
 
 ## Stage 8 — alignment extraction
 
-The alignment pass takes a doc source (e.g., Apache Kafka), identifies sections that overlap with book chapters, and emits `alignment_edge` rows tagged `CORROBORATES` or `CONTRADICTS`.
+The alignment pass takes a snapshot, identifies sections that overlap with book chapters by concept, and asks Sonnet 4.6 to classify the relationship as `CORROBORATES` or `CONTRADICTS` with a confidence score.
 
 ```bash
-# Per source, in sequence:
-.venv/bin/python3 scripts/migrate_phase4_4b_alignment.py prep --source kafka
-# (sub-agents process)
-.venv/bin/python3 scripts/migrate_phase4_4b_alignment.py process --source kafka
-.venv/bin/python3 scripts/migrate_phase4_4b_alignment.py align-prep --source kafka
-# (alignment sub-agents process)
-.venv/bin/python3 scripts/migrate_phase4_4b_alignment.py align-process --source kafka
+# Per snapshot, in sequence:
+.venv/bin/python3 scripts/refresh_docs.py align-prep \
+    --snapshot-id 14 --output-dir data/refresh/<ts>/alignment_14
+.venv/bin/python3 scripts/batch_dispatch.py submit-alignment \
+    --manifest data/refresh/<ts>/alignment_14/manifest.json
+.venv/bin/python3 scripts/batch_dispatch.py poll --state .../batch_state.json
+.venv/bin/python3 scripts/batch_dispatch.py fetch --state .../batch_state.json
+.venv/bin/python3 scripts/refresh_docs.py align-process \
+    --output-dir data/refresh/<ts>/alignment_14
 ```
 
-Today's results across the 7 aligned sources: **120 CORROBORATES edges, 0 CONTRADICTS**. CONTRADICTS is empty because narrow vendor docs tend to corroborate or be unrelated to book content, not contradict it. The Migration Guide and Currency Report generators are designed to surface contradictions when they appear.
+Today's results across all 54 sources: **1,296 CORROBORATES + 24 CONTRADICTS edges** (avg confidence 0.72 / 0.16). CORROBORATES dominates because narrow vendor docs tend to agree with or be unrelated to book content. High-confidence CONTRADICTS edges are rare but valuable when they appear — see [docs/concept-graph.md → alignment](concept-graph.md#alignment-edges).
 
-The 5 remaining unaligned sources (MLflow, plus the larger DeepWiki sources DuckPGQ and FastMCP) are tracked in [docs/operations.md](operations.md#deferred-work).
+Alignment is non-deterministic at the per-section level; the same prompt produces different edges across runs. For high-stakes contradiction detection, multi-sample voting (run alignment N=3 times, accept any edge with conf ≥ 0.7 in any run) is the path forward — tracked in [docs/operations.md → Deferred work](operations.md#deferred-work).
 
 ---
 
@@ -340,7 +350,7 @@ Every script in the pipeline can be safely re-run. The mechanics:
 | Procedure extraction | Same — prompt-file presence drives skip |
 | Alignment | Same prep/process semantics |
 
-If you delete `data/catalog.ddb` entirely, run the full sequence in order. Embeddings will need to regenerate (~55 minutes on Apple Silicon for 113K chapters); FTS and VSS rebuild in seconds; the concept graph rebuild requires the run-artifact JSONs (preserved locally but gitignored) — see [docs/operations.md](operations.md#disaster-recovery).
+If you delete `data/catalog.ddb` entirely, run the full sequence in order. Embeddings will need to regenerate (~55 minutes on Apple Silicon for 118K chapters); FTS and VSS rebuild in seconds; the concept graph rebuild requires the run-artifact JSONs (preserved locally but gitignored) — see [docs/operations.md](operations.md#disaster-recovery).
 
 ---
 

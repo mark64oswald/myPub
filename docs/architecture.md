@@ -88,9 +88,9 @@ The fused candidate pool is then re-scored. The five factors:
 |---|---|---|
 | **relevance** | RRF score from FTS × VSS × graph | Already in [0, 1] post-fusion; treated as the base signal |
 | **recency** | `book.publication_date`, `doc_snapshot.retrieved_at` | Exponential decay; half-life set per profile |
-| **authority** | Publisher tier for books; doc-source tier (Context7=0.60, DeepWiki=0.50, GitHub=0.40) | Hand-set tiers; books inherit publisher rank |
-| **corroboration** | `alignment_edge` table — CORROBORATES boosts, CONTRADICTS would penalize (0 in catalog currently) | Only fires for queries against domains with extracted alignment edges (7 of 10 sources today) |
-| **doc_alignment** | Whether the query domain has live-doc coverage at all | 1.00 for the 7 aligned sources, 0.50 neutral elsewhere — prevents penalizing a query that *can't* be corroborated because no live doc exists |
+| **authority** | Publisher tier for books; doc-source tier (Context7=0.85, DeepWiki=0.70, GitHub=0.65) | Hand-set tiers; books inherit publisher rank |
+| **corroboration** | `alignment_edge` table — CORROBORATES boosts, CONTRADICTS penalizes | 1,296 CORROBORATES + 24 CONTRADICTS edges live across all 54 doc sources |
+| **doc_alignment** | Whether the query domain has live-doc coverage at all | 1.00 for the 54 aligned sources, 0.50 neutral elsewhere — prevents penalizing a query that *can't* be corroborated because no live doc exists |
 
 The final score is a weighted combination determined by `weight_profile`. Profiles are tuned per use case — see [docs/customization.md](customization.md#weight-profiles).
 
@@ -136,19 +136,19 @@ Probe order, novel-library detection, and authority defaults live in [`mcp-serve
 
 ## The concept graph
 
-Five edge types, all extracted from chapter text by sub-agent prompts:
+Five edge types, all extracted from chapter and doc-section text:
 
 | Type | Meaning | Count today |
 |---|---|---|
-| `REQUIRES` | A is a prerequisite for B | 39,716 |
-| `IMPLEMENTS` | A is an implementation pattern for B | 37,645 |
-| `EXTENDS` | A is a refinement / specialization of B | 17,661 |
-| `CITES` | A's discussion references B | 16,298 |
-| `CONTRASTS_WITH` | A and B are commonly compared / contrasted | 16,170 |
+| `CITES` | A's discussion references B | 409,808 |
+| `IMPLEMENTS` | A is an implementation pattern for B | 83,031 |
+| `REQUIRES` | A is a prerequisite for B | 58,105 |
+| `CONTRASTS_WITH` | A and B are commonly compared / contrasted | 45,419 |
+| `EXTENDS` | A is a refinement / specialization of B | 16,244 |
 
 Plus the side `alignment_edge` table for cross-source signals (`CORROBORATES`, `CONTRADICTS`).
 
-Concept extraction is sub-agent-driven: `scripts/extract_batch.py prep` writes one prompt per chapter to a run directory, sub-agents process them, and `extract_batch.py process` ingests the JSON results idempotently. Same shape for procedures (`scripts/extract_procedures.py`) and alignment (`scripts/migrate_phase4_4b_alignment.py`).
+Concept extraction runs through `scripts/extract_batch.py prep` (writes prompts) → `scripts/batch_dispatch.py submit --task concepts` (Anthropic Batch API with Haiku 4.5 + prompt caching) → fetch → `scripts/extract_batch.py process` (resolver-driven idempotent ingest). Same shape for procedures (`scripts/extract_procedures.py`), doc-section extraction (`scripts/refresh_docs.py prep` + `batch_dispatch.py submit-doc-extraction`), and alignment (`scripts/refresh_docs.py align-prep` + `batch_dispatch.py submit-alignment` with Sonnet 4.6).
 
 For full details on extraction, resolution, and alignment: [docs/concept-graph.md](concept-graph.md).
 

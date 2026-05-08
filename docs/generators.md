@@ -267,7 +267,7 @@ The Tutorial generator's v1 renders procedure JSON steps verbatim; v2 should rew
 
 **Output**: `migration-guide.md` with a per-concept change list and migration steps.
 
-**Today's caveat**: the `alignment_edge` table has 0 CONTRADICTS rows. Migration Guide infrastructure ships correctly but is data-starved until the alignment passes are tuned for contradiction detection. See [docs/operations.md](operations.md#deferred-work).
+**Today's caveat**: the `alignment_edge` table has 24 CONTRADICTS rows but most are degenerate (avg confidence 0.16). Migration Guide infrastructure ships correctly but is signal-starved until alignment is rerun with a contradiction-tuned prompt + multi-sample voting. Real high-confidence CONTRADICTS examples that *have* surfaced (FastMCP allowing breaking changes in minor versions vs. SemVer textbooks; React Compiler being installable now vs. "experimental" in older books; DuckPGQ's logical-graph-over-SQL approach vs. native graph databases' index-free adjacency) prove the substrate works — the issue is signal density. See [docs/operations.md → Deferred work](operations.md#deferred-work).
 
 ---
 

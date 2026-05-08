@@ -209,4 +209,10 @@ ORDER BY relevance DESC;
 
 ## Next Phase
 
-Proceed to [Phase 3: Skills Generation](./PHASE_3_SKILLS.md) once concept graph is established.
+Phase 3 and beyond are documented in the canonical specs:
+
+- [mypub-v2-architecture.md](mypub-v2-architecture.md) — full system design including Skills Generation, generators, and ranking
+- [mypub-v2-execution-plan.md](mypub-v2-execution-plan.md) — phased roadmap (Phases 3-17)
+- [mypub-v2-generators.md](mypub-v2-generators.md) — per-generator specifications
+
+The PHASE_*.md docs in this directory are historical phase notes from the v1 era; the v2 design supersedes them.

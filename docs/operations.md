@@ -87,68 +87,34 @@ Reports precision / recall / F1 on the extraction golden set ([`tests/eval/golde
 
 ## Deferred work
 
-Known debt as of the last push. See `~/.claude/projects/-Users-markoswald-Developer-projects-myPub/memory/project_deferred_retrieval_work.md` for the running log.
+The substrate, ranking engine, concept graph, and 17 generators have all shipped. Most of what was historically deferred has been resolved through targeted cleanup rounds. This section is the honest current ledger — what's done, what's still open, and why the open items haven't been closed yet.
 
-### Alignment
+The full per-cleanup-round detail lives in the auto-memory at `~/.claude/projects/-Users-markoswald-Developer-projects-myPub/memory/` (notably `project_post_resplit_state_*`, `project_doc_source_expansion_*`, `project_cleanup_closeout_*`).
 
-| Item | State |
+### Recently closed
+
+| Item | Resolution |
 |---|---|
-| Apache Kafka, Apache Spark, PostgreSQL, DuckDB, Delta Lake, Databricks, LangChain | ✅ aligned (107 sections + 35 → 120 edges) |
-| MLflow (26 sections) | Pending — medium effort, ~50 sub-agent runs |
-| FastMCP (437 sections) | Deferred indefinitely — narrow vendor API, low expected book overlap |
-| DuckPGQ (282 sections) | Deferred indefinitely — same reasoning |
-| CONTRADICTS-tuned alignment prompts | Pending — current prompt produces only CORROBORATES; Migration Guide and Currency Report are data-starved until this lands |
+| Phase 1 splitter bug (88.5% chapter content duplicated across TOC siblings) | Fixed via fragment-anchor slicing + in-place migration that preserved `chapter_id`s. Post-fix: 3.3% duplication. |
+| Doc-source coverage (10 → 54 sources) | Batched Context7 discovery + Anthropic Batch API extraction (Haiku 4.5) + alignment (Sonnet 4.6). Final: 54 sources, 1,909 sections. |
+| 3 stranded doc sources (MLflow, FastMCP, DuckPGQ — snapshots without extraction) | Re-prepped + extracted + aligned. Added 448 alignment edges. |
+| 20 books missing authors (incl. 3 "AUTHOR NAMES HERE" placeholders, 17 with no `dc:creator`) | Resolved via OpenLibrary + Google Books ISBN lookup. 1 unresolvable book remains (Platform Enterprise — source ePub has no author metadata at all). |
+| Author smush bug (161 rows containing comma-separated co-authors as one row) | Fixed via robust splitter with credential-suffix re-merging (M.D., Ph.D., Jr., II, III). |
+| Concept-name duplicate hygiene (8,326 strict-orphan duplicates across `concept_type` variants) | Removed via `scripts/dedupe_concepts.py`. ~26K multi-type groups remain but all have edges (resolver-fix in `ecc74f4` routes lookups to the richest twin). |
+| Procedure extraction on doc sections | 970 doc-section procedures + 175K procedure-concept links extracted as part of the doc-source expansion. |
+| New-book ingestion path validation | 32 new ePubs ingested; 30 indexed cleanly; 2 with empty `OEBPS/content.opf` recovered via custom indexer that parses TOC xhtml directly; 1 Safari-rename duplicate caught at chapter-content-hash time. |
 
-### Procedure extraction on doc sections
+### Truly open
 
-`procedure` table currently has 4,341 chapter-sourced rows and zero doc-section-sourced rows. The Phase 4.4b alignment prep generated `prompt_section_<id>_proc.txt` files for each aligned source's sections, but these were never dispatched to sub-agents. To activate:
-
-```bash
-# Re-prep against the same output dir already used per source
-.venv/bin/python3 scripts/extract_procedures.py prep --source kafka
-# Dispatch sub-agents to process the procedure prompts
-# Re-run process — idempotent if rows already exist
-.venv/bin/python3 scripts/extract_procedures.py process
-```
-
-~20–25 sub-agent runs per source.
-
-### Phase 1 splitter bug
-
-94.8% of chapters share content with siblings due to a Phase 1 sectionizer issue. This is mitigated at retrieval time (the ranker dedupes near-identical chapters), but a proper fix needs a re-ingestion pass with a corrected splitter. Tracked in `project_phase1_splitter_bug.md`. Not blocking dogfooding — the retrieval mitigations are working — but should be fixed before the next major version.
-
-### Concept-name duplicate hygiene
-
-5,597 concept-name groups have duplicates across `concept_type` variants (e.g., "Event Sourcing" as both `Concept` and `Pattern`). The resolver bug that picked the empty twin was fixed in `ecc74f4` — the duplicates themselves are now harmless, but consolidating them would tighten the graph. `scripts/dedupe_concepts.py` is the script for this; its flags (`--catalog`, `--dry-run`, `--limit`, `--report-file`) let you preview a merge run and capture a report before applying. Start with `--dry-run` to see what would change.
-
-### Ranking weight tuning
-
-Current `WEIGHT_PROFILES` were calibrated to dogfood data, not eval-driven. Watch for:
-
-- `rec=0.10` too low for the default? (currency-critical queries getting wrong answers under `balanced_interactive`)
-- `TITLE_COVERAGE_BOOST=0.8` too aggressive? (chapters with metaphorical titles winning)
-- `skill_*` profiles correctly calibrated for current Skills Factory? (untested since May 2026)
-
-Real eval data from sustained dogfooding should drive the next iteration.
-
-### Author placeholder
-
-3 books currently have NO author after the "AUTHOR NAMES HERE" placeholder cleanup in `ecc74f4`:
-
-- `book_id=42` — Agentic AI Data Architectures (O'Reilly)
-- `book_id=151` — Data Mesh (O'Reilly) — by Zhamak Dehghani
-- `book_id=484` — TensorFlow 2 Pocket Reference (O'Reilly) — by KC Tung
-
-To restore: re-extract author metadata from the source ePubs (`book.source_path`).
-
-### Generator v2 work
-
-The generator program shipped v1 (deterministic skeleton + sub-agent prompts). v2 items:
-
-- **Bootstrap dispatch loop.** Wrap the Task agent dispatch (mirror Skills Factory's prep/process pattern).
-- **Bootstrap runtime validation.** Add `pip install + pytest + docker-compose up + data flows` smoke pass.
-- **Content Generator prose layer** (Phase 9.1–9.3). Sub-agent dispatch for actual prose, not just the brief skeleton.
-- **Tutorial prose layer** (Phase 10). Rewrite each procedure step as pedagogical prose via sub-agent.
+| Item | Why it's still open |
+|---|---|
+| **CONTRADICTS quality** | Avg confidence on the 24 CONTRADICTS edges is 0.16 — most are degenerate. The 9 high-conf CONTRADICTS we surfaced from the FastMCP/DuckPGQ recovery (FastMCP allowing breaking changes in minor versions, contradicting SemVer textbooks) didn't reproduce on a later re-run because alignment is non-deterministic. Real fix: contradiction-tuned prompt + multi-sample voting (N=3, accept any conf-≥0.7). Migration Guide and Currency Report quality is gated on this. |
+| **Generator-output validation** | The 17 generators all ship and pass unit + integration tests. What's missing is real-eval grading: run `/kb-currency-report`, `/kb-migration-guide`, `/kb-bootstrap` against the now-richer substrate and inspect the output. That's the only way to know if the substrate actually delivers, not just that it ingested cleanly. |
+| **Domain gaps for healthcare / life sciences** | Catalog now has decent biology/genomics books (Biology for Engineers, NGS Data Analysis, Zero to Genetic Engineering Hero) but zero PubMed Central / clinical-trial papers / HL7-FHIR specs. These need different ingestion paths (JATS XML, FHIR resources). New `source_type` column values would map them in cleanly without overloading `chapter` or `doc_section`. |
+| **Project Bootstrap v2** | v1 emits skeletons + sub-agent prompts; v2 wraps the Task-agent dispatch loop and adds runtime validation (`pip install + pytest + docker-compose up + smoke-test`). Mirrors the Skills Factory's prep→dispatch→process pattern. |
+| **Tutorial / Content Brief prose layer (Phase 9 + 10 v2)** | v1 generators emit deterministic skeletons. v2 dispatches a sub-agent per file to fill in pedagogical prose. Architecture is the same as Bootstrap v2. |
+| **Ranking weight tuning from real eval data** | Current `WEIGHT_PROFILES` were calibrated to dogfooding observation, not eval-driven. The retrieval eval set should grow and drive the next round of weight tuning. |
+| **1 book with no author** | `book_id=558` Platform Enterprise (ISBN 9798341643444). The source ePub ships an O'Reilly template OPF with no creator field; OpenLibrary, Google Books, and ISBN search all return nothing. Genuinely unknown without a different source. |
 
 ---
 
@@ -163,12 +129,12 @@ Topics where the system returned tangential content despite working correctly (c
 
 ## Disaster recovery
 
-The catalog (`data/catalog.ddb`) and the run artifacts (`data/extraction-runs/`, `data/alignment-runs/`) are gitignored. Recovery scenarios:
+The catalog (`data/catalog.ddb`) and the run artifacts (`data/batch-runs/`, `data/refresh/`) are gitignored. Recovery scenarios:
 
 ### Scenario 1 — catalog wiped, run artifacts intact
 
 ```bash
-# Re-run Phase 1-3 ingestion to rebuild books / chapters / concepts
+# Rebuild substrate (books / chapters / authors / embeddings / indexes)
 .venv/bin/python3 scripts/migrate_v2_schema.py
 .venv/bin/python3 scripts/install_extensions.py
 .venv/bin/python3 scripts/index_books.py
@@ -177,22 +143,33 @@ The catalog (`data/catalog.ddb`) and the run artifacts (`data/extraction-runs/`,
 .venv/bin/python3 scripts/build_vss_index.py
 .venv/bin/python3 scripts/build_property_graph.py
 
-# Re-populate doc_sections from existing snapshots
+# Re-populate doc_sources + snapshots
+.venv/bin/python3 scripts/seed_doc_sources.py
 .venv/bin/python3 scripts/refresh_docs.py refresh --all --no-extract
 
-# For each aligned source, replay extraction + alignment from existing
-# JSON results in data/extraction-runs/ and data/alignment-runs/
-for src in postgres kafka spark duckdb delta databricks langchain; do
-  .venv/bin/python3 scripts/migrate_phase4_4b_alignment.py process --source $src
-  .venv/bin/python3 scripts/migrate_phase4_4b_alignment.py align-process --source $src
+# Replay concept + procedure extraction for each batch-run dir
+# (the result JSON files are already on disk — no API calls needed)
+for d in data/batch-runs/concepts-*/; do
+  .venv/bin/python3 scripts/extract_batch.py process --output-dir "$d"
+done
+for d in data/batch-runs/procedures-*/; do
+  .venv/bin/python3 scripts/extract_procedures.py process --output-dir "$d"
+done
+
+# Replay doc-section extraction + alignment for each refresh dir
+for d in data/refresh/*/snapshot_*/; do
+  .venv/bin/python3 scripts/refresh_docs.py process --output-dir "$d"
+done
+for d in data/refresh/*/alignment_*/; do
+  .venv/bin/python3 scripts/refresh_docs.py align-process --output-dir "$d"
 done
 ```
 
-The expensive sub-agent extraction is recoverable as long as the run-artifact JSONs survive.
+The expensive part — Anthropic Batch API extraction + alignment — is recoverable as long as the result JSONs in `data/batch-runs/` and `data/refresh/*/` survive.
 
 ### Scenario 2 — both catalog and run artifacts lost
 
-Only re-running ~145 sub-agent extractions would reconstruct the alignment data. Worth backing up `data/extraction-runs/` and `data/alignment-runs/` before any catalog migration or schema change.
+The full ingestion + extraction + alignment pipeline would need to be re-run from scratch. Cost estimate: ~$10-20 in Anthropic Batch API spend (Haiku 4.5 + Sonnet 4.6 with prompt caching), ~6-8 hours wall-clock dominated by Batch API processing time. Worth backing up `data/batch-runs/` and `data/refresh/` before any catalog migration or schema change.
 
 ### Scenario 3 — embeddings need re-generation
 
@@ -210,7 +187,7 @@ c.close()
 .venv/bin/python3 scripts/generate_embeddings.py
 ```
 
-~55 minutes for 113K chapter embeddings on Apple Silicon MPS.
+~55 minutes for 118K chapter embeddings on Apple Silicon MPS.
 
 ### Scenario 4 — DuckDB version upgrade
 
@@ -305,7 +282,7 @@ DELETE FROM generated_package WHERE created_at < now() - INTERVAL 30 DAY;
 ## Test suite
 
 ```bash
-./scripts/test.sh                       # full suite (830 tests)
+./scripts/test.sh                       # full suite (37 test modules)
 ./scripts/test.sh -k resolve            # filter
 ./scripts/test.sh tests/test_schema.py  # single file
 ./scripts/test.sh -v                    # verbose

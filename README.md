@@ -4,7 +4,7 @@
 
 A book is too coherent to chunk. A vendor doc is too current to ignore. Most knowledge bases pick one and lose the other half — myPub keeps both, in one DuckDB file, with edges between them.
 
-> **541 books. 10 live doc sources. 85K concepts. 17 generators. One DuckDB file. Zero cloud.**
+> **572 books · 54 live doc sources · 312K concepts · 1,320 alignment edges · 17 generators · one DuckDB file · zero cloud.**
 
 ---
 
@@ -23,15 +23,15 @@ myPub combines two fundamentally different kinds of source material into one sub
 |   | **Local ePub library** | **Live documentation** |
 |---|---|---|
 | **What it is** | Technical books I've bought (.epub files) | Current vendor documentation pulled from MCP servers |
-| **Where it lives** | `~/Documents/eBooks/` (~540 books, ~450 GB total) | `doc_section` rows in the catalog, refreshed on TTL |
+| **Where it lives** | `~/Documents/eBooks/` (~572 books, ~470 GB total) | `doc_section` rows in the catalog, refreshed on TTL |
 | **How it gets there** | `scripts/index_books.py` walks the directory, extracts chapter structure, generates embeddings | `scripts/refresh_docs.py` calls Context7 / DeepWiki / GitHub raw via MCP, snapshots the markdown, sectionizes by heading |
 | **Granularity** | Chapter (preserves the author's structural intent) | Heading-aligned section (preserves the doc author's structure) |
 | **What it's good at** | Explaining *why* something is shaped the way it is. Foundational concepts. Tradeoffs. The long view. | Telling you what the *current* API surface looks like — what flag is the new default, what changed in 3.0 |
 | **What it's bad at** | Currency. A 2018 book about Kafka still says exactly-once needs manual setup. | Explaining itself. The current Kafka doc tells you `enable.idempotence=true` is default; it won't tell you why exactly-once was hard for a decade. |
-| **Authority** | Publisher-tier (O'Reilly, Manning, Addison-Wesley graded high; Packt mid; defaults below) | Provider-tier: Context7 = 0.60, DeepWiki = 0.50, GitHub raw = 0.40 |
+| **Authority** | Publisher-tier (O'Reilly, Manning, Addison-Wesley graded high; Packt mid; defaults below) | Provider-tier: Context7 = 0.85 (curated/vendor), DeepWiki = 0.70 (AI-generated), GitHub raw = 0.65 |
 | **Typical age** | Years (book publication date) | Days to weeks (`refresh_ttl_days`, default 30) |
 | **Schema** | `book` → `chapter` → `chapter_embedding` | `doc_source` → `doc_snapshot` → `doc_section` → `doc_section_embedding` |
-| **Today's count** | 541 books, 113K chapters | 10 sources, 902 sections |
+| **Today's count** | 572 books, 118K chapters | 54 sources, 1,909 sections |
 
 ### Why one without the other isn't enough
 
@@ -39,7 +39,7 @@ A book-only KB tells you what consistent hashing *is*, but doesn't know that Dyn
 
 The ranker has two factors that make this concrete:
 
-- **`corroboration`** — when a query hits a topic where book and live doc both exist, it gets a boost. The signal comes from the `alignment_edge` table (120 CORROBORATES edges across 7 sources today; 0 CONTRADICTS — see [docs/concept-graph.md → alignment edges](docs/concept-graph.md#alignment-edges)).
+- **`corroboration`** — when a query hits a topic where book and live doc both exist, it gets a boost. The signal comes from the `alignment_edge` table (1,296 CORROBORATES edges across all 54 sources today, plus 24 CONTRADICTS — see [docs/concept-graph.md → alignment edges](docs/concept-graph.md#alignment-edges)).
 - **`doc_alignment`** — *whether the query domain has any live-doc coverage at all*. 1.00 if yes, 0.50 (neutral) if no. This stops the ranker from penalizing queries that *can't* be corroborated because no live doc exists for that topic.
 
 ### The book-vs-doc tension, made visible
@@ -67,22 +67,30 @@ book route. Want to ship Kafka 3.x today? Use the doc route. Want both?
 The interactive mode shows them side by side and flags any conflicts.
 ```
 
-The ten currently-indexed live doc sources, with how much alignment they've earned against the book corpus:
+The catalog tracks **54 live doc sources** today (52 Context7, 2 DeepWiki) covering 1,909 sections. The breakdown spans the working stacks the corpus actually has books about — data platforms, ML frameworks, web frameworks, cloud services, databases, message queues, dev tooling. A representative sample by alignment density:
 
-| Source | Provider | Sections | Alignment edges to books |
+| Source | Provider | Sections | Alignment edges |
 |---|---|---|---|
-| PostgreSQL | Context7 | 22 | 12 |
+| LangChain | Context7 | 22 | 27 |
+| React | Context7 | 23 | 34 |
+| spaCy | Context7 | 24 | 31 |
+| FastAPI | Context7 | 23 | 29 |
+| OpenAPI | Context7 | 24 | 27 |
+| scikit-learn | Context7 | 22 | 27 |
+| GitHub | Context7 | 22 | 26 |
+| Stable Diffusion | Context7 | 23 | 24 |
+| Haystack | Context7 | 23 | 23 |
+| LangGraph | Context7 | 21 | 23 |
+| PySpark | Context7 | 34 | 23 |
 | Apache Kafka | Context7 | 22 | 22 |
-| Apache Spark | Context7 | 22 | 17 |
-| LangChain | Context7 | 22 | 24 |
-| MLflow | Context7 | 26 | (alignment pending) |
-| Databricks | Context7 | 28 | 11 |
 | Delta Lake | Context7 | 21 | 20 |
-| DuckDB | Context7 | 20 | 14 |
-| DuckPGQ | DeepWiki | 282 | (deferred — narrow vendor surface) |
-| FastMCP | DeepWiki | 437 | (deferred — narrow vendor surface) |
+| OpenLineage / dbt / Terraform / Apache Airflow / … | Context7 | … | … |
+| FastMCP | DeepWiki | 437 | 245 |
+| DuckPGQ | DeepWiki | 282 | 170 |
 
-When a query mentions a library that's in *neither* source, the auto-discovery loop probes Context7 → DeepWiki → GitHub raw in tier order. First confident hit registers a new `doc_source` row; if multiple candidates score similarly, you're asked to pick. Full mechanics: [docs/data-sources.md](docs/data-sources.md) and [docs/ingestion-and-indexing.md → discovery](docs/ingestion-and-indexing.md#refresh-and-discovery).
+Full per-source numbers in [docs/data-sources.md](docs/data-sources.md#registered-sources).
+
+When a query mentions a library that's in *neither* the local books *nor* any registered live-doc source, the auto-discovery loop probes Context7 → DeepWiki → GitHub raw in tier order. First confident hit registers a new `doc_source` row; if multiple candidates score similarly, you're asked to pick. The catalog grew from 10 → 54 doc sources via this same path, sometimes in batched expansions and sometimes one source at a time during real queries. Full mechanics: [docs/data-sources.md](docs/data-sources.md) and [docs/ingestion-and-indexing.md → discovery](docs/ingestion-and-indexing.md#refresh-and-discovery).
 
 ---
 
@@ -296,7 +304,7 @@ For the full walkthrough — including extraction, alignment, and the first gene
         ┌────────────────────┐               ┌─────────────────────────┐
         │  ePub library      │               │  Live doc MCP servers   │
         │  ~/Documents/      │               │  Context7 · DeepWiki    │
-        │  eBooks/ (541)     │               │  · GitHub raw           │
+        │  eBooks/ (572)     │               │  · GitHub raw           │
         └────────────────────┘               └─────────────────────────┘
 ```
 
@@ -308,20 +316,24 @@ Detailed walkthrough: [docs/architecture.md](docs/architecture.md).
 
 | | Count |
 |---|---|
-| Books indexed | **541** |
-| Chapters | **113,165** (112,968 with content) |
-| Concepts | **85,328** |
-| Concept-graph edges (REQUIRES, EXTENDS, IMPLEMENTS, CONTRASTS_WITH, CITES) | **127,490** |
-| Procedures (precondition / steps / postcondition / failure modes) | **4,341** |
-| Live doc sources | **10** (8 Context7, 2 DeepWiki) |
-| Doc sections indexed | **902** |
-| Alignment edges (book ↔ live-doc CORROBORATES) | **120** across 7 sources |
+| Books indexed | **572** |
+| Chapters | **118,447** (118,110 with content + embeddings) |
+| Authors | **820** |
+| Concepts | **312,396** (every concept has a 384-dim embedding) |
+| Concept-graph edges (CITES, IMPLEMENTS, REQUIRES, CONTRASTS_WITH, EXTENDS) | **612,607** |
+| Procedures (precondition / steps / postcondition / failure modes / concept links) | **47,874** with **175,106** concept links |
+| Live doc sources | **54** (52 Context7, 2 DeepWiki) |
+| Doc snapshots / sections | 54 / **1,909** |
+| Alignment edges (book chapter ↔ live-doc section) | **1,320** (1,296 CORROBORATES + 24 CONTRADICTS) |
 | Generators on the Phase 7 framework | **17** |
-| Tests | **830** (825 unit + 5 live) |
+| Tests | **37 test modules** (unit + live API) |
 
-Top publishers: O'Reilly (270), Manning (48), Packt (28), Addison-Wesley (12). Top authors by book count: Martin Fowler, Joe Celko, Brian Kernighan (4 each).
+**Concept-relation breakdown:** 410K CITES (66%), 83K IMPLEMENTS, 58K REQUIRES, 45K CONTRASTS_WITH, 16K EXTENDS — the shape of a graph that's been earning its edges for a year.
 
-The live doc source breakdown is in the [Two kinds of input](#two-kinds-of-input--and-why-both) section above; full operational details are in [docs/data-sources.md](docs/data-sources.md).
+**Top publishers:** O'Reilly (283), Manning (52), Packt (71 across imprints), Addison-Wesley + Wiley + Apress + Elsevier filling out the long tail.
+**Top authors by book count:** Mark Richards & Valliappa Lakshmanan (6 each), Joe Celko & Neal Ford (5 each), Brian Kernighan, Khaled El Emam, Martin Fowler, Ralph Kimball (4 each).
+
+The full live-doc-source breakdown is in the [Two kinds of input](#two-kinds-of-input--and-why-both) section above; per-source details are in [docs/data-sources.md](docs/data-sources.md).
 
 ---
 
@@ -336,7 +348,7 @@ The substrate is more than a database — it's a hybrid retrieval engine designe
 | **FTS (BM25, Porter-stemmed)** | `chapter.content` and `doc_section.content` | Exact-phrase wins. "BM25", "Lambda Architecture", `enable.idempotence` — terms that semantic search dilutes by averaging | Without FTS, querying for a specific config flag returns chapters that *talk about* config flags but don't mention this one |
 | **VSS (HNSW, cosine)** | 384-dim `sentence-transformers/all-MiniLM-L6-v2` embeddings, in side tables | Paraphrases and conceptual neighbors. "consistent hashing" finds chapters about Rendezvous, Maglev, and DHT — even when those words don't appear in the query | Without VSS, the system can only find what you asked for verbatim |
 | **DuckPGQ property graph** | `mypub` graph: `author`/`book`/`chapter`/`concept` vertex tables, `wrote`/`book_contains`/`concept_relates_to` edges | "X relates to Y" queries that pure search can't express — author roll-ups, prerequisite walks | Without the graph, comparing how three authors handle CQRS becomes manual collation |
-| **Concept graph + alignment edges** | 85K concepts, 127K relations (REQUIRES / EXTENDS / IMPLEMENTS / CONTRASTS_WITH / CITES), 120 cross-source CORROBORATES edges | Cross-document reasoning: prerequisites, contrasts, book↔doc agreement | Without this, the system is a pile of independent text files; with it, it's a knowledge structure |
+| **Concept graph + alignment edges** | 312K concepts, 613K relations (CITES / IMPLEMENTS / REQUIRES / CONTRASTS_WITH / EXTENDS), 1,320 cross-source alignment edges | Cross-document reasoning: prerequisites, contrasts, book↔doc agreement and disagreement | Without this, the system is a pile of independent text files; with it, it's a knowledge structure |
 
 Embeddings live in side tables (`chapter_embedding`, `concept_embedding`, etc.) instead of as columns on the parent. This isn't aesthetic — DuckDB 1.5.0 raises a spurious FK violation on `UPDATE chapter SET embedding = …` when the row has inbound FKs. The pinned regression test `tests/test_duckdb_fk_bugs.py` exercises three such bugs we work around. Full schema rationale: [docs/architecture.md → substrate](docs/architecture.md#the-substrate-duckdb).
 
@@ -372,8 +384,8 @@ This is the part that distinguishes myPub from a vector-only RAG. After fusion, 
 | **`relevance`** | The fused FTS+VSS+graph score | Base signal — does this candidate *match* the query at all |
 | **`recency`** | Age of source — `book.publication_date` or `doc_snapshot.retrieved_at`, exponential decay | Stops a 2018 Kafka book from drowning out the current Kafka 3.x doc when the user asked about *now* |
 | **`authority`** | Publisher tier for books (O'Reilly / Manning graded high; defaults below); doc-source tier (Context7=0.60, DeepWiki=0.50, GitHub=0.40) for live docs | Lets the ranker prefer a deeply-edited O'Reilly chapter over an AI-generated DeepWiki section when both are relevant |
-| **`corroboration`** | Boost when an `alignment_edge` exists between the candidate and another source | Rewards "book and current doc agree on this" — the highest-confidence signal myPub produces. 120 edges live; CONTRADICTS would penalize symmetrically once those land |
-| **`doc_alignment`** | Whether the query domain has live-doc coverage *at all* — 1.00 for the 7 aligned sources, 0.50 (neutral) elsewhere | Stops queries about un-aligned topics from being penalized for an absence of corroboration that's not their fault |
+| **`corroboration`** | Boost when an `alignment_edge` exists between the candidate and another source | Rewards "book and current doc agree on this" — the highest-confidence signal myPub produces. 1,296 CORROBORATES edges live, and 24 CONTRADICTS edges that penalize symmetrically when book and doc disagree |
+| **`doc_alignment`** | Whether the query domain has live-doc coverage *at all* — 1.00 for the 54 aligned sources, 0.50 (neutral) elsewhere | Stops queries about un-aligned topics from being penalized for an absence of corroboration that's not their fault |
 
 Six built-in profiles cover the common axes:
 
@@ -537,7 +549,7 @@ myPub/
 │   └── skills_factory.py · skill_generation.py · skills_eval.py
 ├── scripts/                           # build, ingest, refresh, migrate
 ├── schemas/                           # catalog.sql + property_graph.sql
-├── tests/                             # 830 tests
+├── tests/                             # 37 test modules
 ├── .claude/
 │   ├── commands/                      # 19 /kb-* slash commands
 │   └── skills/                        # kb-usage, skills-factory
@@ -556,7 +568,7 @@ myPub/
 | Granularity | Chapter / heading-aligned section | Preserve author structure; most chapters fit Claude's context (4K–17K tokens) |
 | Ranking | 5-factor weighted score, two modes | `generation` mode is silent; `interactive` mode surfaces conflicts as first-class output |
 | Live docs | Context7 → DeepWiki → GitHub probe order | Authority-tiered fallback (0.60 / 0.50 / 0.40) when a library isn't on a higher source |
-| Alignment | Separate `alignment_edge` table | Corroboration / contradiction is a distinct relation kind; 120 CORROBORATES today, CONTRADICTS empty |
+| Alignment | Separate `alignment_edge` table | Corroboration / contradiction is a distinct relation kind; 1,296 CORROBORATES + 24 CONTRADICTS edges live, computed via Sonnet 4.6 alignment passes per snapshot |
 | Generators | One framework, 17 implementations | Decomposer + Planner + Validator + Materializer protocols — every generator is the same shape |
 | Personality | Character profiles | View functions over the ranking engine; same substrate, different voices |
 | Concurrency | RO-by-default; writers pass `read_only=False` explicitly | DuckDB's exclusive file lock excludes RO too — explicit intent at every write site |
@@ -575,17 +587,42 @@ The domain content (technical books, vendor live docs, code generators) is myPub
 
 ---
 
-## Status and what's next
+## Engineering depth — the things that didn't go in the spec
 
-Active development on `v2-substrate`. v1 on `main` is stable but unmaintained. The substrate, the ranking engine, the concept graph, and all 17 generators have shipped v1.
+A year of building this surfaced real problems, none of which appeared in the v2 design doc. They're worth flagging because they describe what "production-quality" actually means for a system like this:
 
-Known debt — none blocking dogfooding — tracked in [docs/operations.md](docs/operations.md#deferred-work):
+- **DuckDB FK bug pinned in regression tests.** DuckDB 1.5.0 raises a spurious foreign-key violation on `UPDATE chapter SET embedding = …` when the row has inbound FKs. The fix wasn't to wait for upstream — it was to put embeddings in side tables (`chapter_embedding`, `concept_embedding`, etc.). Three FK-bug variants are pinned in [`tests/test_duckdb_fk_bugs.py`](tests/test_duckdb_fk_bugs.py) so a patched DuckDB doesn't silently regress us.
+- **The HNSW-vs-DELETE pathology.** DuckDB's HNSW (vector) index makes individual-row deletion catastrophically slow because it rebuilds the graph per delete. A 479-row delete sat for 22+ minutes before we killed it. The pattern: drop index → delete → rebuild index. 5 seconds total. Worth knowing if any catalog operation deletes rows from `chapter_embedding`.
+- **Phase 1 splitter bug + in-place migration.** ePub TOCs frequently point multiple TOC entries at the same xhtml file via fragment anchors. The original splitter handed every TOC entry the *full file* content, producing 88.5% chapter-content duplication. The fix sliced at fragment boundaries; the migration was in-place (preserved `chapter_id`s) so 154 alignment edges, embeddings, and skill-source FKs survived.
+- **Empty-OPF ePubs.** Some Packt ePubs ship with a 0-byte `OEBPS/content.opf`. ebooklib refuses to open them, even though the actual chapter xhtml is intact. The fallback path ([`/tmp/recover_broken_epub.py`](.) — not committed; a hand-rolled recovery indexer) parses the TOC xhtml directly and synthesizes the spine.
+- **Author-smush in `<dc:creator>`.** Some ePubs encode all co-authors in a single `<dc:creator>` element separated by ", " or " and ". The naive parser captured "Stephen Buxton, Lowell Fryman, Ralf Hartmut Güting, …" as one author. A robust splitter (with credential-suffix re-merging for "M.D.", "Ph.D.", "Jr.") fixed 161 rows.
+- **Concept-name collisions across `concept_type`.** "Event Sourcing" exists as both `Concept` and `Pattern`. The schema's `UNIQUE(name, concept_type)` allows this by design, but it broke the resolver early on: the empty twin won the lookup. Fix: order resolver matches by edge count (`ecc74f4`); the richest twin wins. The `dedupe_concepts.py` script collapses strict orphans (no edges, no aliases, no procedure links) — it's removed 8,326 such concepts to date.
+- **Polymorphic source IDs.** `concept_relation.source_id` and `procedure.source_id` are typed by a `source_type` discriminator (`chapter` vs `doc_section`). No FK enforcement — it's a polymorphic association — but it lets one schema serve both ingestion paths without duplication.
+- **Alignment is non-deterministic.** Re-running alignment on the same prompts produces different edges. We learned this the hard way: an earlier run had 9 high-confidence CONTRADICTS edges (FastMCP allowing breaking changes in minor versions, contradicting SemVer textbooks); the re-run rolled the dice differently and lost most of them. For high-stakes edges, multi-sample voting is the right answer.
 
-- Alignment for MLflow (medium effort) and DuckPGQ / FastMCP (deferred)
-- CONTRADICTS-tuned alignment prompts (Migration Guide and Currency Report are data-starved until this lands)
-- Procedure extraction on doc sections (4,341 procedures are all chapter-sourced today)
-- Project Bootstrap v2: dispatch loop + runtime validation
-- Tutorial and Content Brief v2: prose layer via sub-agent
+The pattern across all of these: trust internal code and framework guarantees; only validate at system boundaries (user input, external APIs); but pin every nontrivial bug as a regression test so the lesson survives.
+
+---
+
+## Status
+
+The v2 substrate, ranking engine, concept graph, all 17 generators, and the doc-augmentation layer have shipped. The catalog is in continuous-improvement mode rather than feature-build mode.
+
+Recent rounds of work:
+
+- **Live-doc expansion 10 → 54 sources** via batched Context7 discovery, with a Batch-API-driven extraction + alignment pipeline (Haiku 4.5 with prompt caching for extraction, Sonnet 4.6 for alignment).
+- **Catalog cleanup.** All 20 books missing authors resolved via OpenLibrary + Google Books ISBN lookup; 161 author-smush rows split; 8,326 strict-orphan duplicate concepts removed; 3 stranded doc sources recovered (FastMCP, DuckPGQ, MLflow) adding 448 alignment edges.
+- **New-book ingestion path validated.** 32 new ePubs identified by hash diff, 30 indexed cleanly, 2 broken (empty OPF) recovered via custom indexer, 1 Safari-rename duplicate caught at chapter-content-hash time.
+- **Re-alignment against expanded chapter pool.** All 54 doc sources re-aligned; 53 new edges from new-book chapters surfaced (e.g. React Compiler currency drift between docs and book).
+
+Honest open work — none blocking real use:
+
+- **CONTRADICTS quality.** The alignment edges are valid CORROBORATES at avg conf 0.72; CONTRADICTS edges are mostly degenerate (avg conf 0.16). A contradiction-tuned alignment prompt + multi-sample voting would meaningfully sharpen Migration Guide and Currency Report output.
+- **Generator-output validation.** The 17 generators all ship and run, but real eval data — running `/kb-currency-report`, `/kb-migration-guide`, `/kb-bootstrap` against the now-richer substrate and grading the output — is the open question. That's how you know if the substrate actually delivers, not just that it ingested cleanly.
+- **Domain gaps.** The corpus has decent biology/genomics books now (Biology for Engineers, NGS Data Analysis, Zero to Genetic Engineering Hero) but zero PubMed Central / clinical-trial papers / HL7-FHIR specs. Different ingestion paths than ePubs (JATS XML, FHIR resources). Would matter for life-sciences use cases.
+- **Project Bootstrap v2.** The v1 generator emits skeletons + sub-agent prompts. v2 wraps the dispatch loop and adds runtime validation (`pip install + pytest + docker-compose up + smoke-test data flow`).
+
+Full deferred-work tracker: [docs/operations.md](docs/operations.md#deferred-work).
 
 ---
 

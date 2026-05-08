@@ -1,6 +1,6 @@
 # Concept graph
 
-The 85K-concept graph that sits across the substrate — extracted from chapter text, deduplicated by the EntityResolver, augmented with procedures, and aligned across books and live docs.
+The 312K-concept graph that sits across the substrate — extracted from chapter and doc-section text, deduplicated by the EntityResolver, augmented with procedures, and aligned across books and live docs.
 
 [← back to top-level README](../README.md) · [Architecture ↗](architecture.md) · [Ingestion & indexing ↗](ingestion-and-indexing.md)
 
@@ -11,30 +11,30 @@ The 85K-concept graph that sits across the substrate — extracted from chapter 
 ```text
                    ┌────────────────────────────────────────────────┐
                    │                  concept                       │
-                   │  85,328 rows: name, definition, concept_type,  │
-                   │  synonyms (via concept_alias), embedding (side)│
+                   │ 312,396 rows: name, definition, concept_type,  │
+                   │ synonyms (via concept_alias), embedding (side) │
                    └────────────────────────────────────────────────┘
                                      ▲
                                      │
    chapter ──┐                  ┌────┴────┐                   ┌──── doc_section
-   (113K)    │                  │ relates │                   │     (902)
+   (118K)    │                  │ relates │                   │    (1,909)
              │                  │   to    │                   │
              ▼                  │         │                   ▼
    ┌───────────────────┐        │         │         ┌─────────────────────┐
    │  concept_relation │◄───────┘         └────────►│   alignment_edge    │
-   │  127K edges:      │                            │   120 edges:        │
-   │   REQUIRES        │                            │     CORROBORATES    │
-   │   IMPLEMENTS      │                            │     CONTRADICTS (0) │
-   │   EXTENDS         │                            └─────────────────────┘
-   │   CITES           │
-   │   CONTRASTS_WITH  │                                          ▲
-   └───────────────────┘                                          │
+   │  613K edges:      │                            │   1,320 edges:      │
+   │   CITES (410K)    │                            │     CORROBORATES    │
+   │   IMPLEMENTS (83K)│                            │       (1,296)       │
+   │   REQUIRES (58K)  │                            │     CONTRADICTS     │
+   │   CONTRASTS (45K) │                            │       (24)          │
+   │   EXTENDS (16K)   │                            └─────────────────────┘
+   └───────────────────┘                                          ▲
                                                                   │
                     ┌─────────────────────────────────────────────┴─┐
                     │                  procedure                    │
-                    │   4,341 rows: precondition / steps /          │
-                    │   postcondition / failure modes               │
-                    │   linked to concepts via procedure_concept    │
+                    │  47,874 rows: precondition / steps /          │
+                    │  postcondition / failure modes / concepts     │
+                    │  175,106 procedure_concept links              │
                     └───────────────────────────────────────────────┘
 ```
 
@@ -43,6 +43,8 @@ Five entity-graph relations (`concept_relation`), one alignment relation (`align
 ---
 
 ## Concept rows and their counts
+
+312,396 concept rows today, every one with a 384-dim embedding.
 
 | Field | What it means |
 |---|---|
@@ -161,9 +163,9 @@ incoming concept name ─► Stage 1: exact match (with type-aware tiebreak)
 
 ### The duplicate-concept-name bug (resolved 2026-05-06, commit `ecc74f4`)
 
-The original Stage 1 did `LIMIT 1` with no `ORDER BY`. The catalog carries 5,597 concept-name groups duplicated across `concept_type` variants — e.g., "Event Sourcing" exists as both `Concept` (cid=10998, 0 REQUIRES) and `Pattern` (cid=16520, 41 REQUIRES). The resolver could pick the empty twin and break downstream lookups.
+The original Stage 1 did `LIMIT 1` with no `ORDER BY`. The catalog carries ~26K concept-name groups duplicated across `concept_type` variants — e.g., "Event Sourcing" exists as both `Concept` (cid=10998, 0 REQUIRES) and `Pattern` (cid=16520, 41 REQUIRES). The resolver could pick the empty twin and break downstream lookups.
 
-Fix: Stage 1 now `ORDER BY (SELECT COUNT(*) FROM concept_relation WHERE from_concept_id = c.concept_id OR to_concept_id = c.concept_id) DESC` — the richest concept wins. The 5,597 duplicate name groups themselves remain as a separate hygiene item (tracked in [docs/operations.md](operations.md#deferred-work)).
+Fix: Stage 1 now `ORDER BY (SELECT COUNT(*) FROM concept_relation WHERE from_concept_id = c.concept_id OR to_concept_id = c.concept_id) DESC` — the richest concept wins. The 26K remaining duplicate-name groups all have edges (strict orphans were removed by `scripts/dedupe_concepts.py` — 8,326 to date) and the resolver routes correctly to the richest twin, so they're harmless. Tracked as low-priority hygiene in [docs/operations.md → Deferred work](operations.md#deferred-work).
 
 ### Strict-orphan duplicate cleanup (commit `1f1d5d5`)
 
@@ -214,7 +216,7 @@ Most generators can run on chapter text alone. **Project Bootstrap can't.** A bo
 .venv/bin/python3 scripts/extract_procedures.py process
 ```
 
-Today's catalog: **4,341 procedures**, all chapter-sourced. Procedure extraction has not yet been run on doc sections — known debt in [docs/operations.md](operations.md#deferred-work). The Project Bootstrap generator handles this gracefully by warning when a domain has no procedures.
+Today's catalog: **47,874 procedures** with **175,106 procedure-concept links**. 46,904 are chapter-sourced; 970 are doc-section-sourced (extracted as part of the doc-source expansion). The Project Bootstrap generator handles missing procedures gracefully by warning when a domain has none.
 
 ---
 
@@ -236,19 +238,24 @@ The alignment pass takes a doc source (e.g., Apache Kafka) and emits edges betwe
 
 ### Today's alignment results
 
-**120 CORROBORATES edges, 0 CONTRADICTS** across 7 of 10 sources:
+**1,296 CORROBORATES + 24 CONTRADICTS edges** across all 54 sources (avg confidence 0.72 / 0.16 respectively). Below is the high-density subset; the full per-source list is in [docs/data-sources.md → Registered sources](data-sources.md#registered-sources):
 
 | Source | Alignment edges |
 |---|---|
-| LangChain | 24 |
-| Apache Kafka | 22 |
-| Delta Lake | 20 |
-| Apache Spark | 17 |
-| DuckDB | 14 |
-| PostgreSQL | 12 |
-| Databricks | 11 |
+| FastMCP (DeepWiki) | 221 |
+| DuckPGQ (DeepWiki) | 151 |
+| MLflow | 36 |
+| FastAPI | 32 |
+| React | 31 |
+| scikit-learn | 31 |
+| Apache Kafka | 29 |
+| OpenAPI | 28 |
+| spaCy | 28 |
+| LangChain | 28 |
+| SQLite | 28 |
+| (43 more sources, 2–25 edges each) | |
 
-CONTRADICTS is empty because narrow vendor docs tend to corroborate or be unrelated to book content, not contradict it. The Migration Guide and Currency Report generators are designed to surface contradictions when they appear; both generators are data-starved today and will get more useful as the alignment pass runs against larger sources or against books that explicitly cover deprecated APIs.
+CORROBORATES dominates because narrow vendor docs tend to agree with or be unrelated to book content. CONTRADICTS edges are rarer but valuable when they appear — examples in the catalog include FastMCP allowing breaking changes in minor versions vs. SemVer textbooks, React Compiler being installable now vs. "experimental" in older books, and DuckPGQ's logical-graph-over-SQL approach vs. native graph databases' index-free adjacency. Avg CONTRADICTS confidence is 0.16 — most are degenerate; a contradiction-tuned alignment prompt + multi-sample voting is the path to making the Migration Guide and Currency Report generators robust.
 
 ### Why CORROBORATES boosts ranking
 
@@ -328,12 +335,13 @@ The `limit_per_author` cap (default 2) keeps the response from being dominated b
 
 | Issue | State | Reference |
 |---|---|---|
-| Duplicate concept names across `concept_type` variants | 5,597 groups; resolver-fix in `ecc74f4` ensures correct lookups | [docs/operations.md](operations.md#deferred-work) |
-| Strict-orphan duplicates | 825 collapsed in `1f1d5d5` | resolved |
-| Author placeholder ("AUTHOR NAMES HERE") | 3 books briefly orphaned in `ecc74f4`; needs author re-extraction | [docs/operations.md](operations.md#deferred-work) |
-| Procedure extraction on doc sections | Not yet run | [docs/operations.md](operations.md#deferred-work) |
-| Alignment for MLflow / DuckPGQ / FastMCP | Not yet run | [docs/operations.md](operations.md#deferred-work) |
-| `concept_doc_link` table | Currently 0 rows; reserved for direct concept→doc-section linkage | future |
+| Duplicate concept names across `concept_type` variants | ~26K groups remaining; all have edges and the resolver routes correctly to the richest twin (resolver-fix in `ecc74f4`). 8,326 strict orphans removed by `dedupe_concepts.py` | low-priority hygiene; [docs/operations.md](operations.md#deferred-work) |
+| Author placeholder ("AUTHOR NAMES HERE") + missing-author books | 19 of 20 historically-unauthored books recovered via OpenLibrary + Google Books ISBN lookup. 1 residual case (Platform Enterprise — source has no public author info anywhere) | resolved (modulo 1 unknown) |
+| Author smush (multi-author packed into one `<dc:creator>`) | 161 rows split via post-ingest splitter with credential-suffix re-merging | resolved |
+| Procedure extraction on doc sections | 970 doc-section procedures + 175K total procedure-concept links | resolved |
+| Alignment for MLflow / DuckPGQ / FastMCP | All three recovered; 408 alignment edges across the trio | resolved |
+| `concept_doc_link` table | Currently 0 rows; reserved for direct concept→doc-section linkage when needed beyond what `concept_relation` already provides | future |
+| CONTRADICTS quality | 24 edges, avg confidence 0.16 — most degenerate. Contradiction-tuned alignment prompts + multi-sample voting needed for Migration Guide / Currency Report robustness | [docs/operations.md → Deferred work](operations.md#deferred-work) |
 
 ---
 

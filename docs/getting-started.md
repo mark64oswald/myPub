@@ -23,7 +23,7 @@ By the end of this you'll have:
 | Claude Code | Latest | The MCP server is launched as a stdio server |
 | (Optional) Context7 / DeepWiki MCP | Already configured in your Claude Code setup | If absent, doc-ranking factors fall back to neutral |
 
-> **Tip.** myPub is designed for personal libraries. Five books is enough to feel everything; the production catalog at the time of writing carries 541 books.
+> **Tip.** myPub is designed for personal libraries. Five books is enough to feel everything; the production catalog at the time of writing carries 572 books.
 
 ---
 
@@ -170,7 +170,7 @@ If a concept name is ambiguous, the resolver falls back to the review queue (`/k
 
 ## 6. Extract concepts (optional on first pass)
 
-Concept extraction is what populates the 85K-concept graph. The seed dataset works without it — graph factors degrade gracefully when the graph is sparse — but the *interesting* generators (Concept Map, Learning Path, Migration Guide, Project Bootstrap) need a populated graph.
+Concept extraction is what populates the 312K-concept graph. The seed dataset works without it — graph factors degrade gracefully when the graph is sparse — but the *interesting* generators (Concept Map, Learning Path, Migration Guide, Project Bootstrap) need a populated graph.
 
 ```bash
 # Prep extraction prompts for un-extracted chapters.
@@ -254,7 +254,7 @@ See [docs/generators.md](generators.md#project-bootstrap) for the full Project B
 ./scripts/test.sh
 ```
 
-Expected: `830 passed` (825 unit + 5 live). Live tests embed real queries against the catalog; the first run downloads the embedding model.
+Expected: a clean run across 37 test modules (unit + a handful of live API tests). Live tests embed real queries against the catalog; the first run downloads the embedding model.
 
 Single-file:
 
