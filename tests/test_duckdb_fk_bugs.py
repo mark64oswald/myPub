@@ -21,6 +21,15 @@ a foreign key in a different table" error):
      Workaround (used in resolve_concept.do_rename): park the rows
      holding the inbound FKs in Python, UPDATE, reinsert.
 
+  4. DELETE on a parent row inside the SAME transaction where the
+     child rows were just deleted. The FK check doesn't see the
+     in-flight child DELETEs, so the parent DELETE fails as if the
+     children still existed. Auto-commit (no explicit BEGIN) or a
+     COMMIT between the two DELETEs avoids the bug.
+     Workaround (used in scripts/migrate_phase1_splitter.py): structure
+     the migration as auto-committing idempotent statements so each
+     step is independently rerunnable.
+
 Each test builds a minimal in-memory DuckDB that exercises the pattern
 and asserts the error (currently expected to raise). When DuckDB
 finally handles one of these correctly, the corresponding test will
@@ -190,4 +199,48 @@ def test_unique_update_workaround_park_and_reinsert_works():
 
     assert c.execute("SELECT name FROM p").fetchone()[0] == "New"
     assert c.execute("SELECT emb FROM p_emb").fetchone()[0] is not None
+    c.close()
+
+
+# ----------------------------------------------------------------------------
+# Variant 4: parent DELETE blocked by in-flight child DELETE (same txn)
+# ----------------------------------------------------------------------------
+
+def test_duckdb_bug_parent_delete_after_child_delete_in_same_txn_fails():
+    """DELETE child → DELETE parent inside one explicit transaction
+    fails with a spurious FK error. The same sequence outside an
+    explicit transaction (auto-commit per statement), or with a
+    COMMIT between the two DELETEs, succeeds.
+
+    Workaround pattern (scripts/migrate_phase1_splitter.py): structure
+    the migration as auto-committing idempotent statements so each
+    invalidation step is independently rerunnable.
+    """
+    c = duckdb.connect(":memory:")
+    c.execute("CREATE TABLE parent (id BIGINT PRIMARY KEY)")
+    c.execute(
+        "CREATE TABLE child ("
+        "  parent_id BIGINT NOT NULL REFERENCES parent(id),"
+        "  data VARCHAR,"
+        "  PRIMARY KEY (parent_id, data)"
+        ")"
+    )
+    c.execute("INSERT INTO parent VALUES (1)")
+    c.execute("INSERT INTO child VALUES (1, 'x')")
+
+    # 1. Inside an explicit transaction → bug fires.
+    c.execute("BEGIN")
+    c.execute("DELETE FROM child WHERE parent_id = 1")
+    # The child row is gone within the txn — confirm.
+    assert c.execute("SELECT COUNT(*) FROM child WHERE parent_id = 1").fetchone()[0] == 0
+    with pytest.raises(duckdb.ConstraintException, match="still referenced"):
+        c.execute("DELETE FROM parent WHERE id = 1")
+    c.execute("ROLLBACK")
+
+    # 2. With a COMMIT between → succeeds.
+    c.execute("BEGIN")
+    c.execute("DELETE FROM child WHERE parent_id = 1")
+    c.execute("COMMIT")
+    c.execute("DELETE FROM parent WHERE id = 1")
+    assert c.execute("SELECT COUNT(*) FROM parent").fetchone()[0] == 0
     c.close()

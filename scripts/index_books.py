@@ -33,7 +33,7 @@ from typing import Optional
 import duckdb
 import ebooklib
 import tiktoken
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment, NavigableString
 from ebooklib import epub
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -82,25 +82,151 @@ def _href_path(href: Optional[str]) -> Optional[str]:
     """Strip any fragment (#section) from an ePub href."""
     if not href:
         return None
-    return href.split("#", 1)[0]
+    return href.split("#", 1)[0] or None
 
 
-def _content_cache_for_book(book: epub.EpubBook) -> dict[str, str]:
-    """Return a dict mapping href path → extracted plain text for the book.
+def _split_href(href: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Split an ePub href into ``(path, fragment)``. Either may be None."""
+    if not href:
+        return None, None
+    path, _, frag = href.partition("#")
+    return (path or None), (frag or None)
 
-    Multiple TOC entries can point at the same href; caching avoids re-parsing
-    the same HTML blob for each reference.
+
+def _toc_fragments_per_file(toc: list[dict]) -> dict[str, set[str]]:
+    """Map each href path → the set of fragment ids referenced by the TOC.
+
+    A bare reference (no fragment) is recorded under ``""``. Files
+    appearing only once with no fragment thus get ``{""}`` and the
+    slicer returns the whole-file text under that key.
     """
-    cache: dict[str, str] = {}
+    out: dict[str, set[str]] = {}
+    for entry in toc:
+        path, frag = _split_href(entry.get("href"))
+        if not path:
+            continue
+        out.setdefault(path, set()).add(frag or "")
+    return out
+
+
+def _slice_html_by_anchors(
+    html_bytes: bytes, fragments: set[str]
+) -> dict[str, str]:
+    """Slice an xhtml file's text at fragment anchor boundaries.
+
+    Returns a dict keyed by fragment id (or ``""`` for the preamble /
+    whole-file case) mapping to the plain text from that anchor up to
+    (but not including) the next anchor in document order.
+
+    Behavior:
+      * If ``fragments`` contains no real (non-empty) ids, returns
+        ``{"": <whole-file text>}``. This is the common "TOC entry
+        with no fragment" case.
+      * If a fragment in ``fragments`` doesn't resolve to any element
+        in the document, that key still appears in the result mapped
+        to the whole-file text. This is a *deliberate* fallback so a
+        TOC entry with a stale anchor still gets searchable content
+        rather than an empty row.
+      * If real fragments resolve, ``""`` maps to the preamble (text
+        before the first anchor, may be empty if the file starts at
+        an anchor).
+    """
+    soup = BeautifulSoup(html_bytes, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+
+    real_fragments = {f for f in fragments if f}
+
+    if not real_fragments:
+        # No fragmenting requested — whole-file text under "".
+        return {"": soup.get_text(separator="\n", strip=True)}
+
+    # Resolve each fragment to an element by id (modern) or
+    # <a name="..."> (legacy). Fragments that don't resolve will fall
+    # back to whole-file text below.
+    anchor_elements: dict[str, object] = {}
+    for frag in real_fragments:
+        elem = soup.find(id=frag) or soup.find("a", attrs={"name": frag})
+        if elem is not None:
+            anchor_elements[frag] = elem
+    resolved = set(anchor_elements)
+    unresolved = real_fragments - resolved
+
+    body = soup.body or soup
+
+    # If NO requested fragments resolve, every requested key falls
+    # back to whole-file text. Don't bother walking the doc.
+    if not resolved:
+        whole = soup.get_text(separator="\n", strip=True)
+        out = {frag: whole for frag in real_fragments}
+        if "" in fragments:
+            out[""] = whole
+        return out
+
+    # Walk descendants in document order. Each time we cross one of
+    # the resolved-anchor elements, switch to a new segment keyed by
+    # that fragment id. Text before the first anchor goes into "".
+    segments: dict[str, list[str]] = {"": []}
+    current_key = ""
+    for desc in body.descendants:
+        # Anchor switch — must run before text collection because
+        # the anchor element itself is also iterated as a descendant.
+        if hasattr(desc, "get"):
+            elem_id = desc.get("id")
+            if elem_id and elem_id in resolved:
+                current_key = elem_id
+                segments.setdefault(current_key, [])
+            elif getattr(desc, "name", None) == "a":
+                a_name = desc.get("name")
+                if a_name and a_name in resolved:
+                    current_key = a_name
+                    segments.setdefault(current_key, [])
+        # Text collection.
+        if isinstance(desc, NavigableString) and not isinstance(desc, Comment):
+            text = str(desc).strip()
+            if text:
+                segments[current_key].append(text)
+
+    out = {key: "\n".join(parts) for key, parts in segments.items()}
+
+    # Unresolved fragments fall back to whole-file text so a stale
+    # anchor still points at something searchable.
+    if unresolved:
+        whole = soup.get_text(separator="\n", strip=True)
+        for frag in unresolved:
+            out[frag] = whole
+
+    return out
+
+
+def _content_cache_for_book(
+    book: epub.EpubBook, toc: list[dict]
+) -> dict[str, dict[str, str]]:
+    """Return ``{href_path: {fragment_id: plain_text}}`` for the book.
+
+    Where the inner dict's ``""`` key is the preamble (text before
+    the first anchor) — or, when the TOC references the file with no
+    fragment, the whole-file text.
+
+    This is the post-bug-fix replacement for the old ``href_path →
+    full_text`` map. Slicing happens here; ``_insert_chapters`` only
+    looks up the right slice per TOC entry.
+    """
+    fragments_per_file = _toc_fragments_per_file(toc)
+    cache: dict[str, dict[str, str]] = {}
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
         href = _href_path(item.get_name())
         if not href or href in cache:
             continue
+        wanted = fragments_per_file.get(href)
+        if wanted is None:
+            # File isn't referenced by the TOC at all — skip.
+            continue
         try:
-            cache[href] = _extract_text(item.get_content())
+            cache[href] = _slice_html_by_anchors(item.get_content(), wanted)
         except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-            LOG.warning("content extraction failed for %s: %s", href, exc)
-            cache[href] = ""
+            LOG.warning("slicing failed for %s: %s", href, exc)
+            cache[href] = {}
     return cache
 
 
@@ -286,19 +412,28 @@ def _insert_chapters(
     conn: duckdb.DuckDBPyConnection,
     book_id: int,
     toc: list[dict],
-    content_cache: dict[str, str],
+    content_cache: dict[str, dict[str, str]],
 ) -> tuple[int, int]:
     """Insert chapter rows and return (chapter_count, total_tokens).
 
     Parent-chapter resolution uses the sequence field: rows are inserted in
     TOC order, and we track sequence → chapter_id as we go.
+
+    The ``content_cache`` maps each href path to a per-fragment slice
+    dict produced by ``_content_cache_for_book``. This lookup honors
+    the fragment, which fixes the historical bug where every TOC
+    entry pointing at the same xhtml file received the full file's
+    content.
     """
     seq_to_id: dict[int, int] = {}
     total_tokens = 0
 
     for entry in toc:
-        href_path = _href_path(entry["href"])
-        content = content_cache.get(href_path, "") if href_path else ""
+        path, frag = _split_href(entry.get("href"))
+        slices = content_cache.get(path, {}) if path else {}
+        # Lookup order: the entry's own fragment first; fall back to
+        # the whole-file / preamble slot under ""; finally empty.
+        content = slices.get(frag or "", "") if slices else ""
         tokens = _count_tokens(content) if content else 0
         total_tokens += tokens
 
@@ -377,7 +512,7 @@ def index_book(conn: duckdb.DuckDBPyConnection, filepath: Path) -> bool:
     try:
         meta = _book_metadata(book, filepath)
         toc = _flatten_toc(book)
-        content_cache = _content_cache_for_book(book)
+        content_cache = _content_cache_for_book(book, toc)
 
         _delete_existing_book(conn, filepath)
         book_id = _insert_book(conn, filepath, meta)
