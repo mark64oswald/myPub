@@ -531,9 +531,12 @@ def get_fetcher(source_type: str):
     """Return a fetcher instance for ``doc_source.source_type``.
 
     Caller can also pass an instance directly into the pipeline for tests.
+    Accepts both ``github`` and ``github_raw`` for the GitHub fetcher —
+    the seed script + architecture docs canonical value is ``github_raw``,
+    but earlier code paths used ``github``.
     """
     st = source_type.lower()
-    if st == "github":
+    if st in ("github", "github_raw"):
         return GitHubFetcher()
     if st == "context7":
         return Context7Fetcher()
