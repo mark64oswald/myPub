@@ -2767,6 +2767,60 @@ def generate_curriculum(
 
 
 @mcp.tool
+def generate_standards_translator(
+    mapping: str,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Healthcare interop — generate a Standards Translator package.
+
+    Maps a source healthcare standard to a target standard, e.g. "HL7v2
+    ADT^A01 to FHIR Patient+Encounter", "X12 837P to FHIR Claim", "DICOM
+    Series to FHIR ImagingStudy". Emits the field-by-field mapping table,
+    a Python transformer skeleton (one TODO function per source element),
+    and round-trip + spec-conformance test scaffolds. Citations from
+    healthcare doc sources (HAPI FHIR, hl7apy, pyx12, pydicom, etc.)
+    appear inline.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import standards_translator
+    gen = standards_translator.make_standards_translator_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, mapping,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message}
+                    for i in issues],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "mapping_key": metadata.get("mapping_key"),
+        "source": metadata.get("source"),
+        "target": metadata.get("target"),
+        "n_fields": metadata.get("n_fields", 0),
+        "n_citations": metadata.get("n_citations", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
 def generate_deid_bundle(
     dataset: str,
     output_root: str = "data/generated-packages",
