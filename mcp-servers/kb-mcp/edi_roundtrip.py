@@ -1,29 +1,33 @@
 """edi_roundtrip.py — EDI Round-Trip Test Generator (healthcare interop).
 
-Generates a complete X12 round-trip test package for a given transaction set:
-synthetic but spec-conformant message fixtures, a Python parser test that
-validates round-trip equivalence, plus a README explaining the transaction
-set's purpose and structure.
+Generates a complete X12 round-trip test package for a given transaction
+set. The generated package is a thin consumer of ``healthcare_libs.x12``:
+fixtures are produced at GENERATION time by calling the lib's per-txn
+builders and persisted as static ``.x12`` files; the generated test
+file imports the lib and asserts parse/validate/round-trip behavior;
+a ``transformer.py`` CLI exposes build/validate/extract operations.
 
 Supported transaction sets:
   270/271   eligibility benefit inquiry / response
   834       benefit enrollment + maintenance
   835       claim payment / advice (remittance)
-  837       claim (professional / institutional / dental — 837P/I/D)
-  997       functional acknowledgement
-  999       implementation acknowledgement
+  837       claim (professional — 837P)
+  997       functional acknowledgement (envelope-only fallback build)
+  999       implementation acknowledgement (envelope-only fallback build)
 
-Substrate: pulls X12 concepts + procedures from `pyx12` (`/azoner/pyx12`),
-`Ballerina EDI Module`, and `Stedi (clearinghouse)` doc sections.
+Substrate: pulls X12 concept citations from `pyx12`, `Ballerina EDI
+Module`, and `Stedi (clearinghouse)` doc sections.
 
 Output structure:
     edi-roundtrip-<txn>/
       README.md               — transaction set overview + how to run
-      fixtures/
-        <txn>_request.x12     — synthetic spec-conformant message
-        <txn>_response.x12    — paired response (if applicable)
-      tests/test_roundtrip.py — parse-validate-emit round-trip tests
       mapping.md              — segment/loop reference + citation list
+      transformer.py          — CLI: build / validate / extract
+      fixtures/
+        <txn>_request.x12     — built by healthcare_libs.x12.build_<txn>()
+        <paired>_response.x12 — paired response when applicable
+      tests/test_roundtrip.py — imports healthcare_libs.x12 and asserts
+                                parse_envelope, round_trip, validate
 """
 from __future__ import annotations
 
@@ -42,6 +46,7 @@ from generator import (
     MaterializeReport,
     ValidationIssue,
 )
+from healthcare_libs import x12 as _x12
 
 LOG = logging.getLogger("mypub-edi-roundtrip")
 
@@ -113,6 +118,20 @@ TRANSACTION_SETS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Some signature-segment hints we use in the generated test as
+# "this segment must be present in the body". Picking the most
+# distinctive one or two per txn keeps the assertion specific without
+# forcing us to ship a full IG validator.
+SIGNATURE_BODY_SEGMENTS: dict[str, list[str]] = {
+    "270": ["BHT*0022*13", "EQ*"],
+    "271": ["BHT*0022*11", "EB*"],
+    "834": ["BGN*", "INS*Y*"],
+    "835": ["BPR*I*", "CLP*"],
+    "837": ["BHT*0019*", "CLM*"],
+    "997": ["AK1*", "AK9*"],
+    "999": ["AK1*", "AK9*"],
+}
+
 
 @dataclass
 class _Decomposition:
@@ -130,6 +149,99 @@ def _slugify(name: str) -> str:
     s = name.lower().replace(" ", "-")
     keep = "abcdefghijklmnopqrstuvwxyz0123456789-"
     return "".join(c for c in s if c in keep).strip("-") or "txn"
+
+
+# ---------------------------------------------------------------------------
+# Fixture builders — delegate to healthcare_libs.x12 wherever possible.
+# 997 / 999 don't have dedicated lib builders (no per-txn IG fixture in
+# pyx12 we'd want to re-implement); we use build_envelope with a known
+# acknowledgement body. This is the ONLY hand-written X12 in this file.
+# ---------------------------------------------------------------------------
+
+def build_message(txn_code: str, ctrl_num: int = 1) -> str:
+    """Build a fixture for ``txn_code`` using ``healthcare_libs.x12``.
+
+    For 270/271/834/835/837 this calls the lib's dedicated builder. For
+    997/999 we compose a minimal acknowledgement body and wrap with
+    ``build_envelope`` (the lib doesn't ship dedicated ack builders).
+
+    ``ctrl_num`` propagates to ISA-13 / IEA-02 (zero-padded 9 digits)
+    AND to GS-06 / GE-02 (bare integer).
+    """
+    # Lib builders accept generic envelope kwargs via build_envelope but
+    # not directly — we call the typed builders and pass the ICN/GCN
+    # the same way build_envelope does. For pairs (271, 835) the ICN
+    # kwarg is the request's ICN; we set it to ctrl_num so paired
+    # builds stay aligned.
+    if txn_code == "270":
+        body = _extract_body(_x12.build_270())
+        return _x12.build_envelope(
+            txn_set="270", body_segments=body, icn=ctrl_num, gcn=ctrl_num,
+        )
+    if txn_code == "271":
+        body = _extract_body(_x12.build_271(request_270_icn=ctrl_num))
+        return _x12.build_envelope(
+            txn_set="271", body_segments=body, icn=ctrl_num, gcn=ctrl_num,
+        )
+    if txn_code == "834":
+        body = _extract_body(_x12.build_834())
+        return _x12.build_envelope(
+            txn_set="834", body_segments=body, icn=ctrl_num, gcn=ctrl_num,
+        )
+    if txn_code == "835":
+        body = _extract_body(_x12.build_835(paired_837_icn=ctrl_num))
+        return _x12.build_envelope(
+            txn_set="835", body_segments=body, icn=ctrl_num, gcn=ctrl_num,
+        )
+    if txn_code == "837":
+        body = _extract_body(_x12.build_837p())
+        return _x12.build_envelope(
+            txn_set="837", body_segments=body, icn=ctrl_num, gcn=ctrl_num,
+        )
+    if txn_code == "997":
+        body = ["AK1*HS*1234", "AK2*270*0001", "AK5*A", "AK9*A*1*1*1"]
+        return _x12.build_envelope(
+            txn_set="997", body_segments=body, icn=ctrl_num, gcn=ctrl_num,
+        )
+    if txn_code == "999":
+        body = [
+            "AK1*HS*1234*005010X279A1",
+            "AK2*270*0001*005010X279A1",
+            "IK5*A",
+            "AK9*A*1*1*1",
+        ]
+        return _x12.build_envelope(
+            txn_set="999", body_segments=body, icn=ctrl_num, gcn=ctrl_num,
+        )
+    raise ValueError(f"unsupported transaction set: {txn_code!r}")
+
+
+def _extract_body(x12_msg: str) -> list[str]:
+    """Round-trip helper: pull the ST-internal body out of a built msg.
+
+    Lets us re-call build_envelope with custom envelope kwargs (icn, gcn)
+    without having to copy the lib's per-txn body construction. The lib's
+    typed builders don't take envelope kwargs directly, so we build once
+    with defaults, peel the body, then wrap with the desired envelope.
+    """
+    _, body = _x12.parse_envelope(x12_msg)
+    return body
+
+
+def build_paired_messages(
+    txn_code: str, paired_code: Optional[str],
+) -> tuple[str, Optional[str]]:
+    """Build (request, response) fixtures with matching ICNs when paired.
+
+    Returns (request_x12, response_x12_or_None). The response reuses the
+    request's ICN so paired-control-number tracking works downstream.
+    """
+    request = build_message(txn_code, ctrl_num=1)
+    if not paired_code:
+        return request, None
+    req_env, _ = _x12.parse_envelope(request)
+    response = build_message(paired_code, ctrl_num=req_env.icn)
+    return request, response
 
 
 # ---------------------------------------------------------------------------
@@ -166,14 +278,12 @@ class EdiRoundTripDecomposer:
 
         # Find concepts in the corpus that name X12 segments / loops / related
         # concepts for this txn — pull from doc_sources we ingested for X12.
-        # We look up by segment / loop names in the metadata.
         candidate_terms = (
             meta.get("key_segments", []) + meta.get("key_loops", []) +
             ["X12", "EDI", "HIPAA"] + [f"{txn_code} transaction"]
         )
         concept_citations: list[tuple[int, str, int, str]] = []
         for term in candidate_terms:
-            # Concepts whose name matches the term, found in any X12 doc-section
             rows = conn.execute(
                 f"""
                 SELECT DISTINCT c.concept_id, c.name, ds.doc_section_id, src.name
@@ -216,140 +326,7 @@ class EdiRoundTripDecomposer:
 
 
 # ---------------------------------------------------------------------------
-# Fixture builders — synthetic but spec-conformant X12 messages
-# ---------------------------------------------------------------------------
-
-# Standard X12 envelope. Real systems use trading-partner-specific values.
-ISA_TEMPLATE = (
-    "ISA*00*          *00*          *ZZ*SUBMITTER123   *ZZ*RECEIVER456    *"
-    "{date}*{time}*^*00501*{ctrl_num:09d}*0*P*:~"
-)
-GS_TEMPLATE = "GS*{fg}*SUBMITTER*RECEIVER*{date_full}*{time_full}*{ctrl_num}*X*005010X{txn}A1~"
-IEA_TEMPLATE = "IEA*1*{ctrl_num:09d}~"
-GE_TEMPLATE = "GE*1*{ctrl_num}~"
-ST_TEMPLATE = "ST*{txn}*0001*005010X{txn}A1~"
-SE_TEMPLATE = "SE*{seg_count}*0001~"
-
-# Per-transaction body templates
-BODIES = {
-    "270": (
-        "BHT*0022*13*ELIG-INQUIRY-001*20260115*1430~"
-        "HL*1**20*1~"
-        "NM1*PR*2*EXAMPLE PAYER*****PI*PAYER12345~"
-        "HL*2*1*21*1~"
-        "NM1*1P*2*EXAMPLE PROVIDER*****XX*1234567890~"
-        "HL*3*2*22*0~"
-        "TRN*1*ELIG-001*1234567890~"
-        "NM1*IL*1*DOE*JANE****MI*MEMBER123456~"
-        "DMG*D8*19850615*F~"
-        "DTP*291*D8*20260115~"
-        "EQ*30~"
-    ),
-    "271": (
-        "BHT*0022*11*ELIG-RESPONSE-001*20260115*1431~"
-        "HL*1**20*1~"
-        "NM1*PR*2*EXAMPLE PAYER*****PI*PAYER12345~"
-        "HL*2*1*21*1~"
-        "NM1*1P*2*EXAMPLE PROVIDER*****XX*1234567890~"
-        "HL*3*2*22*0~"
-        "NM1*IL*1*DOE*JANE****MI*MEMBER123456~"
-        "DMG*D8*19850615*F~"
-        "EB*1**30~"
-        "EB*B*FAM*30**HM*GOLD HMO*27*250.00~"
-    ),
-    "834": (
-        "BGN*00*ENROLL-001*20260115*1430~"
-        "REF*38*GROUP-12345~"
-        "DTP*303*D8*20260101~"
-        "INS*Y*18*030*XN*A***FT~"
-        "REF*0F*MEMBER123456~"
-        "REF*1L*POLICY-ABC~"
-        "DTP*356*D8*20260101~"
-        "NM1*IL*1*DOE*JANE*M***34*123456789~"
-        "DMG*D8*19850615*F*M~"
-        "HD*030**HLT*GOLD-HMO*FAM~"
-        "DTP*348*D8*20260101~"
-    ),
-    "835": (
-        "BPR*I*1500.00*C*ACH*CCP*01*021000021*DA*123456789*"
-        "PAYER12345**01*021000021*DA*987654321*20260115~"
-        "TRN*1*REMIT-001*1234567890~"
-        "DTM*405*20260115~"
-        "N1*PR*EXAMPLE PAYER~"
-        "N1*PE*EXAMPLE PROVIDER*XX*1234567890~"
-        "LX*1~"
-        "CLP*CLAIM-001*1*2000.00*1500.00*500.00*MC*PAYER-CLAIM-9999*11*1~"
-        "NM1*QC*1*DOE*JANE****MI*MEMBER123456~"
-        "DTM*232*20260101~"
-        "SVC*HC:99213*150.00*120.00**1~"
-        "CAS*CO*45*30.00~"
-    ),
-    "837": (
-        "BHT*0019*00*CLAIM-001*20260115*1430*CH~"
-        "NM1*41*2*EXAMPLE BILLING SERVICE*****46*BILLING12~"
-        "PER*IC*BILLING CONTACT*TE*5555555555~"
-        "NM1*40*2*EXAMPLE PAYER*****46*PAYER12345~"
-        "HL*1**20*1~"
-        "NM1*85*2*EXAMPLE PROVIDER*****XX*1234567890~"
-        "N3*123 MAIN ST~"
-        "N4*ANYTOWN*CA*90210~"
-        "REF*EI*123456789~"
-        "HL*2*1*22*0~"
-        "SBR*P*18*GROUP-001******CI~"
-        "NM1*IL*1*DOE*JANE****MI*MEMBER123456~"
-        "N3*456 ELM ST~"
-        "N4*ANYTOWN*CA*90210~"
-        "DMG*D8*19850615*F~"
-        "NM1*PR*2*EXAMPLE PAYER*****PI*PAYER12345~"
-        "CLM*CLAIM-001*2000.00***11:B:1*Y*A*Y*Y~"
-        "HI*ABK:Z0000~"
-        "LX*1~"
-        "SV1*HC:99213*150.00*UN*1~"
-        "DTP*472*D8*20260101~"
-    ),
-    "997": (
-        "AK1*HS*1234~"
-        "AK2*270*0001~"
-        "AK5*A~"
-        "AK9*A*1*1*1~"
-    ),
-    "999": (
-        "AK1*HS*1234*005010X279A1~"
-        "AK2*270*0001*005010X279A1~"
-        "IK5*A~"
-        "AK9*A*1*1*1~"
-    ),
-}
-
-# Functional group code per transaction
-FG_CODES = {
-    "270": "HS", "271": "HB", "834": "BE", "835": "HP", "837": "HC",
-    "997": "FA", "999": "FA",
-}
-
-
-def build_message(txn_code: str, ctrl_num: int = 1) -> str:
-    """Assemble a complete spec-conformant X12 message envelope + body."""
-    body = BODIES[txn_code]
-    fg = FG_CODES[txn_code]
-    st = ST_TEMPLATE.format(txn=txn_code)
-    # Count segments inside ST...SE for the SE count (incl. ST and SE themselves)
-    body_seg_count = body.count("~") + 2  # +2 for ST and SE
-    se = SE_TEMPLATE.format(seg_count=body_seg_count)
-    isa = ISA_TEMPLATE.format(
-        date="260115", time="1430", ctrl_num=ctrl_num,
-    )
-    gs = GS_TEMPLATE.format(
-        fg=fg, date_full="20260115", time_full="1430",
-        ctrl_num=ctrl_num, txn=txn_code,
-    )
-    ge = GE_TEMPLATE.format(ctrl_num=ctrl_num)
-    iea = IEA_TEMPLATE.format(ctrl_num=ctrl_num)
-    return "\n".join([isa, gs, st, body.replace("~", "~\n").rstrip(), se, ge, iea])
-
-
-# ---------------------------------------------------------------------------
-# Renderers — README, mapping, test
+# Renderers — README, mapping, transformer, test
 # ---------------------------------------------------------------------------
 
 def _render_readme(d: _Decomposition) -> str:
@@ -379,21 +356,51 @@ def _render_readme(d: _Decomposition) -> str:
         "",
         "- " + "\n- ".join(meta.get("key_loops", [])) if meta.get("key_loops") else "(flat structure — no loops)",
         "",
+        "## How the package works",
+        "",
+        "This package is a **thin consumer** of the project's X12 reference",
+        "library (`healthcare_libs.x12`) — it does not carry its own X12",
+        "envelope / segment logic. The library exposes:",
+        "",
+        "- `build_envelope`, `parse_envelope` — ISA/GS/ST/SE/GE/IEA round-trip",
+        "- `build_270`, `build_271`, `build_834`, `build_835`, `build_837p`",
+        "  — minimal-but-conformant per-transaction builders",
+        "- `validate` — wraps pyx12's structural validator + our own",
+        "  SE-count / ST-set checks",
+        "- `round_trip(x12)` — `True` iff parse(build(x)) preserves the body",
+        "- `get_segments(x12, id)` — pull every segment of a given type",
+        "",
+        "The static fixtures under `fixtures/` were produced by calling the",
+        "library's `build_<txn>()` functions at package-generation time. The",
+        "generated tests in `tests/test_roundtrip.py` import the same library",
+        "and assert that re-parsing each fixture round-trips and validates.",
+        "",
         "## How to run",
         "",
         "```bash",
-        "# Parse + validate fixtures with pyx12 (install: pip install pyx12)",
-        "python tests/test_roundtrip.py",
+        "# 1. Make sure healthcare_libs is on PYTHONPATH:",
+        "export PYTHONPATH=/path/to/myPub/mcp-servers/kb-mcp:$PYTHONPATH",
+        "",
+        "# 2. Run the round-trip tests:",
+        "python -m pytest tests/test_roundtrip.py -v",
+        "",
+        "# 3. Use the transformer CLI:",
+        f"python transformer.py build    --txn {d.txn_code} --output /tmp/{d.txn_code}.x12",
+        f"python transformer.py validate --input /tmp/{d.txn_code}.x12",
+        f"python transformer.py extract  --input /tmp/{d.txn_code}.x12 --segment NM1",
         "```",
         "",
         "Tests assert that:",
-        "1. Each fixture parses without spec violations.",
-        "2. Each fixture re-serializes byte-identical to its input "
-           "(round-trip equivalence).",
-        "3. The paired (request, response) shares matching control numbers + "
-           "trading-partner IDs.",
-        "",
+        "1. Each fixture parses cleanly with `healthcare_libs.x12.parse_envelope`.",
+        "2. `healthcare_libs.x12.round_trip(fixture)` returns `True`.",
+        "3. `healthcare_libs.x12.validate(fixture)` reports no errors.",
     ])
+    if d.paired_response_code:
+        lines.append(
+            f"4. The {d.paired_response_code} response shares the {d.txn_code} "
+            "request's ICN (paired control-number alignment)."
+        )
+    lines.append("")
     if d.concept_citations:
         lines.extend(["## Cited concepts from the corpus", ""])
         for cid, cname, _ds, src in d.concept_citations[:15]:
@@ -429,65 +436,252 @@ def _render_mapping(d: _Decomposition) -> str:
     return "\n".join(lines)
 
 
+def _render_transformer(d: _Decomposition) -> str:
+    """Generate a self-contained CLI script that uses healthcare_libs.x12."""
+    txn = d.txn_code
+    paired = d.paired_response_code or "None"
+    return f'''"""transformer.py — CLI for X12 {txn} build / validate / extract.
+
+This is a thin wrapper over ``healthcare_libs.x12``. Every operation
+delegates to the library; no X12 envelope / segment logic lives here.
+
+Supported operations
+--------------------
+- ``build``      — emit a synthetic spec-conformant {txn} fixture
+- ``validate``   — run ``healthcare_libs.x12.validate`` on an X12 file
+                   and print structured issues
+- ``extract``    — print every occurrence of a given segment ID
+                   (e.g. NM1, CLP, SVC) using ``get_segments``
+
+Usage
+-----
+    python transformer.py build    --txn {txn} --output out.x12
+    python transformer.py validate --input  out.x12
+    python transformer.py extract  --input  out.x12 --segment NM1
+
+The script assumes ``healthcare_libs`` is importable, i.e. either:
+- the myPub project's ``mcp-servers/kb-mcp/`` is on ``PYTHONPATH``, or
+- the project has been installed (``pip install -e .[healthcare]``).
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+
+from healthcare_libs import x12
+
+
+# Map txn code → builder. We delegate entirely; no inline X12 here.
+_BUILDERS = {{
+    "270": lambda: x12.build_270(),
+    "271": lambda: x12.build_271(request_270_icn=1),
+    "834": lambda: x12.build_834(),
+    "835": lambda: x12.build_835(paired_837_icn=1),
+    "837": lambda: x12.build_837p(),
+}}
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    txn = args.txn
+    if txn not in _BUILDERS:
+        # 997 / 999 use envelope-only fallback: the library's
+        # build_envelope handles both via FG_CODES.
+        if txn == "997":
+            body = ["AK1*HS*1234", "AK2*270*0001", "AK5*A", "AK9*A*1*1*1"]
+            msg = x12.build_envelope(txn_set="997", body_segments=body)
+        elif txn == "999":
+            body = [
+                "AK1*HS*1234*005010X279A1",
+                "AK2*270*0001*005010X279A1",
+                "IK5*A",
+                "AK9*A*1*1*1",
+            ]
+            msg = x12.build_envelope(txn_set="999", body_segments=body)
+        else:
+            print(f"unsupported txn: {{txn!r}}", file=sys.stderr)
+            return 2
+    else:
+        msg = _BUILDERS[txn]()
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(msg)
+        print(f"wrote {{len(msg)}} bytes to {{args.output}}")
+    else:
+        sys.stdout.write(msg)
+    return 0
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    with open(args.input) as f:
+        data = f.read()
+    issues = x12.validate(data)
+    errors = [i for i in issues if i.severity == "error"]
+    for issue in issues:
+        print(f"[{{issue.severity:7}}] {{issue.code:8}} {{issue.message}}")
+        if issue.segment_context:
+            print(f"           context: {{issue.segment_context}}")
+    if errors:
+        print(f"\\n{{len(errors)}} error(s)", file=sys.stderr)
+        return 1
+    print(f"\\nvalidation passed ({{len(issues)}} info/warning issue(s))")
+    return 0
+
+
+def cmd_extract(args: argparse.Namespace) -> int:
+    with open(args.input) as f:
+        data = f.read()
+    matches = x12.get_segments(data, args.segment)
+    if not matches:
+        print(f"no {{args.segment}} segments found")
+        return 0
+    for fields in matches:
+        print("*".join(fields))
+    print(f"\\n{{len(matches)}} {{args.segment}} segment(s) total")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\\n")[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_build = sub.add_parser("build", help="emit a synthetic X12 fixture")
+    p_build.add_argument("--txn", required=True,
+                         help="transaction set code (270/271/834/835/837/997/999)")
+    p_build.add_argument("--output", default="",
+                         help="write to this file (default: stdout)")
+    p_build.set_defaults(func=cmd_build)
+
+    p_val = sub.add_parser("validate", help="validate an X12 file")
+    p_val.add_argument("--input", required=True, help="path to X12 file")
+    p_val.set_defaults(func=cmd_validate)
+
+    p_ext = sub.add_parser("extract", help="print all matches of a segment ID")
+    p_ext.add_argument("--input", required=True, help="path to X12 file")
+    p_ext.add_argument("--segment", required=True,
+                       help="segment ID (e.g. NM1, CLP, SVC)")
+    p_ext.set_defaults(func=cmd_extract)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
 def _render_test(d: _Decomposition) -> str:
+    """Generate the test file. Imports healthcare_libs.x12 directly."""
     txn = d.txn_code
     paired = d.paired_response_code
-    lines = [
-        '"""Round-trip parse-emit equivalence tests for X12 ' + txn + '."""',
-        "from __future__ import annotations",
-        "",
-        "from pathlib import Path",
-        "import sys",
-        "",
-        "FIXTURES = Path(__file__).resolve().parent.parent / 'fixtures'",
-        "",
-        "",
-        "def _read(name: str) -> str:",
-        "    return (FIXTURES / name).read_text()",
-        "",
-        "",
-        f"def test_{txn}_request_parses():",
-        f"    \"\"\"The {txn} fixture parses as a valid X12 transaction.\"\"\"",
-        "    try:",
-        "        import pyx12.x12file as x12file",
-        "        import pyx12.params",
-        "    except ImportError:",
-        "        import pytest; pytest.skip('pyx12 not installed')",
-        "",
-        f"    body = _read('{txn}_request.x12')",
-        "    # Smoke test: lexer should split on segment terminators",
-        "    segments = [s for s in body.replace('\\n', '').split('~') if s.strip()]",
-        f"    assert len(segments) > 5, 'too few segments in {txn} fixture'",
-        f"    assert segments[0].startswith('ISA'), '{txn} fixture missing ISA envelope'",
-        f"    assert segments[-1].startswith('IEA'), '{txn} fixture missing IEA envelope'",
-        "",
-        "",
-        f"def test_{txn}_request_roundtrip():",
-        f"    \"\"\"Reading + re-rendering should be byte-identical.\"\"\"",
-        f"    body = _read('{txn}_request.x12')",
-        "    # Strip whitespace per segment for comparison",
-        "    normalized = '\\n'.join(s.strip() for s in body.splitlines() if s.strip())",
-        "    re_rendered = '\\n'.join(s.strip() for s in body.splitlines() if s.strip())",
-        "    assert normalized == re_rendered",
-        "",
-    ]
+    sigs = SIGNATURE_BODY_SEGMENTS.get(txn, [])
+    sig_assertions = "\n".join(
+        f"    assert any({sig!r} in s for s in body), "
+        f"f'{txn} body missing signature segment {sig}'"
+        for sig in sigs
+    ) or "    # (no signature segments declared for this txn)"
+
+    paired_block = ""
     if paired:
-        lines.extend([
-            "",
-            f"def test_{paired}_response_pairs_with_{txn}():",
-            f"    \"\"\"The {paired} response must reference the {txn} request's control number.\"\"\"",
-            f"    req = _read('{txn}_request.x12')",
-            f"    resp = _read('{paired}_response.x12')",
-            "    # Both have ISA control numbers in field 13",
-            "    isa_req = next(s for s in req.split('~') if s.strip().startswith('ISA'))",
-            "    isa_resp = next(s for s in resp.split('~') if s.strip().startswith('ISA'))",
-            "    # Field 13 of ISA is the interchange control number",
-            "    ctrl_req = isa_req.split('*')[13]",
-            "    ctrl_resp = isa_resp.split('*')[13]",
-            "    assert ctrl_req == ctrl_resp, 'paired control numbers must match'",
-            "",
-        ])
-    return "\n".join(lines)
+        paired_sigs = SIGNATURE_BODY_SEGMENTS.get(paired, [])
+        paired_sig_assertions = "\n".join(
+            f"    assert any({sig!r} in s for s in body), "
+            f"f'{paired} body missing signature segment {sig}'"
+            for sig in paired_sigs
+        ) or "    # (no signature segments declared for this txn)"
+        paired_block = f'''
+
+def test_{paired}_response_parses_cleanly():
+    """The paired {paired} response parses with healthcare_libs.x12."""
+    msg = _read("{paired}_response.x12")
+    env, body = x12.parse_envelope(msg)
+    assert env.txn_set == "{paired}", \\
+        f"expected ST-01={paired}, got {{env.txn_set!r}}"
+{paired_sig_assertions}
+
+
+def test_{paired}_response_round_trips():
+    """healthcare_libs.x12.round_trip returns True for the {paired} fixture."""
+    msg = _read("{paired}_response.x12")
+    assert x12.round_trip(msg)
+
+
+def test_{paired}_response_validates_clean():
+    """healthcare_libs.x12.validate reports no errors for the {paired} fixture."""
+    msg = _read("{paired}_response.x12")
+    issues = x12.validate(msg)
+    errors = [i for i in issues if i.severity == "error"]
+    assert not errors, \\
+        f"validate() returned errors: {{[(i.code, i.message) for i in errors]}}"
+
+
+def test_paired_icn_matches():
+    """The paired {paired} response must reuse the {txn} request's ICN."""
+    req = _read("{txn}_request.x12")
+    resp = _read("{paired}_response.x12")
+    req_env, _ = x12.parse_envelope(req)
+    resp_env, _ = x12.parse_envelope(resp)
+    assert req_env.icn == resp_env.icn, \\
+        f"paired ICN mismatch: req={{req_env.icn}} resp={{resp_env.icn}}"
+'''
+
+    return f'''"""Round-trip parse + validate tests for X12 {txn}.
+
+These tests exercise the static fixtures shipped under ``fixtures/``
+through the project's X12 reference library. The fixtures themselves
+were produced by calling ``healthcare_libs.x12.build_<txn>()`` at
+package-generation time, so a passing test demonstrates that:
+
+  1. parse_envelope can re-parse what build_<txn> emits
+  2. round_trip(...) is True on the canonical fixture
+  3. validate(...) returns no error-severity issues
+  4. paired (request, response) fixtures share an ICN
+
+Run with PYTHONPATH set so ``healthcare_libs`` resolves, e.g.
+
+    PYTHONPATH=/path/to/myPub/mcp-servers/kb-mcp \\
+        python -m pytest tests/test_roundtrip.py -v
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from healthcare_libs import x12
+
+
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+def _read(name: str) -> str:
+    return (FIXTURES / name).read_text()
+
+
+# ---- {txn} request -----------------------------------------------------
+
+def test_{txn}_request_parses_cleanly():
+    """The {txn} fixture parses with healthcare_libs.x12.parse_envelope."""
+    msg = _read("{txn}_request.x12")
+    env, body = x12.parse_envelope(msg)
+    assert env.txn_set == "{txn}", \\
+        f"expected ST-01={txn}, got {{env.txn_set!r}}"
+    assert body, "body has no segments"
+{sig_assertions}
+
+
+def test_{txn}_request_round_trips():
+    """healthcare_libs.x12.round_trip returns True for the {txn} fixture."""
+    msg = _read("{txn}_request.x12")
+    assert x12.round_trip(msg)
+
+
+def test_{txn}_request_validates_clean():
+    """healthcare_libs.x12.validate reports no errors for the {txn} fixture."""
+    msg = _read("{txn}_request.x12")
+    issues = x12.validate(msg)
+    errors = [i for i in issues if i.severity == "error"]
+    assert not errors, \\
+        f"validate() returned errors: {{[(i.code, i.message) for i in errors]}}"
+{paired_block}'''
 
 
 # ---------------------------------------------------------------------------
@@ -548,21 +742,27 @@ class EdiRoundTripPlanner:
             sources=sources,
         ))
 
-        # Emit files
+        # Build the fixtures by calling healthcare_libs.x12 at GEN TIME.
+        # The result lands as a static file in the package — consumers
+        # don't need the lib to read fixtures, only to run the tests.
+        request_x12, response_x12 = build_paired_messages(
+            d.txn_code, d.paired_response_code,
+        )
+
         plan.files.extend([
             GenFile(filename="README.md", content=_render_readme(d), purpose="overview"),
             GenFile(filename="mapping.md", content=_render_mapping(d), purpose="reference"),
+            GenFile(filename="transformer.py",
+                    content=_render_transformer(d), purpose="cli"),
             GenFile(filename=f"fixtures/{d.txn_code}_request.x12",
-                    content=build_message(d.txn_code, ctrl_num=1),
-                    purpose="fixture"),
+                    content=request_x12, purpose="fixture"),
             GenFile(filename="tests/test_roundtrip.py",
                     content=_render_test(d), purpose="test"),
         ])
-        if d.paired_response_code:
+        if response_x12 is not None:
             plan.files.append(GenFile(
                 filename=f"fixtures/{d.paired_response_code}_response.x12",
-                content=build_message(d.paired_response_code, ctrl_num=1),
-                purpose="fixture",
+                content=response_x12, purpose="fixture",
             ))
         return plan
 
@@ -580,13 +780,28 @@ class EdiRoundTripValidator:
                 message="unknown X12 transaction set",
             ))
             return issues
-        # Smoke test: every fixture file should have ISA envelope
+        # Every fixture file must round-trip + validate via the lib.
         for f in plan.files:
             if f.filename.endswith(".x12"):
                 if "ISA*" not in f.content or "IEA*" not in f.content:
                     issues.append(ValidationIssue(
                         unit_logical_key="txn_main", severity="error",
                         message=f"fixture {f.filename} missing ISA/IEA envelope",
+                    ))
+                    continue
+                # Validate via the lib — generator output should be clean.
+                lib_issues = _x12.validate(f.content)
+                lib_errors = [i for i in lib_issues if i.severity == "error"]
+                for li in lib_errors:
+                    issues.append(ValidationIssue(
+                        unit_logical_key="txn_main", severity="error",
+                        message=f"healthcare_libs.x12.validate({f.filename}): "
+                                f"{li.code} {li.message}",
+                    ))
+                if not _x12.round_trip(f.content):
+                    issues.append(ValidationIssue(
+                        unit_logical_key="txn_main", severity="error",
+                        message=f"fixture {f.filename} fails round_trip()",
                     ))
         if plan.package_metadata.get("n_citations", 0) == 0:
             issues.append(ValidationIssue(

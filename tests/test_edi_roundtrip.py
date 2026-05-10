@@ -114,10 +114,96 @@ def test_render_test_emits_pytest_functions():
             return _R()
     d = dec.decompose(_MockConn(), None, "270")
     test_code = edi_roundtrip._render_test(d)
-    assert "def test_270_request_parses" in test_code
-    assert "def test_270_request_roundtrip" in test_code
-    # Paired response exists for 270, so paired-control-number test should appear
-    assert "def test_271_response_pairs_with_270" in test_code
+    # Generated tests cover parse, round-trip, and validate via the lib
+    assert "def test_270_request_parses_cleanly" in test_code
+    assert "def test_270_request_round_trips" in test_code
+    assert "def test_270_request_validates_clean" in test_code
+    # Paired response exists for 270 → 271, so paired-ICN test should appear
+    assert "def test_271_response_parses_cleanly" in test_code
+    assert "def test_paired_icn_matches" in test_code
+
+
+# ---- Output-uses-healthcare_libs tests ----------------------------------
+#
+# The post-rewrite contract: generated package files are thin consumers
+# of healthcare_libs.x12. These tests guard that contract — without them
+# a regression to inline X12 templates would slip through structurally.
+
+def _decompose_270():
+    """Helper: build a 270 decomposition with a no-rows mock conn."""
+    dec = edi_roundtrip.EdiRoundTripDecomposer()
+    class _MockConn:
+        def execute(self, *args, **kwargs):
+            class _R:
+                def fetchall(self_inner):
+                    return []
+            return _R()
+    return dec.decompose(_MockConn(), None, "270")
+
+
+def test_generated_test_imports_healthcare_libs():
+    """The generated test file must import from healthcare_libs.x12."""
+    test_code = edi_roundtrip._render_test(_decompose_270())
+    assert "from healthcare_libs import x12" in test_code, (
+        "generated test must import healthcare_libs.x12"
+    )
+    # And it must actually USE the lib (not just import-and-ignore)
+    assert "x12.parse_envelope" in test_code
+    assert "x12.round_trip" in test_code
+    assert "x12.validate" in test_code
+
+
+def test_generated_test_is_valid_python():
+    """The generated test file must parse cleanly with ast.parse."""
+    import ast
+    test_code = edi_roundtrip._render_test(_decompose_270())
+    ast.parse(test_code)  # raises SyntaxError on bad code
+
+
+def test_generated_transformer_imports_healthcare_libs():
+    """The generated transformer.py must import healthcare_libs.x12."""
+    code = edi_roundtrip._render_transformer(_decompose_270())
+    assert "from healthcare_libs import x12" in code
+    # CLI subcommands must be wired in
+    assert "build" in code and "validate" in code and "extract" in code
+    # The lib's segment-extraction helper must be used
+    assert "x12.get_segments" in code
+
+
+def test_generated_transformer_is_valid_python():
+    """The generated transformer.py must parse cleanly with ast.parse."""
+    import ast
+    code = edi_roundtrip._render_transformer(_decompose_270())
+    ast.parse(code)
+
+
+def test_generated_fixture_parses_via_healthcare_libs():
+    """A fixture from build_message must parse cleanly via healthcare_libs.x12."""
+    sys.path.insert(0, str(ROOT / "mcp-servers" / "kb-mcp"))
+    from healthcare_libs import x12 as _x12
+    for txn in ("270", "271", "834", "835", "837", "997", "999"):
+        msg = edi_roundtrip.build_message(txn, ctrl_num=7)
+        env, body = _x12.parse_envelope(msg)
+        assert env.txn_set == txn, f"{txn}: ST-01 mismatch ({env.txn_set!r})"
+        assert env.icn == 7, f"{txn}: ICN didn't propagate ({env.icn!r})"
+        assert body, f"{txn}: empty body"
+        # round_trip must be true for every fixture we ship
+        assert _x12.round_trip(msg), f"{txn}: round_trip failed"
+
+
+def test_generator_no_inline_x12_templates():
+    """Regression guard: the generator file must not carry inline X12
+    envelope templates anymore. Anything ISA/IEA-shaped should now come
+    from healthcare_libs.x12."""
+    src = (ROOT / "mcp-servers" / "kb-mcp" / "edi_roundtrip.py").read_text()
+    # Forbid ISA_TEMPLATE / GS_TEMPLATE / etc — the giveaway pattern of
+    # the old generator.
+    for forbidden in ("ISA_TEMPLATE", "GS_TEMPLATE", "IEA_TEMPLATE",
+                      "ST_TEMPLATE", "SE_TEMPLATE"):
+        assert forbidden not in src, (
+            f"generator still defines {forbidden} — should delegate to "
+            "healthcare_libs.x12"
+        )
 
 
 # ---- Live integration test (uses real catalog) --------------------------
@@ -149,6 +235,7 @@ def test_generator_end_to_end_on_real_catalog(tmp_path):
         pkg_dir = tmp_path / "edi-roundtrip-270"
         assert pkg_dir.exists()
         assert (pkg_dir / "README.md").exists()
+        assert (pkg_dir / "transformer.py").exists()
         assert (pkg_dir / "fixtures" / "270_request.x12").exists()
         assert (pkg_dir / "fixtures" / "271_response.x12").exists()
         assert (pkg_dir / "tests" / "test_roundtrip.py").exists()
@@ -156,5 +243,21 @@ def test_generator_end_to_end_on_real_catalog(tmp_path):
         # Fixture has envelope
         req = (pkg_dir / "fixtures" / "270_request.x12").read_text()
         assert "ISA*" in req and "IEA*" in req
+
+        # Generated test + transformer are valid Python and import the lib
+        import ast
+        test_src = (pkg_dir / "tests" / "test_roundtrip.py").read_text()
+        ast.parse(test_src)
+        assert "from healthcare_libs import x12" in test_src
+
+        transformer_src = (pkg_dir / "transformer.py").read_text()
+        ast.parse(transformer_src)
+        assert "from healthcare_libs import x12" in transformer_src
+
+        # Fixture round-trips through the lib
+        from healthcare_libs import x12 as _x12
+        env, body = _x12.parse_envelope(req)
+        assert env.txn_set == "270"
+        assert _x12.round_trip(req)
     finally:
         conn.close()

@@ -2,27 +2,30 @@
 
 Given a source healthcare standard + target standard (e.g., "HL7v2 ADT^A01"
 → "FHIR Patient+Encounter"), generates a complete mapping package: the
-field-by-field mapping table, a transformer skeleton in Python, round-trip
-tests, and a README explaining where lossy/structural transforms happen.
+field-by-field mapping table, a runnable transformer in Python that wraps
+``healthcare_libs.cross_standards``, end-to-end tests, and a README.
 
-The mapping catalog covers the common industry-standard transforms:
-  HL7v2 ADT^A01 / A03 / A08 → FHIR Patient + Encounter
-  HL7v2 ORU^R01            → FHIR Observation + DiagnosticReport
-  HL7v2 ORM^O01            → FHIR ServiceRequest
-  X12 837P                 → FHIR Claim
-  X12 835                  → FHIR ClaimResponse + PaymentReconciliation
-  DICOM Series             → FHIR ImagingStudy
+The mapping catalog covers the common industry-standard transforms and
+each entry is wired to a concrete production transformer in
+``healthcare_libs.cross_standards``:
 
-For mappings outside this catalog, the generator falls back to a
-"mapping skeleton" mode that emits structure + TODOs based on the
-source/target format names.
+  HL7v2 ADT^A01 → FHIR Patient + Encounter   (adt_a01_to_patient_encounter)
+  HL7v2 ADT^A03 → FHIR Encounter (discharge) (adt_a03_to_encounter_discharge)
+  HL7v2 ADT^A08 → FHIR Patient + Encounter   (adt_a08_to_patient_encounter)
+  HL7v2 ORU^R01 → FHIR Observation Bundle    (oru_r01_to_observation_bundle)
+  X12 837P      → FHIR Claim                 (x12_837p_to_claim)
+  X12 835       → FHIR ClaimResponse         (x12_835_to_claim_response)
+  DICOM Series  → FHIR ImagingStudy          (dicom_study_to_imaging_study)
+
+For mappings outside this catalog, the generator returns an "unknown
+pair" plan with a helpful note listing supported pairs.
 
 Output:
     mapping-<source>-to-<target>/
       README.md             intent + caveats + how to run
       mapping.md            field-by-field source→target table
-      transformer.py        Python skeleton (function per source element)
-      tests/test_mapping.py round-trip + spec-conformance tests
+      transformer.py        thin CLI wrapper over cross_standards.<func>
+      tests/test_mapping.py runnable end-to-end test (synthetic source → FHIR)
 """
 from __future__ import annotations
 
@@ -47,9 +50,17 @@ LOG = logging.getLogger("mypub-standards-translator")
 GENERATOR_TYPE = "standards_translator"
 
 
-# A mapping entry: (source_path, target_path, transform, notes)
-# transform: one of "direct", "lookup", "concat", "split", "code-translation",
-#            "lossy", "compute", "drop"
+# A mapping entry binds the catalog key to:
+#   * a human-friendly source/target/purpose triple
+#   * the cited tools (loaded as concept citations from the KB)
+#   * a list of (source_path, target_path, transform_kind, notes) tuples
+#   * the cross_standards transformer function name
+#   * test_builder: name of healthcare_libs.{module}.{builder} that produces
+#                   a synthetic source message for the integration test
+#   * test_kwargs: kwargs to pass to the builder
+#   * expected_resource_types: resourceType values expected in the output
+#                              (top-level resourceType, or for Bundle the
+#                              entry resourceTypes)
 MAPPING_CATALOG: dict[str, dict[str, Any]] = {
     "hl7v2-adt-a01-to-fhir-patient-encounter": {
         "source": "HL7v2 ADT^A01 (Admit/Visit Notification)",
@@ -59,6 +70,10 @@ MAPPING_CATALOG: dict[str, dict[str, Any]] = {
         "tools_cited": ["HAPI FHIR", "HAPI HL7v2 — Parsing", "HL7 Library (PHP)",
                         "Mirth/NextGen Connect", "FHIR Specification",
                         "hl7apy"],
+        "transformer_func": "adt_a01_to_patient_encounter",
+        "test_builder": "hl7v2.build_adt_a01",
+        "test_kwargs": {},
+        "expected_resource_types": ["Bundle", "Patient", "Encounter"],
         "fields": [
             ("PID-3 (Patient Identifier List)", "Patient.identifier",
              "lookup", "Iterate IDs; map type code to FHIR identifier system URL"),
@@ -92,6 +107,72 @@ MAPPING_CATALOG: dict[str, dict[str, Any]] = {
              "drop", "Used to dispatch this mapping; not preserved"),
         ],
     },
+    "hl7v2-adt-a03-to-fhir-encounter-discharge": {
+        "source": "HL7v2 ADT^A03 (Discharge / End Visit)",
+        "target": "FHIR Patient + Encounter (discharge)",
+        "purpose": "Convert an ADT discharge message into a FHIR Bundle that "
+                   "updates the existing Encounter with a discharge time and "
+                   "status=finished.",
+        "tools_cited": ["HAPI FHIR", "HAPI HL7v2 — Parsing", "Mirth/NextGen Connect",
+                        "FHIR Specification", "hl7apy"],
+        "transformer_func": "adt_a03_to_encounter_discharge",
+        "test_builder": "hl7v2.build_adt_a03",
+        "test_kwargs": {},
+        "expected_resource_types": ["Bundle", "Patient", "Encounter"],
+        "fields": [
+            ("PID-3 (Patient Identifier List)", "Patient.identifier",
+             "lookup", "Iterate IDs; map type code to FHIR identifier system URL"),
+            ("PID-5 (Patient Name)", "Patient.name",
+             "split", "Family + Given + Prefix + Suffix → HumanName components"),
+            ("PID-7 (Date of Birth)", "Patient.birthDate",
+             "direct", "HL7v2 TS → FHIR date (YYYY-MM-DD truncation)"),
+            ("PID-8 (Sex)", "Patient.gender",
+             "code-translation", "HL7 Table 0001 → FHIR AdministrativeGender"),
+            ("PV1-2 (Patient Class)", "Encounter.class",
+             "code-translation", "HL7 Table 0004 → ActEncounterCode"),
+            ("PV1-19 (Visit Number)", "Encounter.identifier",
+             "direct", "CX → Identifier (used to merge onto admission Encounter)"),
+            ("PV1-36 (Discharge Disposition)", "Encounter.hospitalization.dischargeDisposition",
+             "code-translation", "HL7 Table 0112 → DischargeDisposition CodeableConcept"),
+            ("PV1-44 (Admit Date/Time)", "Encounter.period.start",
+             "direct", "TS → instant; preserved on update"),
+            ("PV1-45 (Discharge Date/Time)", "Encounter.period.end",
+             "direct", "TS → instant; the new field for A03"),
+            ("(synthesized) Encounter.status", "Encounter.status = 'finished'",
+             "compute", "Discharge mapping unconditionally sets status to 'finished'"),
+        ],
+    },
+    "hl7v2-adt-a08-to-fhir-patient-encounter-update": {
+        "source": "HL7v2 ADT^A08 (Update Patient Information)",
+        "target": "FHIR Patient + Encounter (PUT semantics)",
+        "purpose": "Convert an ADT update message into a FHIR Bundle whose "
+                   "entries use PUT (upsert) semantics so the receiver "
+                   "overwrites the existing Patient + Encounter records.",
+        "tools_cited": ["HAPI FHIR", "HAPI HL7v2 — Parsing", "Mirth/NextGen Connect",
+                        "FHIR Specification", "hl7apy"],
+        "transformer_func": "adt_a08_to_patient_encounter",
+        "test_builder": "hl7v2.build_adt_a08",
+        "test_kwargs": {},
+        "expected_resource_types": ["Bundle", "Patient", "Encounter"],
+        "fields": [
+            ("PID-3 (Patient Identifier List)", "Patient.identifier",
+             "lookup", "Iterate IDs; map type code to FHIR identifier system URL"),
+            ("PID-5 (Patient Name)", "Patient.name",
+             "split", "Family + Given + Prefix + Suffix → HumanName components"),
+            ("PID-7 (Date of Birth)", "Patient.birthDate",
+             "direct", "HL7v2 TS → FHIR date"),
+            ("PID-8 (Sex)", "Patient.gender",
+             "code-translation", "HL7 Table 0001 → FHIR AdministrativeGender"),
+            ("PID-11 (Patient Address)", "Patient.address",
+             "split", "XAD components → Address.line/city/state/postalCode"),
+            ("PV1-2 (Patient Class)", "Encounter.class",
+             "code-translation", "HL7 Table 0004 → ActEncounterCode"),
+            ("PV1-19 (Visit Number)", "Encounter.identifier",
+             "direct", "CX → Identifier"),
+            ("(envelope) Bundle.entry.request.method", "PUT",
+             "compute", "A08 = upsert; entries declare PUT against the supplied id"),
+        ],
+    },
     "hl7v2-oru-r01-to-fhir-observation": {
         "source": "HL7v2 ORU^R01 (Unsolicited Observation Result)",
         "target": "FHIR Observation + DiagnosticReport (+ Patient ref)",
@@ -99,6 +180,10 @@ MAPPING_CATALOG: dict[str, dict[str, Any]] = {
                    "grouped under a DiagnosticReport.",
         "tools_cited": ["HAPI FHIR", "HAPI HL7v2 — Parsing", "FHIR Specification",
                         "hl7apy", "Mirth/NextGen Connect"],
+        "transformer_func": "oru_r01_to_observation_bundle",
+        "test_builder": "hl7v2.build_oru_r01",
+        "test_kwargs": {},
+        "expected_resource_types": ["Bundle", "Observation", "DiagnosticReport"],
         "fields": [
             ("PID-3", "Observation.subject (Patient ref)",
              "lookup", "Patient must already exist in target system; "
@@ -142,6 +227,10 @@ MAPPING_CATALOG: dict[str, dict[str, Any]] = {
                    "with item lines, diagnosis pointers, and provider refs.",
         "tools_cited": ["pyx12", "Ballerina EDI Module", "Stedi (clearinghouse)",
                         "FHIR Specification", "HAPI FHIR"],
+        "transformer_func": "x12_837p_to_claim",
+        "test_builder": "x12.build_837p",
+        "test_kwargs": {},
+        "expected_resource_types": ["Claim"],
         "fields": [
             ("BHT (Beginning of Hierarchical Transaction)", "Claim.created",
              "direct", "BHT04 (date) + BHT05 (time) → Claim.created"),
@@ -176,6 +265,13 @@ MAPPING_CATALOG: dict[str, dict[str, Any]] = {
                    "single PaymentReconciliation for the payment instrument.",
         "tools_cited": ["pyx12", "Ballerina EDI Module", "Stedi (clearinghouse)",
                         "FHIR Specification"],
+        "transformer_func": "x12_835_to_claim_response",
+        "test_builder": "x12.build_835",
+        "test_kwargs": {},
+        # Single-CLP 835 returns a bare ClaimResponse; multi-CLP returns a
+        # Bundle of PaymentReconciliation + ClaimResponse(s). Test exercises
+        # the single-CLP shape (which is what build_835 emits).
+        "expected_resource_types": ["ClaimResponse"],
         "fields": [
             ("BPR (Financial Information)", "PaymentReconciliation.paymentDate, .paymentAmount, .paymentIssuer",
              "split", "BPR16 → paymentDate; BPR02 → paymentAmount; BPR10 → paymentIssuer (BankID)"),
@@ -199,6 +295,10 @@ MAPPING_CATALOG: dict[str, dict[str, Any]] = {
         "purpose": "Convert a DICOM Study + Series + Instance hierarchy into a "
                    "FHIR ImagingStudy with per-Series and per-Instance subresources.",
         "tools_cited": ["pydicom", "DCMTK", "FHIR Specification"],
+        "transformer_func": "dicom_study_to_imaging_study",
+        "test_builder": "dicom.build_minimal_dataset",
+        "test_kwargs": {},
+        "expected_resource_types": ["ImagingStudy"],
         "fields": [
             ("(0020,000D) StudyInstanceUID", "ImagingStudy.identifier",
              "direct", "DICOM UID → Identifier with system=urn:dicom:uid"),
@@ -240,6 +340,10 @@ class _Decomposition:
     fields: list[tuple[str, str, str, str]]  # (src, tgt, transform, notes)
     tools_cited: list[str]
     citations: list[tuple[int, str, int, str]]  # (concept_id, name, doc_section_id, source_name)
+    transformer_func: Optional[str] = None
+    test_builder: Optional[str] = None
+    test_kwargs: dict[str, Any] = field(default_factory=dict)
+    expected_resource_types: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
 
@@ -345,6 +449,10 @@ class StandardsTranslatorDecomposer:
             fields=list(meta["fields"]),
             tools_cited=cited_names,
             citations=citations,
+            transformer_func=meta.get("transformer_func"),
+            test_builder=meta.get("test_builder"),
+            test_kwargs=dict(meta.get("test_kwargs", {})),
+            expected_resource_types=list(meta.get("expected_resource_types", [])),
             notes=notes,
         )
 
@@ -354,45 +462,72 @@ class StandardsTranslatorDecomposer:
 # ---------------------------------------------------------------------------
 
 def _render_readme(d: _Decomposition) -> str:
+    func = d.transformer_func or "<unknown>"
     lines = [
         f"# Standards Translator — {d.source} → {d.target}",
         "",
         f"**Purpose.** {d.purpose}",
         "",
+        f"This package's transforms are powered by "
+        f"`healthcare_libs.cross_standards.{func}` — a production-grade "
+        f"transformer with field-level mappings, code-system translation, "
+        f"and structured warnings on lossy/optional fields. The files in "
+        f"this package are a thin wrapper + reference table around that "
+        f"library function.",
+        "",
         "## What this package contains",
         "",
         "- `mapping.md` — field-by-field source → target table with the "
-           "transform pattern (direct, lookup, split, code-translation, "
-           "compute, drop) and notes",
-        "- `transformer.py` — Python skeleton with one function per source "
-           "element. Each function is a TODO scaffold; fill in the actual "
-           "library calls (HAPI / pyx12 / pydicom) for your stack.",
-        "- `tests/test_mapping.py` — round-trip + spec-conformance test "
-           "templates",
+        "transform pattern (direct, lookup, split, code-translation, "
+        "compute, drop) and notes",
+        f"- `transformer.py` — runnable CLI wrapper that calls "
+        f"`{func}` and writes the resulting FHIR JSON to disk. Supports "
+        "`--deid` for HIPAA Safe Harbor post-processing.",
+        "- `tests/test_mapping.py` — end-to-end test that builds a "
+        "synthetic source message, runs it through the transformer, and "
+        "validates the output against the FHIR R4 spec via "
+        "`healthcare_libs.fhir.validate`",
+        "",
+        "## Install",
+        "",
+        "```bash",
+        "# healthcare_libs lives alongside this package in mypub. Either",
+        "# install mypub or set PYTHONPATH to the kb-mcp directory:",
+        "export PYTHONPATH=/path/to/myPub/mcp-servers/kb-mcp:$PYTHONPATH",
+        "",
+        "# Runtime deps (subset of healthcare_libs requirements):",
+        "pip install hl7apy fhir.resources pydicom",
+        "```",
         "",
         "## How to run",
         "",
         "```bash",
-        "# Install the libraries your stack uses",
-        "pip install hl7apy fhir.resources pyx12 pydicom  # pick what you need",
+        "# Transform a message",
         "python transformer.py --input /path/to/source.msg --output /path/to/target.json",
+        "",
+        "# Transform AND apply HIPAA Safe Harbor de-id post-pass",
+        "python transformer.py --input source.msg --output target.json --deid",
+        "",
+        "# Run the integration test (synthetic source → FHIR validation)",
         "pytest tests/test_mapping.py",
         "```",
         "",
         "## Caveats",
         "",
         "- **Lossy fields** are explicitly marked in `mapping.md` (transform "
-           "type `lossy`). Round-trip equivalence does NOT hold for these — "
-           "the source can be regenerated only with externally-stored context.",
+        "type `lossy`). Round-trip equivalence does NOT hold for these — "
+        "the source can be regenerated only with externally-stored context.",
         "- **Code translation** assumes your local code system is the standard "
-           "one. If you use site-specific value sets, add a translation table.",
+        "one. If you use site-specific value sets, add a translation table.",
         "- **Reference resolution** (e.g., `Patient.identifier` → `Patient` "
-           "ref) requires the target system has the referenced resources.",
+        "ref) requires the target system has the referenced resources.",
+        "- **Warnings** from `cross_standards.{func}` are printed to stderr; "
+        "callers should capture them for quarantine/ACK decisions.",
         "",
     ]
     if d.citations:
         lines.extend(["## Cited tools from the catalog", ""])
-        for cid, cname, _ds, src in d.citations[:15]:
+        for _cid, cname, _ds, src in d.citations[:15]:
             lines.append(f"- **{cname}** — {src}")
         lines.append("")
     if d.notes:
@@ -408,6 +543,8 @@ def _render_mapping(d: _Decomposition) -> str:
         f"# Field Mapping — {d.source} → {d.target}",
         "",
         f"_{len(d.fields)} field mapping(s)._",
+        "",
+        f"Implementation: `healthcare_libs.cross_standards.{d.transformer_func}`.",
         "",
         "| Source | Target | Transform | Notes |",
         "|---|---|---|---|",
@@ -428,7 +565,7 @@ def _render_mapping(d: _Decomposition) -> str:
         "- **concat** — multiple source fields → one target field",
         "- **code-translation** — value passes through a code-system mapping",
         "- **compute** — target value computed from source (type-dispatched, "
-           "arithmetic, etc.)",
+        "arithmetic, etc.)",
         "- **lossy** — full equivalence not preserved; document the loss",
         "- **drop** — source field intentionally not preserved",
         "",
@@ -441,139 +578,218 @@ def _render_mapping(d: _Decomposition) -> str:
 
 
 def _render_transformer(d: _Decomposition) -> str:
-    """Generate a Python skeleton with one function per source element."""
-    src_short = _slugify(d.source).replace("-", "_")[:40]
+    """Generate a thin Python wrapper over healthcare_libs.cross_standards."""
+    func = d.transformer_func or "adt_a01_to_patient_encounter"
+    # The transformer accepts a string for HL7v2/X12, bytes for DICOM.
+    is_dicom = "dicom" in func
+    if is_dicom:
+        read_input = "args.input.read_bytes()"
+        input_doc = "DICOM Part 10 bytes (as written by pydicom.Dataset.save_as)"
+    else:
+        read_input = "args.input.read_text()"
+        input_doc = "wire-format string (HL7 v2 or X12)"
     lines = [
-        f'"""Transformer skeleton for {d.source} → {d.target}.',
+        f'"""Transformer for {d.source} → {d.target}.',
         '',
-        'Generated by /kb-standards-translator. Each per-field function is',
-        'a TODO scaffold — fill in the actual library calls for your stack',
-        '(HAPI HL7v2 / hl7apy / fhir.resources / pyx12 / pydicom / Ballerina).',
+        f'Uses ``healthcare_libs.cross_standards.{func}`` for the actual',
+        'mapping logic. This file is a thin CLI/import wrapper; the per-field',
+        f'rules live in ``healthcare_libs.cross_standards.{func}``.',
+        '',
+        'Usage:',
+        '    python transformer.py --input source.msg --output target.json',
+        '    python transformer.py --input source.msg --output target.json --deid',
         '"""',
         'from __future__ import annotations',
         '',
         'import argparse',
         'import json',
-        'import logging',
+        'import sys',
         'from pathlib import Path',
-        'from typing import Any',
         '',
-        'LOG = logging.getLogger("transformer")',
+        f'from healthcare_libs.cross_standards import {func}',
+        'from healthcare_libs import deid',
+        'from healthcare_libs.cross_standards import deidentified_transform',
         '',
         '',
-        '# ---- Per-field transform functions ----',
+        'def transform(source, *, config: dict | None = None) -> dict:',
+        f'    """Transform a single source message.',
         '',
-    ]
-
-    seen_sources: set[str] = set()
-    for src, tgt, transform, notes in d.fields:
-        # Generate a function name from the source path
-        # PID-3 → transform_pid_3; (0010,0020) → transform_dicom_0010_0020
-        slug = src.lower()
-        slug = (slug.replace("-", "_").replace("(", "").replace(")", "")
-                    .replace(",", "_").replace(".", "_").replace("/", "_")
-                    .replace(" ", "_").replace("^", "_"))
-        slug = "".join(c for c in slug if c.isalnum() or c == "_")[:50]
-        slug = slug.strip("_") or "field"
-        if slug in seen_sources:
-            continue
-        seen_sources.add(slug)
-        lines.extend([
-            f'def transform_{slug}(source_value: Any, *, context: dict | None = None) -> Any:',
-            f'    """{transform.upper()}: {src} → {tgt}',
-            '',
-            f'    {notes}',
-            '    """',
-            f'    # TODO: implement {transform} transform',
-            '    raise NotImplementedError',
-            '',
-            '',
-        ])
-
-    lines.extend([
-        '# ---- Top-level transformer -----',
+        f'    ``source`` is {input_doc}.',
+        f'    Returns the FHIR resource dict (Bundle, ImagingStudy, etc.).',
+        f'    Warnings from the transformer are written to stderr.',
+        '    """',
+        f'    result = {func}(source)',
+        '    if result.warnings:',
+        '        for w in result.warnings:',
+        '            print(f"warning: {w}", file=sys.stderr)',
+        '    if result.notes:',
+        '        for n in result.notes:',
+        '            print(f"note: {n}", file=sys.stderr)',
+        '    return result.result',
         '',
-        'def transform_message(source_message: Any, context: dict | None = None) -> dict:',
-        f'    """Transform one {d.source} → {d.target}."""',
-        '    out: dict = {}',
-        '    ctx = context or {}',
-        '    # TODO: parse source_message with the appropriate library',
-        '    # (hl7apy.parser.parse_message; pyx12.x12file.X12Reader;',
-        '    #  pydicom.dcmread; etc.) and dispatch each source element to',
-        '    # its transform_<element> function.',
-        '    return out',
+        '',
+        'def transform_with_deid(source, *, deid_config) -> dict:',
+        '    """Run the transform AND post-process with HIPAA Safe Harbor de-id."""',
+        '    result = deidentified_transform(',
+        f'        {func}, source, deid_config=deid_config,',
+        '    )',
+        '    if result.warnings:',
+        '        for w in result.warnings:',
+        '            print(f"warning: {w}", file=sys.stderr)',
+        '    return result.result',
         '',
         '',
         'def main():',
         '    p = argparse.ArgumentParser(description=__doc__)',
-        '    p.add_argument("--input", type=Path, required=True)',
-        '    p.add_argument("--output", type=Path, required=True)',
+        '    p.add_argument("--input", type=Path, required=True,',
+        f'                   help="Input source message ({input_doc})")',
+        '    p.add_argument("--output", type=Path, required=True,',
+        '                   help="Output FHIR JSON file")',
+        '    p.add_argument("--deid", action="store_true",',
+        '                   help="Apply HIPAA Safe Harbor de-id post-transform")',
+        '    p.add_argument("--deid-salt", default="standards-translator-salt",',
+        '                   help="Pseudonym salt for de-id (rotate per release)")',
+        '    p.add_argument("--deid-seed", default="standards-translator-seed",',
+        '                   help="Date-shift seed for de-id")',
         '    args = p.parse_args()',
-        '    logging.basicConfig(level=logging.INFO)',
-        '    source = args.input.read_text()',
-        '    result = transform_message(source)',
-        '    args.output.write_text(json.dumps(result, indent=2))',
+        f'    source = {read_input}',
+        '    if args.deid:',
+        '        cfg = deid.DeidConfig(',
+        '            pseudonym_salt=args.deid_salt,',
+        '            date_offset_seed=args.deid_seed,',
+        '        )',
+        '        result = transform_with_deid(source, deid_config=cfg)',
+        '    else:',
+        '        result = transform(source)',
+        '    args.output.write_text(json.dumps(result, indent=2, default=str))',
+        '    print(f"wrote {args.output}", file=sys.stderr)',
         '',
         '',
         'if __name__ == "__main__":',
         '    main()',
-    ])
+    ]
     return "\n".join(lines)
 
 
 def _render_test(d: _Decomposition) -> str:
-    """Generate test scaffolds for round-trip + spec-conformance."""
+    """Generate a runnable end-to-end test using a synthetic source message."""
+    func = d.transformer_func or "adt_a01_to_patient_encounter"
+    builder = d.test_builder or "hl7v2.build_adt_a01"
+    builder_module, builder_name = builder.split(".", 1)
+    expected_types = d.expected_resource_types or ["Bundle"]
+    primary_type = expected_types[0]
+    is_bundle = primary_type == "Bundle"
+    is_dicom = builder_module == "dicom"
+
+    # Build the source-message construction snippet
+    if is_dicom:
+        # build_minimal_dataset returns a Dataset; cross_standards accepts it
+        source_construction = (
+            f'    return {builder_module}.{builder_name}()'
+        )
+    else:
+        source_construction = (
+            f'    return {builder_module}.{builder_name}()'
+        )
+
+    # Assertion block per result shape
+    assert_lines: list[str] = []
+    if is_bundle:
+        assert_lines.extend([
+            f'    assert result.get("resourceType") == "{primary_type}", \\',
+            f'        f"expected resourceType=Bundle, got {{result.get(\'resourceType\')!r}}"',
+            '    entry_types = [e["resource"]["resourceType"] for e in result.get("entry", [])]',
+        ])
+        for rt in expected_types[1:]:
+            assert_lines.append(
+                f'    assert "{rt}" in entry_types, '
+                f'f"expected {rt} in bundle, got {{entry_types}}"'
+            )
+    else:
+        assert_lines.append(
+            f'    assert result.get("resourceType") == "{primary_type}", \\'
+        )
+        assert_lines.append(
+            f'        f"expected resourceType={primary_type}, got '
+            f'{{result.get(\'resourceType\')!r}}"'
+        )
+
     lines = [
-        f'"""Test scaffolds for {d.source} → {d.target} mapping.',
+        f'"""End-to-end test for {d.source} → {d.target}.',
         '',
-        'Templates only — wire the fixture loaders to your real source/target',
-        'samples. The transformer module is generated alongside this test',
-        'with TODO stubs; tests fail until those stubs are implemented.',
+        'Builds a synthetic source message, runs it through the generated',
+        f'transformer (which calls healthcare_libs.cross_standards.{func}),',
+        'and validates the FHIR output against the R4 spec.',
         '"""',
         'from __future__ import annotations',
         '',
+        'import sys',
         'from pathlib import Path',
         '',
         'import pytest',
         '',
+        '# Make the local transformer.py importable',
+        'sys.path.insert(0, str(Path(__file__).resolve().parent.parent))',
+        '',
+        f'from healthcare_libs import {builder_module}, fhir  # noqa: E402',
+        f'from healthcare_libs.cross_standards import {func}  # noqa: E402',
+        '',
+        'import transformer  # noqa: E402',
+        '',
         '',
         '@pytest.fixture',
-        'def source_fixture(tmp_path):',
-        f'    """Load a sample {d.source} message. TODO: provide a real fixture."""',
-        f'    pytest.skip("provide a {d.source} fixture in tests/fixtures/")',
+        'def source_message():',
+        f'    """Construct a synthetic {d.source} via the format-lib builder."""',
+        source_construction,
         '',
         '',
-        '@pytest.fixture',
-        'def expected_target(tmp_path):',
-        f'    """Load the expected {d.target} output for the source fixture."""',
-        f'    pytest.skip("provide expected {d.target} fixture in tests/fixtures/")',
+        'def test_transform_returns_expected_resource_type(source_message):',
+        '    """The transformer returns a FHIR resource of the expected type."""',
+        '    result = transformer.transform(source_message)',
+        '    assert isinstance(result, dict), f"expected dict, got {type(result)}"',
+        *assert_lines,
         '',
         '',
-        'def test_transform_round_trip(source_fixture, expected_target):',
-        '    """End-to-end: transform the source, compare to the expected target."""',
-        '    from transformer import transform_message',
-        '    actual = transform_message(source_fixture)',
-        '    assert actual == expected_target, "round-trip mismatch"',
+        'def test_transform_round_trip_through_cross_standards(source_message):',
+        '    """The wrapped transform matches calling cross_standards directly."""',
+        f'    direct = {func}(source_message)',
+        '    via_wrapper = transformer.transform(source_message)',
+        '    # Both paths yield the same resourceType (ids may differ across runs)',
+        '    assert direct.result.get("resourceType") == via_wrapper.get("resourceType")',
         '',
         '',
-        'def test_target_spec_conformance(source_fixture):',
-        f'    """The {d.target} output must validate against the FHIR/X12/DICOM spec."""',
-        '    from transformer import transform_message',
-        '    actual = transform_message(source_fixture)',
-        f'    # TODO: validate {d.target} against the spec.',
-        '    # For FHIR: use fhir.resources to construct + validate.',
-        '    # For X12: use pyx12.x12file in validation mode.',
-        '    # For DICOM: use pydicom + dciodvfy.',
-        '    assert actual is not None',
+        'def test_target_spec_conformance(source_message):',
+        f'    """The {d.target} output validates against the FHIR R4 spec."""',
+        '    result = transformer.transform(source_message)',
+        '    issues = fhir.validate(result)',
+        '    errors = [i for i in issues if i.severity in ("error", "fatal")]',
+        '    assert not errors, f"FHIR validation errors: {[(i.location, i.message) for i in errors]}"',
         '',
+    ]
+    if is_bundle:
+        lines.extend([
+            '',
+            'def test_each_bundle_entry_validates(source_message):',
+            '    """Each entry resource also passes spec validation."""',
+            '    result = transformer.transform(source_message)',
+            '    for i, entry in enumerate(result.get("entry", [])):',
+            '        resource = entry.get("resource") or {}',
+            '        issues = fhir.validate(resource)',
+            '        errors = [iss for iss in issues if iss.severity in ("error", "fatal")]',
+            '        assert not errors, (',
+            '            f"entry[{i}] ({resource.get(\'resourceType\')}) failed: "',
+            '            f"{[(e.location, e.message) for e in errors]}"',
+            '        )',
+            '',
+        ])
+    lines.extend([
         '',
         'def test_lossy_fields_documented():',
         '    """Lossy transforms must be marked in mapping.md (manual sanity check)."""',
         '    mapping_md = (Path(__file__).resolve().parent.parent / "mapping.md").read_text()',
-        '    # If the mapping has lossy entries, they should appear in the legend',
         '    if "lossy" in mapping_md.lower():',
         '        assert "**lossy**" in mapping_md, "lossy fields used but not in legend"',
-    ]
+    ])
     return "\n".join(lines)
 
 
@@ -612,6 +828,7 @@ class StandardsTranslatorPlanner:
                 "target": d.target,
                 "n_fields": len(d.fields),
                 "n_citations": len(d.citations),
+                "transformer_func": d.transformer_func,
             },
             notes=list(d.notes),
         )
@@ -625,7 +842,8 @@ class StandardsTranslatorPlanner:
             name=f"{d.source} → {d.target}",
             ordinal=1,
             metadata={"mapping_key": d.mapping_key,
-                      "n_fields": len(d.fields)},
+                      "n_fields": len(d.fields),
+                      "transformer_func": d.transformer_func},
             logical_key="mapping_main",
             sources=sources,
         ))
@@ -656,6 +874,12 @@ class StandardsTranslatorValidator:
             issues.append(ValidationIssue(
                 unit_logical_key="mapping_main", severity="error",
                 message="no field mappings in the catalog entry — incomplete spec",
+            ))
+        if not plan.package_metadata.get("transformer_func"):
+            issues.append(ValidationIssue(
+                unit_logical_key="mapping_main", severity="error",
+                message="catalog entry missing transformer_func — generated "
+                        "transformer would be inert",
             ))
         if plan.package_metadata.get("n_citations", 0) == 0:
             issues.append(ValidationIssue(
