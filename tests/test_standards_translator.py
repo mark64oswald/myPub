@@ -412,3 +412,51 @@ def test_generated_test_passes_end_to_end_for_adt_a08(tmp_path):
     assert result.returncode == 0, (
         f"ADT^A08 generated tests failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+
+
+def test_generated_test_passes_end_to_end_for_adt_a04(tmp_path):
+    """Generated tests pass for ADT^A04 outpatient registration."""
+    pkg_dir = _generate_package(tmp_path, "HL7v2 ADT^A04 to FHIR Patient Encounter register")
+    test_py = pkg_dir / "tests" / "test_mapping.py"
+    env_pythonpath = str(ROOT / "mcp-servers" / "kb-mcp")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test_py), "-v"],
+        env={"PYTHONPATH": env_pythonpath, "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, check=False,
+        cwd=str(pkg_dir),
+    )
+    assert result.returncode == 0, (
+        f"ADT^A04 generated tests failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_generated_test_passes_end_to_end_for_orm_o01(tmp_path):
+    """Generated tests pass for ORM^O01 → ServiceRequest."""
+    pkg_dir = _generate_package(tmp_path, "HL7v2 ORM^O01 to FHIR ServiceRequest")
+    test_py = pkg_dir / "tests" / "test_mapping.py"
+    env_pythonpath = str(ROOT / "mcp-servers" / "kb-mcp")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test_py), "-v"],
+        env={"PYTHONPATH": env_pythonpath, "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, check=False,
+        cwd=str(pkg_dir),
+    )
+    assert result.returncode == 0, (
+        f"ORM^O01 generated tests failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_generated_test_passes_end_to_end_for_x12_271(tmp_path):
+    """Generated tests pass for X12 271 → CoverageEligibilityResponse."""
+    pkg_dir = _generate_package(tmp_path, "X12 271 to FHIR CoverageEligibilityResponse")
+    test_py = pkg_dir / "tests" / "test_mapping.py"
+    env_pythonpath = str(ROOT / "mcp-servers" / "kb-mcp")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test_py), "-v"],
+        env={"PYTHONPATH": env_pythonpath, "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, check=False,
+        cwd=str(pkg_dir),
+    )
+    assert result.returncode == 0, (
+        f"X12 271 generated tests failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
