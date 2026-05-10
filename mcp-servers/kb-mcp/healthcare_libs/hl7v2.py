@@ -78,8 +78,10 @@ DEFAULT_VERSION = "2.5"
 MESSAGE_TYPES = {
     "ADT^A01": ("ADT", "A01", "ADT_A01"),  # Admit/visit notification
     "ADT^A03": ("ADT", "A03", "ADT_A03"),  # Discharge/end visit
+    "ADT^A04": ("ADT", "A04", "ADT_A01"),  # Register patient — same structure as A01
     "ADT^A08": ("ADT", "A08", "ADT_A01"),  # Update — shares ADT_A01 structure
     "ORU^R01": ("ORU", "R01", "ORU_R01"),  # Unsolicited observation result
+    "ORM^O01": ("ORM", "O01", "ORM_O01"),  # General order
 }
 
 
@@ -486,6 +488,60 @@ def build_adt_a08(
     return msg.value
 
 
+def build_adt_a04(
+    *,
+    patient_first: str = "JANE",
+    patient_last: str = "DOE",
+    patient_middle: str = "",
+    patient_mrn: str = "MRN67890",
+    patient_dob: str = "19900101",
+    patient_sex: str = "F",
+    patient_class: str = "O",         # A04 default = O (outpatient registration)
+    assigned_location: str = "CLINIC^WAITING^",
+    attending_doctor: str = "5678^JONES^ROBERT^^^DR",
+    sending_app: str = "EHR",
+    sending_facility: str = "GENERAL_HOSPITAL",
+    receiving_app: str = "REGISTRATION",
+    receiving_facility: str = "GENERAL_HOSPITAL",
+    message_control_id: str = "MSG00004",
+    processing_id: str = "P",
+    version: str = DEFAULT_VERSION,
+    timestamp: Optional[datetime] = None,
+) -> str:
+    """Build an ADT^A04 (register a patient) HL7 v2 message.
+
+    A04 fires on outpatient registration / pre-admission / referral
+    intake — distinct from A01 (full admission). Per the v2.5 spec, A04
+    reuses A01's structure (MSH, EVN, PID, PV1); only the trigger event
+    differs. We default `patient_class` to `O` (outpatient) since that's
+    the most common A04 case; pass `E` for ED registration.
+    """
+    ts = timestamp or datetime.now()
+    msg = _new_message("ADT^A04", version=version)
+    _build_msh(
+        msg, message_type="ADT^A04",
+        sending_app=sending_app, sending_facility=sending_facility,
+        receiving_app=receiving_app, receiving_facility=receiving_facility,
+        message_control_id=message_control_id, processing_id=processing_id,
+        version=version, timestamp=ts,
+    )
+    msg.add_segment("EVN")
+    msg.evn.evn_1 = "A04"
+    msg.evn.evn_2 = ts.strftime("%Y%m%d%H%M%S")
+    _build_pid(
+        msg,
+        patient_first=patient_first, patient_last=patient_last,
+        patient_middle=patient_middle, patient_mrn=patient_mrn,
+        patient_dob=patient_dob, patient_sex=patient_sex,
+    )
+    _build_pv1(
+        msg, patient_class=patient_class,
+        assigned_location=assigned_location, admission_type="",
+        attending_doctor=attending_doctor,
+    )
+    return msg.value
+
+
 # ---------------------------------------------------------------------------
 # Public builder — ORU
 # ---------------------------------------------------------------------------
@@ -577,6 +633,71 @@ def build_oru_r01(
             obx.obx_8 = obs["abnormal_flags"]
         obx.obx_11 = obs.get("status", "F")
 
+    return msg.value
+
+
+def build_orm_o01(
+    *,
+    patient_first: str = "JOHN",
+    patient_last: str = "DOE",
+    patient_middle: str = "",
+    patient_mrn: str = "MRN12345",
+    patient_dob: str = "19850615",
+    patient_sex: str = "M",
+    placer_order_number: str = "ORDER-001",
+    filler_order_number: str = "FILLER-001",
+    order_control: str = "NW",          # NW=new order, CA=cancel, RP=replace
+    universal_service_id: str = "CBC^Complete Blood Count^L",
+    ordering_provider: str = "9876^WILSON^MARK^^^DR",
+    sending_app: str = "EHR",
+    sending_facility: str = "GENERAL_HOSPITAL",
+    receiving_app: str = "LAB",
+    receiving_facility: str = "GENERAL_HOSPITAL",
+    message_control_id: str = "ORD00001",
+    processing_id: str = "P",
+    version: str = DEFAULT_VERSION,
+    timestamp: Optional[datetime] = None,
+) -> str:
+    """Build an ORM^O01 (general order) HL7 v2 message.
+
+    ORM O01 is the original order (lab, radiology, pharmacy, etc.).
+    Required segments per the v2.5 spec: MSH, PID, ORC, OBR. ORC carries
+    the order-control state machine (NW = new, CA = cancel, RP = replace,
+    etc.); OBR carries the actual ordered service.
+
+    Note: hl7apy ORM_O01 places ORC before OBR (per the spec); both
+    reference the same placer/filler order numbers as their primary key.
+    """
+    ts = timestamp or datetime.now()
+    msg = _new_message("ORM^O01", version=version)
+    _build_msh(
+        msg, message_type="ORM^O01",
+        sending_app=sending_app, sending_facility=sending_facility,
+        receiving_app=receiving_app, receiving_facility=receiving_facility,
+        message_control_id=message_control_id, processing_id=processing_id,
+        version=version, timestamp=ts,
+    )
+    _build_pid(
+        msg,
+        patient_first=patient_first, patient_last=patient_last,
+        patient_middle=patient_middle, patient_mrn=patient_mrn,
+        patient_dob=patient_dob, patient_sex=patient_sex,
+    )
+    msg.add_segment("ORC")
+    msg.orc.orc_1 = order_control               # ORC-1: Order Control
+    msg.orc.orc_2 = placer_order_number         # ORC-2: Placer Order Number
+    msg.orc.orc_3 = filler_order_number         # ORC-3: Filler Order Number
+    msg.orc.orc_5 = "SC"                         # ORC-5: Order Status (SC=in process)
+    msg.orc.orc_9 = ts.strftime("%Y%m%d%H%M%S") # ORC-9: Date/Time of Transaction
+    msg.orc.orc_12 = ordering_provider          # ORC-12: Ordering Provider
+
+    msg.add_segment("OBR")
+    msg.obr.obr_1 = "1"
+    msg.obr.obr_2 = placer_order_number
+    msg.obr.obr_3 = filler_order_number
+    msg.obr.obr_4 = universal_service_id
+    msg.obr.obr_7 = ts.strftime("%Y%m%d%H%M%S") # OBR-7: Observation Date/Time
+    msg.obr.obr_16 = ordering_provider
     return msg.value
 
 

@@ -64,8 +64,10 @@ def test_build_oru_r01_parses_back_with_obr_and_obx():
 @pytest.mark.parametrize("builder,expected_type,expected_trigger", [
     (hl7v2.build_adt_a01, "ADT", "A01"),
     (hl7v2.build_adt_a03, "ADT", "A03"),
+    (hl7v2.build_adt_a04, "ADT", "A04"),
     (hl7v2.build_adt_a08, "ADT", "A08"),
     (hl7v2.build_oru_r01, "ORU", "R01"),
+    (hl7v2.build_orm_o01, "ORM", "O01"),
 ])
 def test_msh9_message_type_is_correct(builder, expected_type, expected_trigger):
     """MSH-9.1 (message code) and MSH-9.2 (trigger event) match the builder."""
@@ -75,6 +77,68 @@ def test_msh9_message_type_is_correct(builder, expected_type, expected_trigger):
     assert msg.msh["trigger_event"] == expected_trigger
     # MSH-9 raw should look like "TYPE^TRIGGER^STRUCTURE"
     assert msg.msh["message_type"].startswith(f"{expected_type}^{expected_trigger}^")
+
+
+# ---------------------------------------------------------------------------
+# ADT^A04 (Register a patient — outpatient registration)
+# ---------------------------------------------------------------------------
+
+def test_build_adt_a04_uses_adt_a01_structure():
+    """ADT^A04 reuses the ADT_A01 structure per HL7 v2.5 §3.1."""
+    wire = hl7v2.build_adt_a04()
+    msg = hl7v2.parse(wire)
+    assert msg.msh["trigger_event"] == "A04"
+    assert msg.msh["message_structure"] == "ADT_A01"
+    # Default A04 uses outpatient class
+    assert msg.pv1["patient_class"] == "O"
+
+
+def test_build_adt_a04_patient_class_overridable():
+    """A04 can register an ED patient with class 'E'."""
+    wire = hl7v2.build_adt_a04(patient_class="E")
+    msg = hl7v2.parse(wire)
+    assert msg.pv1["patient_class"] == "E"
+
+
+# ---------------------------------------------------------------------------
+# ORM^O01 (General order)
+# ---------------------------------------------------------------------------
+
+def test_build_orm_o01_parses_back_with_orc_and_obr():
+    """ORM^O01 must include MSH+PID+ORC+OBR; round-trip preserves all four."""
+    wire = hl7v2.build_orm_o01()
+    msg = hl7v2.parse(wire)
+    assert msg.msh["message_code"] == "ORM"
+    assert msg.msh["trigger_event"] == "O01"
+    # ORC + OBR via raw segment access (HL7Message doesn't surface ORC)
+    assert len(hl7v2.get_segments(wire, "ORC")) == 1
+    assert len(hl7v2.get_segments(wire, "OBR")) == 1
+    # Round-trip preserves the wire
+    assert hl7v2.round_trip(wire), "ORM^O01 must round-trip cleanly"
+
+
+def test_build_orm_o01_default_order_control_is_new():
+    """ORC-1 defaults to NW (new order) — the most common case."""
+    wire = hl7v2.build_orm_o01()
+    orc = hl7v2.get_segments(wire, "ORC")[0]
+    assert orc[1] == "NW"
+
+
+def test_build_orm_o01_order_control_overrides():
+    """ORC-1 propagates so we can build cancel / replace / on-hold orders."""
+    for orc1 in ("CA", "RP", "HD", "CM"):
+        wire = hl7v2.build_orm_o01(order_control=orc1)
+        orc = hl7v2.get_segments(wire, "ORC")[0]
+        assert orc[1] == orc1, f"ORC-1 should be {orc1}, got {orc[1]}"
+
+
+def test_build_orm_o01_placer_filler_link_orc_to_obr():
+    """ORC-2/3 (placer/filler) must equal OBR-2/3 — that's the order's primary key."""
+    wire = hl7v2.build_orm_o01(placer_order_number="ORD-99", filler_order_number="FILL-99")
+    orc = hl7v2.get_segments(wire, "ORC")[0]
+    obr = hl7v2.get_segments(wire, "OBR")[0]
+    assert orc[2] == obr[2] == "ORD-99"
+    assert orc[3] == obr[3] == "FILL-99"
 
 
 # ---------------------------------------------------------------------------

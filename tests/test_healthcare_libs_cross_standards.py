@@ -771,3 +771,151 @@ def test_45_oru_r01_observation_effective_datetime_falls_back_to_obr():
         assert "effectiveDateTime" in o, \
             f"observation {o['code']['coding'][0]['code']} missing effectiveDateTime"
         assert o["effectiveDateTime"].startswith("2026-01-15")
+
+
+# ---------------------------------------------------------------------------
+# 46-52: ADT^A04 → Patient/Encounter (registration)
+# ---------------------------------------------------------------------------
+
+def test_46_adt_a04_emits_patient_and_encounter():
+    """A04 → Bundle with Patient + Encounter (same shape as A01)."""
+    wire = hl7v2.build_adt_a04()
+    result = cs.adt_a04_to_patient_encounter(wire)
+    types = [e["resource"]["resourceType"] for e in result.result["entry"]]
+    assert types == ["Patient", "Encounter"]
+    assert result.source_format == "hl7v2.ADT_A04"
+
+
+def test_47_adt_a04_uses_post_method_like_a01():
+    """A04 = new registration → POST (server assigns id), not PUT."""
+    wire = hl7v2.build_adt_a04()
+    result = cs.adt_a04_to_patient_encounter(wire)
+    methods = [e["request"]["method"] for e in result.result["entry"]]
+    assert all(m == "POST" for m in methods), \
+        "A04 (new registration) should POST, not PUT"
+
+
+def test_48_adt_a04_outpatient_class_propagates_to_encounter():
+    """PV1-2 = O for default A04 → Encounter.class should be AMB."""
+    wire = hl7v2.build_adt_a04(patient_class="O")
+    result = cs.adt_a04_to_patient_encounter(wire)
+    enc = next(e["resource"] for e in result.result["entry"]
+               if e["resource"]["resourceType"] == "Encounter")
+    cls = enc.get("class") or enc.get("class_fhir") or {}
+    assert cls.get("code") == "AMB", f"O should map to AMB, got {cls.get('code')}"
+
+
+# ---------------------------------------------------------------------------
+# 49-54: ORM^O01 → ServiceRequest
+# ---------------------------------------------------------------------------
+
+def test_49_orm_o01_emits_patient_and_servicerequest():
+    """ORM^O01 → Bundle with Patient + ServiceRequest."""
+    wire = hl7v2.build_orm_o01()
+    result = cs.orm_o01_to_service_request(wire)
+    types = [e["resource"]["resourceType"] for e in result.result["entry"]]
+    assert types == ["Patient", "ServiceRequest"]
+    assert result.source_format == "hl7v2.ORM_O01"
+    assert result.target_format == "fhir.Bundle[Patient,ServiceRequest]"
+
+
+def test_50_orm_o01_orc1_nw_maps_to_active_order():
+    """ORC-1 = NW (new) → ServiceRequest.status=active, intent=order."""
+    wire = hl7v2.build_orm_o01(order_control="NW")
+    result = cs.orm_o01_to_service_request(wire)
+    sr = next(e["resource"] for e in result.result["entry"]
+              if e["resource"]["resourceType"] == "ServiceRequest")
+    assert sr["status"] == "active"
+    assert sr["intent"] == "order"
+
+
+def test_51_orm_o01_orc1_cancel_maps_to_revoked():
+    """ORC-1 = CA (cancel) → ServiceRequest.status=revoked."""
+    wire = hl7v2.build_orm_o01(order_control="CA")
+    result = cs.orm_o01_to_service_request(wire)
+    sr = next(e["resource"] for e in result.result["entry"]
+              if e["resource"]["resourceType"] == "ServiceRequest")
+    assert sr["status"] == "revoked"
+
+
+def test_52_orm_o01_orc1_complete_maps_to_completed():
+    """ORC-1 = CM (complete) → ServiceRequest.status=completed."""
+    wire = hl7v2.build_orm_o01(order_control="CM")
+    result = cs.orm_o01_to_service_request(wire)
+    sr = next(e["resource"] for e in result.result["entry"]
+              if e["resource"]["resourceType"] == "ServiceRequest")
+    assert sr["status"] == "completed"
+
+
+def test_53_orm_o01_obr4_loinc_system_maps_correctly():
+    """OBR-4 with system 'LN' → ServiceRequest.code uses LOINC system URL."""
+    wire = hl7v2.build_orm_o01(
+        universal_service_id="58410-2^Complete blood count^LN",
+    )
+    result = cs.orm_o01_to_service_request(wire)
+    sr = next(e["resource"] for e in result.result["entry"]
+              if e["resource"]["resourceType"] == "ServiceRequest")
+    coding = sr["code"]["coding"][0]
+    assert coding["code"] == "58410-2"
+    assert coding["system"] == "http://loinc.org"
+
+
+def test_54_orm_o01_unknown_orc1_warns_but_succeeds():
+    """Unknown ORC-1 code → defaults to active/order with a warning."""
+    wire = hl7v2.build_orm_o01(order_control="ZZ")
+    result = cs.orm_o01_to_service_request(wire)
+    sr = next(e["resource"] for e in result.result["entry"]
+              if e["resource"]["resourceType"] == "ServiceRequest")
+    assert sr["status"] == "active"
+    assert any("ORC-1" in w and "ZZ" in w for w in result.warnings)
+
+
+# ---------------------------------------------------------------------------
+# 55-59: X12 271 → CoverageEligibilityResponse
+# ---------------------------------------------------------------------------
+
+def test_55_x12_271_emits_coverage_eligibility_response():
+    """271 → resource (not bundle) of resourceType=CoverageEligibilityResponse."""
+    wire = x12.build_271(request_270_icn=99)
+    result = cs.x12_271_to_coverage_eligibility_response(wire)
+    assert result.result["resourceType"] == "CoverageEligibilityResponse"
+    assert result.source_format == "x12.271"
+    assert result.target_format == "fhir.CoverageEligibilityResponse"
+
+
+def test_56_x12_271_member_id_propagates_to_patient_ref():
+    """NM1*IL element 09 → Patient/<member_id> reference."""
+    wire = x12.build_271(subscriber_member_id="MBR-12345")
+    result = cs.x12_271_to_coverage_eligibility_response(wire)
+    assert result.result["patient"]["reference"] == "Patient/MBR-12345"
+
+
+def test_57_x12_271_active_coverage_maps_outcome_complete():
+    """Default 271 has eligibility_status=1 (Active) → outcome=complete."""
+    wire = x12.build_271(eligibility_status="1")
+    result = cs.x12_271_to_coverage_eligibility_response(wire)
+    assert result.result["outcome"] == "complete"
+
+
+def test_58_x12_271_disposition_summarizes_eb_segments():
+    """The disposition string mentions EB count + active/inactive split."""
+    wire = x12.build_271(subscriber_member_id="MBR-555")
+    result = cs.x12_271_to_coverage_eligibility_response(wire)
+    disp = result.result["disposition"]
+    assert "EB segment" in disp
+    assert "MBR-555" in disp
+
+
+def test_59_x12_271_isa_icn_becomes_response_id():
+    """ISA-13 ICN → response.id = 'resp-<icn>' (lets caller correlate to 270)."""
+    wire = x12.build_271(request_270_icn=42)
+    result = cs.x12_271_to_coverage_eligibility_response(wire)
+    assert result.result["id"] == "resp-42"
+
+
+def test_60_x12_271_rejects_wrong_transaction_set():
+    """A 270 (eligibility request) should not be parsed as 271 — raises."""
+    wire = x12.build_270()  # 270 = inquiry, not response
+    import pytest
+    with pytest.raises(ValueError, match="271"):
+        cs.x12_271_to_coverage_eligibility_response(wire)

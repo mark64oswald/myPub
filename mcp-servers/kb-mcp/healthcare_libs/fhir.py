@@ -56,7 +56,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Iterable, Optional, Union
 
 from pydantic import ValidationError
@@ -64,11 +64,13 @@ from pydantic import ValidationError
 from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.claim import Claim
 from fhir.resources.R4B.claimresponse import ClaimResponse
+from fhir.resources.R4B.coverageeligibilityresponse import CoverageEligibilityResponse
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.imagingstudy import ImagingStudy
 from fhir.resources.R4B.observation import Observation
 from fhir.resources.R4B.patient import Patient
+from fhir.resources.R4B.servicerequest import ServiceRequest
 
 LOG = logging.getLogger("healthcare_libs.fhir")
 
@@ -813,6 +815,94 @@ def build_imaging_study(
         data["description"] = description
 
     return _validate_and_dump(ImagingStudy, data)
+
+
+def build_service_request(
+    *,
+    patient_ref: str,
+    code_system: str,
+    code: str,
+    code_display: str,
+    status: str = "active",            # active|completed|revoked|...
+    intent: str = "order",             # proposal|plan|order|...
+    requester_ref: Optional[str] = None,
+    encounter_ref: Optional[str] = None,
+    occurrence_datetime: Optional[Union[str, datetime]] = None,
+    identifier_value: Optional[str] = None,
+    identifier_system: Optional[str] = None,
+    service_request_id: Optional[str] = None,
+) -> dict:
+    """Build a ServiceRequest resource — the FHIR shape for orders.
+
+    Used as the target of HL7v2 ORM^O01 transformation. ``status`` and
+    ``intent`` map from ORC-1 (order control) and ORC-5 (order status):
+    NW + SC → active/order; CA → revoked; CM → completed.
+    """
+    sid = service_request_id or _new_id()
+    subject = patient_ref if "/" in patient_ref else f"Patient/{patient_ref}"
+    data: dict[str, Any] = {
+        "resourceType": "ServiceRequest",
+        "id": sid,
+        "status": status,
+        "intent": intent,
+        "code": codeable_concept(code_system, code, code_display),
+        "subject": {"reference": subject},
+    }
+    if identifier_value:
+        ident: dict[str, Any] = {"value": identifier_value}
+        if identifier_system:
+            ident["system"] = identifier_system
+        data["identifier"] = [ident]
+    if requester_ref:
+        req = requester_ref if "/" in requester_ref else f"Practitioner/{requester_ref}"
+        data["requester"] = {"reference": req}
+    if encounter_ref:
+        enc = encounter_ref if "/" in encounter_ref else f"Encounter/{encounter_ref}"
+        data["encounter"] = {"reference": enc}
+    if occurrence_datetime is not None:
+        data["occurrenceDateTime"] = _datetime_str(occurrence_datetime)
+    return _validate_and_dump(ServiceRequest, data)
+
+
+def build_coverage_eligibility_response(
+    *,
+    patient_ref: str,
+    insurer_ref: str,
+    request_ref: Optional[str] = None,
+    outcome: str = "complete",          # queued|complete|error|partial
+    disposition: Optional[str] = None,  # human-readable outcome
+    purpose: Optional[list[str]] = None,  # auth-requirements|benefits|discovery|validation
+    insurance: Optional[list[dict]] = None,
+    created: Optional[Union[str, datetime]] = None,
+    response_id: Optional[str] = None,
+) -> dict:
+    """Build a CoverageEligibilityResponse — the FHIR shape for X12 271.
+
+    The ``insurance`` list carries per-coverage benefit detail; each
+    entry is a dict the caller assembles (see HL7 X12-to-FHIR mapping
+    spec). For a minimal response, omit ``insurance`` and rely on
+    ``outcome=complete`` + ``disposition`` text.
+    """
+    rid = response_id or _new_id()
+    pid_ref = patient_ref if "/" in patient_ref else f"Patient/{patient_ref}"
+    ins_ref = insurer_ref if "/" in insurer_ref else f"Organization/{insurer_ref}"
+    created_str = _datetime_str(created) if created else _datetime_str(datetime.now(timezone.utc))
+    data: dict[str, Any] = {
+        "resourceType": "CoverageEligibilityResponse",
+        "id": rid,
+        "status": "active",
+        "purpose": list(purpose) if purpose else ["benefits"],
+        "patient": {"reference": pid_ref},
+        "created": created_str,
+        "request": {"reference": request_ref or "CoverageEligibilityRequest/REQ-PLACEHOLDER"},
+        "outcome": outcome,
+        "insurer": {"reference": ins_ref},
+    }
+    if disposition:
+        data["disposition"] = disposition
+    if insurance:
+        data["insurance"] = insurance
+    return _validate_and_dump(CoverageEligibilityResponse, data)
 
 
 # ---------------------------------------------------------------------------

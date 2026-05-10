@@ -540,7 +540,20 @@ For a healthcare dataset shape, emits a HIPAA Safe-Harbor-mapped de-identificati
 **MCP tool:** `generate_standards_translator`
 **Output:** `data/generated-packages/mapping-<source>-to-<target>/`
 
-For a source-standard → target-standard pair, generates the field-by-field mapping table (with per-field transform pattern: `direct`, `lookup`, `split`, `concat`, `code-translation`, `compute`, `lossy`, `drop`), a Python `transformer.py` (~75 lines — wraps `healthcare_libs.cross_standards.<func>`), and round-trip + spec-conformance test scaffolds that exercise the lib end-to-end. Built-in catalog covers HL7v2 ADT^A01 → FHIR Patient/Encounter, HL7v2 ADT^A03 → Encounter discharge, HL7v2 ADT^A08 → Patient/Encounter update, HL7v2 ORU^R01 → FHIR Observation/DiagnosticReport, X12 837P → FHIR Claim, X12 835 → FHIR ClaimResponse + PaymentReconciliation, DICOM Series → FHIR ImagingStudy. Lossy fields are explicitly tagged. Sub-agent prompts: local field extensions, business rules, partner-realistic test data.
+For a source-standard → target-standard pair, generates the field-by-field mapping table (with per-field transform pattern: `direct`, `lookup`, `split`, `concat`, `code-translation`, `compute`, `lossy`, `drop`), a Python `transformer.py` (~75 lines — wraps `healthcare_libs.cross_standards.<func>`), and round-trip + spec-conformance test scaffolds that exercise the lib end-to-end. Built-in catalog covers 10 mapping pairs:
+
+- **HL7v2 ADT^A01** → FHIR Patient/Encounter (admit)
+- **HL7v2 ADT^A03** → FHIR Encounter (discharge)
+- **HL7v2 ADT^A04** → FHIR Patient/Encounter (registration)
+- **HL7v2 ADT^A08** → FHIR Patient/Encounter (update; PUT semantics)
+- **HL7v2 ORU^R01** → FHIR Observation + DiagnosticReport
+- **HL7v2 ORM^O01** → FHIR Patient + ServiceRequest (orders; ORC-1 → status/intent)
+- **X12 837P** → FHIR Claim
+- **X12 835** → FHIR ClaimResponse + PaymentReconciliation
+- **X12 271** → FHIR CoverageEligibilityResponse (eligibility)
+- **DICOM Series** → FHIR ImagingStudy
+
+Lossy fields are explicitly tagged. Sub-agent prompts: local field extensions, business rules, partner-realistic test data.
 
 ### FHIR Implementation Guide Scaffold
 

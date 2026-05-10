@@ -30,6 +30,7 @@ from sectionizer import (  # noqa: E402
     _derive_body_heading,
     _is_url_heading,
     sectionize,
+    sectionize_apt,
     sectionize_context7,
     sectionize_deepwiki,
     sectionize_markdown,
@@ -466,3 +467,116 @@ def test_sectionize_markdown_keeps_real_heading_intact():
     md = "## Configuration\n\nBody text.\n"
     roots = sectionize_markdown(md)
     assert roots[0].heading_text == "Configuration"
+
+
+# --- APT (Almost Plain Text / Apache Maven Doxia) parser tests ---------------
+
+APT_BASIC = """\
+Parsing Messages
+
+  HAPI translates between HL7 and Message objects.
+
+* Standard Encodings
+
+  The bulk of the HL7 standard defines the abstract structure.
+
+  * The "traditional encoding". Looks like: MSH|^~\\&|foo|foo
+  * The "XML encoding". Uses an XML syntax.
+
+* The Parser Classes
+
+  There are several Parser classes in HAPI.
+
+** PipeParser
+
+  The default parser for traditional encoding.
+
+** XMLParser
+
+  Handles XML-encoded messages.
+
+* Programming with Parsers
+
+------------
+PipeParser p = new PipeParser();
+* this asterisk is inside a code block, not a heading
+Message m = p.parse(s);
+------------
+
+  Done.
+"""
+
+
+def test_apt_first_line_becomes_h1_title():
+    sections = sectionize_apt(APT_BASIC)
+    assert len(sections) == 1
+    assert sections[0].heading_level == 1
+    assert sections[0].heading_text == "Parsing Messages"
+
+
+def test_apt_star_headings_become_h2():
+    sections = sectionize_apt(APT_BASIC)
+    h2_titles = [c.heading_text for c in sections[0].children]
+    assert h2_titles == [
+        "Standard Encodings",
+        "The Parser Classes",
+        "Programming with Parsers",
+    ]
+
+
+def test_apt_double_star_headings_become_h3():
+    sections = sectionize_apt(APT_BASIC)
+    parser_classes = sections[0].children[1]  # "The Parser Classes"
+    h3_titles = [c.heading_text for c in parser_classes.children]
+    assert h3_titles == ["PipeParser", "XMLParser"]
+
+
+def test_apt_indented_bullet_is_not_a_heading():
+    """Bullets in APT are `* ` but always indented; only column-0 `*` is a
+    heading. The 'Standard Encodings' section's bullet list must stay inside
+    the body, not become two new sub-sections."""
+    sections = sectionize_apt(APT_BASIC)
+    standard = sections[0].children[0]
+    assert standard.children == []  # no sub-sections promoted from bullets
+    assert "traditional encoding" in standard.content
+    assert "XML encoding" in standard.content
+
+
+def test_apt_code_block_asterisks_are_not_headings():
+    """Lines inside `------------` fences are not parsed for headings even
+    if they start with `*` at column 0."""
+    sections = sectionize_apt(APT_BASIC)
+    programming = sections[0].children[2]  # "Programming with Parsers"
+    assert programming.children == []
+    assert "asterisk is inside a code block" in programming.content
+
+
+def test_apt_empty_content_is_shapeless():
+    sections = sectionize_apt("")
+    assert len(sections) == 1
+    assert sections[0].heading_level is None
+    assert sections[0].heading_text is None
+
+
+def test_apt_no_markers_falls_back_to_shapeless():
+    """A doc with no `*+ ` headings AND no first-line title still gets one
+    section via the shapeless fallback. (The first-line-as-title rule only
+    fires when there's other structure to anchor it.)"""
+    # Pure prose with no headings — the first non-blank line becomes the H1
+    sections = sectionize_apt("Just some prose.\nMore prose.\n")
+    assert len(sections) == 1
+    # First-line-as-H1 picks up the first line; no further structure
+    assert sections[0].heading_level == 1
+    assert sections[0].heading_text == "Just some prose."
+
+
+def test_apt_dispatch_via_sectionize():
+    """sectionize() routes source_type='apt' to sectionize_apt."""
+    sections = sectionize({"source_type": "apt", "content": APT_BASIC})
+    assert sections[0].heading_text == "Parsing Messages"
+    assert len(sections[0].children) == 3
+
+
+def test_apt_dispatch_case_insensitive():
+    sections = sectionize({"source_type": "APT", "content": APT_BASIC})
+    assert sections[0].heading_text == "Parsing Messages"

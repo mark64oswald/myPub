@@ -757,6 +757,29 @@ def adt_a08_to_patient_encounter(
     )
 
 
+def adt_a04_to_patient_encounter(
+    hl7_message: Union[str, hl7v2.HL7Message],
+    *,
+    mrn_system: str = fhir.SYSTEM_LOCAL_MRN,
+) -> TransformResult:
+    """ADT^A04 = register a patient (outpatient registration / pre-admission).
+
+    Structurally identical to A01 in v2.5 — same MSH/EVN/PID/PV1 segments —
+    so the field mapping rules are the same as `adt_a01_to_patient_encounter`.
+    The semantic difference is conveyed by the trigger event (A04 vs A01)
+    on MSH-9; receivers route on that and decide whether the resulting
+    Encounter is an outpatient visit, ED registration, or admission.
+    PV1-2 (patient class) is the disambiguator: O / E / I.
+    """
+    return _adt_to_bundle(
+        hl7_message,
+        mrn_system=mrn_system,
+        is_discharge=False,
+        is_update=False,
+        source_format="hl7v2.ADT_A04",
+    )
+
+
 # ---------------------------------------------------------------------------
 # HL7 v2 ORU → FHIR Observation Bundle
 # ---------------------------------------------------------------------------
@@ -1968,6 +1991,234 @@ def _deid_fhir_dict(
 # Pairs of (source → target) format keys for which a forward AND inverse
 # transformer both exist in this module. Used by ``round_trip_supported``
 # to declare round-trip parity claims for tests + downstream tooling.
+#
+# ---------------------------------------------------------------------------
+# HL7 v2 ORM^O01 → FHIR ServiceRequest
+# ---------------------------------------------------------------------------
+
+# ORC-1 → ServiceRequest.status / .intent. Per the v2-to-FHIR IG mapping
+# table for orders (ORC-1 has 17 codes; we cover the ones we see in real
+# traffic — NW/RP/CA/CM/HD/RL/UA/UC). Anything else falls back to the
+# safe defaults (active/order) and surfaces a warning.
+_ORC1_TO_FHIR_STATUS = {
+    "NW": ("active",    "order"),     # New order
+    "RP": ("active",    "order"),     # Replace prior; receiver supersedes by placer-id
+    "CA": ("revoked",   "order"),     # Cancel
+    "DC": ("revoked",   "order"),     # Discontinue
+    "HD": ("on-hold",   "order"),     # Hold
+    "RL": ("active",    "order"),     # Release prior hold
+    "CM": ("completed", "order"),     # Complete
+    "UA": ("active",    "order"),     # Update affecting authorization
+    "UC": ("active",    "order"),     # Update without state change
+}
+
+
+def orm_o01_to_service_request(
+    hl7_message: Union[str, hl7v2.HL7Message],
+    *,
+    mrn_system: str = fhir.SYSTEM_LOCAL_MRN,
+    placer_system: str = "urn:oid:LOCAL_PLACER_OID",
+) -> TransformResult:
+    """Convert HL7v2 ORM^O01 (general order) to a FHIR Bundle with
+    Patient + ServiceRequest entries.
+
+    Field mapping:
+      PID-3 / PID-5 / PID-7 / PID-8 → Patient (same as ADT path)
+      ORC-1 (order control)         → ServiceRequest.status + .intent
+        (NW → active/order; CA/DC → revoked; HD → on-hold; CM → completed)
+      ORC-2 (placer order number)   → ServiceRequest.identifier
+        (system = ``placer_system``)
+      ORC-3 (filler order number)   → ServiceRequest.identifier (second entry)
+      ORC-9 (transaction date/time) → ServiceRequest.occurrenceDateTime
+      ORC-12 (ordering provider, XCN) → ServiceRequest.requester (Practitioner)
+      OBR-4 (universal service id, CE/CWE: code^display^system)
+        → ServiceRequest.code (LOINC by default; fallback to local system)
+    """
+    parsed, raw = _coerce_hl7(hl7_message)
+    warnings: list[str] = []
+
+    # Patient (re-use the same builder ADT uses)
+    patient = _patient_from_pid(
+        parsed, raw, mrn_system=mrn_system,
+        patient_id=parsed.pid.get("patient_id") or "patient-1",
+        warnings=warnings,
+    )
+
+    # ORC + OBR via raw-segment lookup (HL7Message doesn't surface ORC structurally)
+    orc_segs = hl7v2.get_segments(raw, "ORC")
+    obr_segs = hl7v2.get_segments(raw, "OBR")
+    orc = orc_segs[0] if orc_segs else []
+    obr = obr_segs[0] if obr_segs else []
+
+    def _f(seg: list[str], idx: int) -> str:
+        return seg[idx] if idx < len(seg) else ""
+
+    placer = _f(orc, 2)
+    filler = _f(orc, 3)
+    orc1 = (_f(orc, 1) or "NW").upper()
+    if orc1 not in _ORC1_TO_FHIR_STATUS:
+        warnings.append(f"ORC-1: unknown order control {orc1!r} → defaulted to active/order")
+    status, intent = _ORC1_TO_FHIR_STATUS.get(orc1, ("active", "order"))
+
+    obr4 = _f(obr, 4)
+    code_parts = obr4.split("^") if obr4 else []
+    code = code_parts[0] if len(code_parts) >= 1 and code_parts[0] else "UNKNOWN"
+    display = code_parts[1] if len(code_parts) >= 2 and code_parts[1] else code
+    code_sys_raw = code_parts[2] if len(code_parts) >= 3 else ""
+    if code_sys_raw == "L":
+        code_system = "http://terminology.hl7.org/CodeSystem/v2-0396"
+    elif code_sys_raw == "LN":
+        code_system = fhir.LOINC
+    elif code_sys_raw == "SCT":
+        code_system = fhir.SNOMED
+    elif code_sys_raw and code_sys_raw.startswith("http"):
+        code_system = code_sys_raw
+    else:
+        code_system = fhir.LOINC
+        if code_sys_raw:
+            warnings.append(
+                f"OBR-4: unknown code system {code_sys_raw!r} → defaulted to LOINC"
+            )
+
+    orc_9 = _f(orc, 9)
+    occ = _hl7_dt_to_fhir(orc_9) if orc_9 else None
+
+    requester_ref: Optional[str] = None
+    orc_12 = _f(orc, 12)
+    if orc_12:
+        npi = orc_12.split("^")[0].strip()
+        if npi:
+            requester_ref = f"Practitioner/{npi}"
+
+    sr_kwargs: dict[str, Any] = {
+        "patient_ref": patient["id"],
+        "code_system": code_system,
+        "code": code,
+        "code_display": display,
+        "status": status,
+        "intent": intent,
+    }
+    if placer:
+        sr_kwargs["identifier_value"] = placer
+        sr_kwargs["identifier_system"] = placer_system
+    if filler:
+        warnings.append(
+            f"OBR-3 filler order number {filler!r} not emitted (builder takes one identifier); "
+            f"add manually if needed for filler-side reconciliation"
+        )
+    if requester_ref:
+        sr_kwargs["requester_ref"] = requester_ref
+    if occ:
+        sr_kwargs["occurrence_datetime"] = occ
+    service_request = fhir.build_service_request(**sr_kwargs)
+
+    bundle = fhir.build_bundle_transaction([patient, service_request])
+    return TransformResult(
+        result=bundle,
+        warnings=warnings,
+        source_format="hl7v2.ORM_O01",
+        target_format="fhir.Bundle[Patient,ServiceRequest]",
+    )
+
+
+# ---------------------------------------------------------------------------
+# X12 271 → FHIR CoverageEligibilityResponse
+# ---------------------------------------------------------------------------
+
+# X12 271 EB-01 (Eligibility/Benefit Information code) — partial mapping.
+# Full code list is large; we cover the values that drive the
+# FHIR.outcome decision. The full code list from X12 005010X279A1 has
+# ~50 values — most carry benefit detail rather than outcome.
+_X12_271_EB01_TO_OUTCOME = {
+    "1": "complete",   # Active Coverage
+    "6": "complete",   # Inactive
+    "V": "complete",   # Cannot Process — but we have a definitive answer
+}
+
+
+def x12_271_to_coverage_eligibility_response(
+    x12_msg: str,
+    *,
+    insurer_org_id: str = "PAYER-DEFAULT",
+    request_ref: Optional[str] = None,
+) -> TransformResult:
+    """Convert X12 271 (eligibility response) to FHIR
+    CoverageEligibilityResponse.
+
+    Segment mapping:
+      ISA-13 (interchange control number) → response.id (fallback)
+      NM1*IL (subscriber)                 → response.patient (Reference)
+      NM1*PR (payer)                      → response.insurer (Reference)
+      EB-01 (eligibility code, first occurrence)
+                                          → response.outcome
+      EB segments (full set)              → response.disposition (text summary)
+
+    The 271 carries rich benefit detail per service-type; we surface a
+    minimal FHIR shape (outcome + disposition) so downstream consumers
+    can render eligibility status without needing to model every EB
+    permutation. Callers needing per-service-type benefit detail can
+    extend the ``insurance`` parameter when calling
+    ``fhir.build_coverage_eligibility_response`` directly.
+    """
+    warnings: list[str] = []
+
+    # Verify ST-01 = 271 (envelope check)
+    env, _ = x12.parse_envelope(x12_msg)
+    if env.txn_set != "271":
+        raise ValueError(f"expected ST-01=271, got {env.txn_set!r}")
+
+    # Subscriber NM1*IL (loop 2100C) — element 09 is the member identifier
+    nm1_il = [
+        seg for seg in x12.get_segments(x12_msg, "NM1")
+        if len(seg) >= 2 and seg[1] == "IL"
+    ]
+    if nm1_il:
+        member_id = nm1_il[0][9] if len(nm1_il[0]) >= 10 else ""
+    else:
+        member_id = ""
+        warnings.append("271: missing NM1*IL (subscriber) loop")
+
+    patient_ref = f"Patient/{member_id}" if member_id else "Patient/UNKNOWN"
+
+    # EB segments — first non-empty EB-01 drives outcome
+    eb_segs = x12.get_segments(x12_msg, "EB")
+    if not eb_segs:
+        warnings.append("271: no EB segments — outcome defaulted to 'error'")
+        outcome = "error"
+        disposition = "No EB segments in 271 response"
+    else:
+        first_eb01 = eb_segs[0][1] if len(eb_segs[0]) >= 2 else ""
+        outcome = _X12_271_EB01_TO_OUTCOME.get(first_eb01, "complete")
+        active = sum(1 for s in eb_segs if len(s) >= 2 and s[1] == "1")
+        inactive = sum(1 for s in eb_segs if len(s) >= 2 and s[1] == "6")
+        disposition = (
+            f"X12 271 carries {len(eb_segs)} EB segment(s): "
+            f"{active} active coverage, {inactive} inactive. "
+            f"Subscriber: {member_id or '(unknown)'}."
+        )
+
+    # Use the parsed envelope's ICN for the FHIR response id
+    response_id = f"resp-{env.icn}" if env.icn else None
+
+    response = fhir.build_coverage_eligibility_response(
+        patient_ref=patient_ref,
+        insurer_ref=insurer_org_id,
+        outcome=outcome,
+        disposition=disposition,
+        request_ref=request_ref,
+        response_id=response_id,
+    )
+    return TransformResult(
+        result=response,  # single-resource result; caller can wrap if desired
+        warnings=warnings,
+        source_format="x12.271",
+        target_format="fhir.CoverageEligibilityResponse",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-trip parity registry
+# ---------------------------------------------------------------------------
 #
 # As of v1, NO inverse transformers are implemented (FHIR-to-HL7v2 etc.).
 # This table is the single source of truth so adding an inverse later is

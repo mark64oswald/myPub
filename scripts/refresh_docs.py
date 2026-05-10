@@ -282,11 +282,14 @@ class GitHubFetcher:
         owner, repo, branch, path = self._parse_identifier(identifier)
         candidates = (branch,) if branch else self.DEFAULT_BRANCHES
         last_error: Optional[Exception] = None
+        # Pick the sectionizer dispatch key from the file extension. Default
+        # is markdown; .apt files (Apache Maven Doxia) need the APT parser.
+        sec_type = "apt" if path.lower().endswith(".apt") else "github_md"
         for b in candidates:
             url = f"https://raw.githubusercontent.com/{owner}/{repo}/{b}/{path}"
             try:
                 content = self._fetch_url(url)
-                return FetchResult(url=url, content=content, source_type="github_md")
+                return FetchResult(url=url, content=content, source_type=sec_type)
             except FetchError as e:
                 last_error = e
                 continue

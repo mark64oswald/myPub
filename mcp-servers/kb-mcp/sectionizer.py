@@ -262,6 +262,69 @@ def sectionize_shapeless(content: str) -> list[Section]:
     ]
 
 
+# APT (Almost Plain Text / Apache Doxia) heading: one or more `*` at column 0
+# followed by space + heading text. Bullets in APT also use `*` but are always
+# indented, so column-0 anchoring is the disambiguator. `* H2`, `** H3`, ...
+# Title is the first non-blank line of the file (no marker).
+_APT_HEADING_RE = re.compile(r"^(\*+)\s+(.+?)\s*$")
+
+
+def sectionize_apt(content: str) -> list[Section]:
+    """Split APT (Almost Plain Text, Apache Maven Doxia format) into a tree.
+
+    APT headings use `*+ ` at column 0 (not indented — that's a bullet).
+    Heading level is `len(stars) + 1` so `*` = H2, `**` = H3, etc.
+    The first non-blank line of the file (with no marker) is the H1 title.
+
+    With no detectable headings, falls back to shapeless. Code blocks
+    fenced by `------------` lines stay inside the enclosing section's
+    body unmodified.
+    """
+    if not content.strip():
+        return sectionize_shapeless(content)
+
+    lines = content.splitlines()
+    breaks: list[tuple[int, str, int]] = []  # (level, text, line_idx)
+
+    # Title: first non-blank line that isn't a heading marker
+    first_nonblank = None
+    for idx, line in enumerate(lines):
+        if line.strip():
+            first_nonblank = idx
+            break
+    if first_nonblank is not None and not _APT_HEADING_RE.match(lines[first_nonblank]):
+        breaks.append((1, lines[first_nonblank].strip(), first_nonblank))
+
+    in_code_block = False
+    for idx, line in enumerate(lines):
+        # Code block fence — APT uses `------------` (≥4 dashes) at column 0
+        if re.match(r"^-{4,}\s*$", line):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+        m = _APT_HEADING_RE.match(line)
+        if m:
+            level = len(m.group(1)) + 1  # `*` -> 2, `**` -> 3
+            heading = m.group(2).strip()
+            breaks.append((level, heading, idx))
+
+    if not breaks:
+        return sectionize_shapeless(content)
+
+    # Bodies: text between this break and the next, excluding the heading line
+    flat: list[tuple[int, Optional[str], str]] = []
+    for j, (level, heading, line_idx) in enumerate(breaks):
+        # Body starts on the line *after* the heading; for the title (no
+        # marker) the body starts after the title line.
+        body_start = line_idx + 1
+        body_end = breaks[j + 1][2] if j + 1 < len(breaks) else len(lines)
+        body = "\n".join(lines[body_start:body_end]).strip("\n")
+        flat.append((level, heading, body))
+
+    return _build_tree(flat)
+
+
 def sectionize(snapshot: dict[str, Any]) -> list[Section]:
     """Dispatch on ``snapshot['source_type']``.
 
@@ -283,6 +346,9 @@ def sectionize(snapshot: dict[str, Any]) -> list[Section]:
 
     if source_type in {"markdown", "github_md", "github"}:
         return sectionize_markdown(content)
+
+    if source_type == "apt":
+        return sectionize_apt(content)
 
     if source_type == "context7":
         chunks = _maybe_json_load(content, default=None)
