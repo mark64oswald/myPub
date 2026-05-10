@@ -42,6 +42,7 @@ from generator import (
     MaterializeReport,
     ValidationIssue,
 )
+from healthcare_subagent import customization_prompts as _subagent_prompts
 
 LOG = logging.getLogger("mypub-deid-bundle")
 
@@ -2330,6 +2331,13 @@ class DeidPlanner:
             GenFile(filename="deid_pipeline.py", content=_render_pipeline(d), purpose="code"),
             GenFile(filename="tests/test_deid.py", content=_render_test(d), purpose="test"),
         ])
+        plan.files.extend(_subagent_prompts("deid_bundle", {
+            "shape": d.dataset_type,
+            "shape_ext": {
+                "fhir": "json", "dicom": "dcm",
+                "hl7v2": "hl7", "clinical_trial": "csv",
+            }.get(d.dataset_type, "dat"),
+        }))
         return plan
 
 

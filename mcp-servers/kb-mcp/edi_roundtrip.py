@@ -47,6 +47,7 @@ from generator import (
     ValidationIssue,
 )
 from healthcare_libs import x12 as _x12
+from healthcare_subagent import customization_prompts as _subagent_prompts
 
 LOG = logging.getLogger("mypub-edi-roundtrip")
 
@@ -764,6 +765,12 @@ class EdiRoundTripPlanner:
                 filename=f"fixtures/{d.paired_response_code}_response.x12",
                 content=response_x12, purpose="fixture",
             ))
+        plan.files.extend(_subagent_prompts("edi_roundtrip", {
+            "txn_code": d.txn_code,
+            "txn_code_lower": d.txn_code.lower(),
+            "txn_name": d.txn_meta.get("name", ""),
+            "paired": d.paired_response_code or "(none)",
+        }))
         return plan
 
 

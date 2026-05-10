@@ -47,6 +47,7 @@ from healthcare_libs.integration_channel_xml import (
     SourceConfig,
     build_channel,
 )
+from healthcare_subagent import customization_prompts as _subagent_prompts
 
 LOG = logging.getLogger("mypub-integration-channel")
 
@@ -1435,6 +1436,12 @@ class IntegrationChannelPlanner:
                         f"# your specific destination configuration.\n",
                 purpose="fixture",
             ))
+        plan.files.extend(_subagent_prompts("integration_channel", {
+            "scenario": meta.get("name", d.scenario_key),
+            "engine_target": meta.get("engine_target", "Mirth/OIE/BridgeLink"),
+            "source_format": meta.get("source", {}).get("type", "(source)"),
+            "target_format": meta.get("destination", {}).get("type", "(target)"),
+        }))
         return plan
 
 

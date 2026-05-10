@@ -44,6 +44,7 @@ from generator import (
     MaterializeReport,
     ValidationIssue,
 )
+from healthcare_subagent import customization_prompts as _subagent_prompts
 
 LOG = logging.getLogger("mypub-standards-translator")
 
@@ -853,6 +854,11 @@ class StandardsTranslatorPlanner:
             GenFile(filename="transformer.py", content=_render_transformer(d), purpose="code"),
             GenFile(filename="tests/test_mapping.py", content=_render_test(d), purpose="test"),
         ])
+        plan.files.extend(_subagent_prompts("standards_translator", {
+            "source_format": d.source,
+            "target_format": d.target,
+            "transformer_func": d.transformer_func or "(unknown)",
+        }))
         return plan
 
 

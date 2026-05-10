@@ -48,6 +48,7 @@ from generator import (
     ValidationIssue,
 )
 from healthcare_libs import fhir as hfhir
+from healthcare_subagent import customization_prompts as _subagent_prompts
 
 # Extend the validator registry so the resource types we emit examples
 # for actually get structural validation (not just an "information"
@@ -2279,6 +2280,9 @@ class FhirIgPlanner:
                 purpose="extension",
             ))
 
+        plan.files.extend(_subagent_prompts("fhir_ig_scaffold", {
+            "ig_name": meta.get("name", d.use_case_key),
+        }))
         return plan
 
 
