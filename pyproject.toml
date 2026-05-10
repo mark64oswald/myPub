@@ -28,6 +28,16 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+healthcare = [
+    # Used by mcp-servers/kb-mcp/healthcare_libs/* — production reference
+    # implementations the healthcare interop generators emit code against.
+    # Install with: pip install -e ".[healthcare]"
+    "pyx12>=2.3.3",          # X12 EDI parser (270/271, 834, 835, 837, 999)
+    "hl7apy>=1.3.5",         # HL7 v2 parser + builder
+    "fhir.resources>=7.1.0", # FHIR R4/R5 resource builders + validation
+    "pydicom>=2.4.0",        # DICOM Part 10 parser + de-identification
+    "PyYAML>=6.0",           # FHIR IG sushi-config.yaml validation in tests
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
