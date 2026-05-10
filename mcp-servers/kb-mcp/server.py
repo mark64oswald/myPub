@@ -2767,6 +2767,57 @@ def generate_curriculum(
 
 
 @mcp.tool
+def generate_integration_channel(
+    scenario: str,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Healthcare interop — generate a Mirth Connect integration channel.
+
+    For a healthcare data flow scenario, emits a Mirth Channel Manager-
+    importable channel.xml + the JavaScript transformer + a sample
+    input message. Supported scenarios: ehr-adt-to-lab,
+    lab-result-to-ehr-fhir, claim-to-clearinghouse, imaging-study-ingest,
+    adt-to-warehouse, adverse-event-to-regulator.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import integration_channel
+    gen = integration_channel.make_integration_channel_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, scenario,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message}
+                    for i in issues],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "scenario_key": metadata.get("scenario_key"),
+        "source_type": metadata.get("source_type"),
+        "destination_type": metadata.get("destination_type"),
+        "n_citations": metadata.get("n_citations", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
 def generate_fhir_ig(
     use_case: str,
     output_root: str = "data/generated-packages",
