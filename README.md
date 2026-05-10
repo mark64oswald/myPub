@@ -518,6 +518,8 @@ Outputs land under `data/generated-packages/<name>_<timestamp>/`. Each entry bel
 
 The five **healthcare interop** generators are a recent addition built on the new healthcare doc sources (FHIR, HL7v2, X12, DICOM, EHR specs). They show the framework's portability — same Decomposer/Planner/Validator/Materializer protocols, completely different domain. Two highlights: the Standards Translator builds field-by-field cross-standard mappings (HL7v2 ADT → FHIR Patient/Encounter, X12 837 → FHIR Claim) directly from documented industry transforms; the De-identification Bundle generates a HIPAA-Safe-Harbor-mapped pipeline + audit trail for any healthcare dataset shape. Same framework, different domain.
 
+Each healthcare package is a thin consumer of the `healthcare_libs` reference implementations (`x12`, `hl7v2`, `fhir`, `dicom`, `deid`, `cross_standards`, `integration_channel_xml`) — generated `transformer.py` files import the lib rather than carrying inline X12/FHIR templates. The packages also ship a `_sub_agent_prompts/` directory mirroring [Project Bootstrap's](docs/generators.md#project-bootstrap) pattern: per-customization-point prompts (trading partner, payer IG deviations, channel topology, deployment runbook, …) the user can dispatch via the Task tool to fill in deployment-specific details on top of the deterministic base. 487 tests cover the libs (320), the generators (138), and the dispatch layer (29).
+
 ### Adding your own
 
 The framework makes new generators cheap. The full procedure is in [docs/customization.md → adding a generator](docs/customization.md#adding-a-generator), but the shape is:

@@ -495,7 +495,17 @@ Re-running a generator with the same inputs produces a new timestamped directory
 
 ## Healthcare interop generators
 
-Built on the healthcare doc sources (HAPI FHIR, Medplum, Synthea, FHIR core spec, US Core IG, hl7apy, HAPI HL7v2 multi-file docs, Mirth/NextGen Connect, pyx12, Ballerina EDI, Stedi, pydicom, DCMTK, openEHR specs, Microsoft FHIR Server, HL7 CDA). Same Phase 7 protocols, completely different domain.
+Built on the healthcare doc sources (HAPI FHIR, Medplum, Synthea, FHIR core spec, US Core IG, hl7apy, HAPI HL7v2 multi-file docs, Mirth/NextGen Connect, OIE, BridgeLink, pyx12, Ballerina EDI, Stedi, pydicom, DCMTK, openEHR specs, Microsoft FHIR Server, HL7 CDA). Same Phase 7 protocols, completely different domain.
+
+### Architecture: deterministic libs + sub-agent dispatch
+
+The healthcare generators split cleanly into two layers:
+
+1. **Deterministic core (`mcp-servers/kb-mcp/healthcare_libs/`).** Reference implementations of the standards themselves: `x12` (envelope build/parse/validate, per-txn builders for 270/271/834/835/837), `hl7v2` (parse/build for ADT^A01/A03/A08, ORU^R01), `fhir` (R4 resource builders + Bundle assembly via `fhir.resources`), `dicom` (PS3.15 Annex E de-id via `pydicom`), `deid` (HMAC pseudonymization, k-anonymity, Safe Harbor catalog), `cross_standards` (HL7v2↔FHIR, X12↔FHIR, DICOM→FHIR transformers backed by HL7 tables 0001/0004/0078/0085/0123/0125), `integration_channel_xml` (Mirth/OIE/BridgeLink channel.xml builder using real Java property class names). 320 tests; everything that can be deterministic *is*.
+
+2. **Sub-agent dispatch layer (`mcp-servers/kb-mcp/healthcare_subagent.py`).** Each generated package ships a `_sub_agent_prompts/` directory mirroring [Project Bootstrap's](#project-bootstrap) pattern. The prompts cover use-case-specific customization the deterministic core can't know: trading-partner identifiers, payer IG deviations, local PHI fields, k-anonymity thresholds, IG narrative, channel topology, deployment runbook. Each prompt opens with **Goal** and closes with **Deliverable** so it dispatches cleanly via the Task tool — or runs manually.
+
+The generated `transformer.py` files are thin consumers (≤80 lines each) that import from `healthcare_libs`; the heavy lifting lives in the lib. 487 tests total: 320 lib + 138 generator + 29 dispatch layer.
 
 ### EDI Round-Trip Test
 
@@ -509,9 +519,11 @@ Generates synthetic spec-conformant X12 fixtures plus a parse/round-trip Python 
 edi-roundtrip-837/
   README.md                  transaction set overview
   mapping.md                 segment + loop reference + citations
-  fixtures/837_request.x12   spec-conformant claim
+  transformer.py             CLI: build / validate / extract (imports healthcare_libs.x12)
+  fixtures/837_request.x12   spec-conformant claim (built via x12.build_837p)
   fixtures/835_response.x12  paired remittance
-  tests/test_roundtrip.py    parse + round-trip + paired-control-number
+  tests/test_roundtrip.py    parse + round-trip + paired ICN (uses x12.parse_envelope, x12.round_trip)
+  _sub_agent_prompts/        trading partner, payer IG, redacted real fixtures
 ```
 
 ### De-identification Procedure Bundle
@@ -520,7 +532,7 @@ edi-roundtrip-837/
 **MCP tool:** `generate_deid_bundle`
 **Output:** `data/generated-packages/deid-bundle-<dataset>/`
 
-For a healthcare dataset shape, emits a HIPAA Safe-Harbor-mapped de-identification package: PHI element catalog (where each Safe Harbor identifier lives in that data shape), per-element rationale + technique, runnable pipeline scaffold with HMAC pseudonymization + per-subject date offsets, audit-trail template with the Safe Harbor checklist, and PHI-absence regex tests (SSN, phone, email, full-date). Per-dataset PHI catalogs cover the actual locations PHI lives — `Patient.name` + `Observation.effectiveDateTime` for FHIR; `(0010,0010) PatientName` + burned-in pixel annotations for DICOM; PID-5/7/11/13 + NK1 + PV1 for HL7v2; subject pseudonyms + visit dates + k-anonymity for clinical-trial datasets. The 18-line technique library codifies the standard approaches (suppress, generalize, pseudonymize-with-kept-lookup, date-shift, k-anonymize, OCR-detect-and-redact).
+For a healthcare dataset shape, emits a HIPAA Safe-Harbor-mapped de-identification package. The generated `deid_pipeline.py` dispatches to per-shape pipelines (`pipeline_fhir`, `pipeline_dicom`, `pipeline_hl7v2`, `pipeline_clinical_trial`) that import `healthcare_libs.deid` (HMAC pseudonymization, k-anonymity, the `SAFE_HARBOR_CATEGORIES` 18-entry index) plus the per-shape lib (`healthcare_libs.dicom.deidentify_basic_profile` for DICOM, `healthcare_libs.fhir` for FHIR resource walking, etc.). Per-dataset PHI catalogs cover the actual locations PHI lives — `Patient.name` + `Observation.effectiveDateTime` for FHIR; `(0010,0010) PatientName` + burned-in pixel annotations for DICOM (PS3.15 Annex E); PID-5/7/11/13 + NK1 + PV1 for HL7v2; subject pseudonyms + visit dates + k-anonymity for clinical-trial datasets. Sub-agent prompts: local field inventory, pseudonym key custody, k-anonymity tuning, compliance attestation.
 
 ### Standards Translator
 
@@ -528,7 +540,7 @@ For a healthcare dataset shape, emits a HIPAA Safe-Harbor-mapped de-identificati
 **MCP tool:** `generate_standards_translator`
 **Output:** `data/generated-packages/mapping-<source>-to-<target>/`
 
-For a source-standard → target-standard pair, generates the field-by-field mapping table (with per-field transform pattern: `direct`, `lookup`, `split`, `concat`, `code-translation`, `compute`, `lossy`, `drop`), a Python transformer skeleton (one TODO function per source element), and round-trip + spec-conformance test scaffolds. Built-in catalog covers HL7v2 ADT^A01 → FHIR Patient/Encounter, HL7v2 ORU^R01 → FHIR Observation/DiagnosticReport, X12 837P → FHIR Claim, X12 835 → FHIR ClaimResponse + PaymentReconciliation, DICOM Series → FHIR ImagingStudy. Lossy fields are explicitly tagged so downstream transformer authors don't accidentally claim round-trip equivalence where it doesn't hold. Decomposer accepts loose phrasing — "convert ORU into FHIR Observation", "835 to claimresponse" all resolve via token-overlap matching.
+For a source-standard → target-standard pair, generates the field-by-field mapping table (with per-field transform pattern: `direct`, `lookup`, `split`, `concat`, `code-translation`, `compute`, `lossy`, `drop`), a Python `transformer.py` (~75 lines — wraps `healthcare_libs.cross_standards.<func>`), and round-trip + spec-conformance test scaffolds that exercise the lib end-to-end. Built-in catalog covers HL7v2 ADT^A01 → FHIR Patient/Encounter, HL7v2 ADT^A03 → Encounter discharge, HL7v2 ADT^A08 → Patient/Encounter update, HL7v2 ORU^R01 → FHIR Observation/DiagnosticReport, X12 837P → FHIR Claim, X12 835 → FHIR ClaimResponse + PaymentReconciliation, DICOM Series → FHIR ImagingStudy. Lossy fields are explicitly tagged. Sub-agent prompts: local field extensions, business rules, partner-realistic test data.
 
 ### FHIR Implementation Guide Scaffold
 
@@ -536,7 +548,7 @@ For a source-standard → target-standard pair, generates the field-by-field map
 **MCP tool:** `generate_fhir_ig`
 **Output:** `data/generated-packages/fhir-ig-<use-case>/`
 
-Generates a buildable SUSHI/FSH IG repo: `sushi-config.yaml` + `ig.ini` + per-resource FSH `StructureDefinition` skeletons (US Core inheritance where applicable), ValueSet skeletons, Extension skeletons, JSON example resources, and pagecontent for the IG website. The five built-in use cases cover Bulk Data Export for clinical trials, the International Patient Summary, tumor board case presentations (mCODE-aligned: `PrimaryCancerCondition`, `TNMStageGroup`, `GenomicVariant`, `OncologyImagingStudy`), DaVinci PAS prior auth, and clinical-trial AE reporting (FHIR + ICH E2B(R3) alignment). Build with `npm install -g fsh-sushi && sushi build && publisher.jar`.
+Generates a buildable SUSHI/FSH IG repo: `sushi-config.yaml` + `ig.ini` + per-resource FSH `StructureDefinition` skeletons (US Core inheritance where applicable, with real `* field MS` constraints from `ProfileMeta` per resource — must-support, cardinality, bindings, fixed values, slicing), ValueSet skeletons, Extension skeletons, 41 named example builders that produce instances using `healthcare_libs.fhir`, and pagecontent for the IG website. Examples validate clean against fhir.resources R4B. Five built-in use cases cover Bulk Data Export for clinical trials, the International Patient Summary, tumor board case presentations (mCODE-aligned: `PrimaryCancerCondition`, `TNMStageGroup`, `GenomicVariant`, `OncologyImagingStudy`), DaVinci PAS prior auth, and clinical-trial AE reporting (FHIR + ICH E2B(R3) alignment). Build with `npm install -g fsh-sushi && sushi build && publisher.jar`. Sub-agent prompts: IG narrative, MS flag review, value set bindings + terminology server config, use-case-specific examples.
 
 ### Integration Channel Generator
 
@@ -544,7 +556,7 @@ Generates a buildable SUSHI/FSH IG repo: `sushi-config.yaml` + `ig.ini` + per-re
 **MCP tool:** `generate_integration_channel`
 **Output:** `data/generated-packages/integration-channel-<scenario>/`
 
-Generates a Mirth/NextGen Connect channel scaffold importable into Mirth Channel Manager. Output: `channel.xml` (valid XML with source + destination connector skeletons), `transformer.js` (Rhino-compatible ES5; per-format scaffold with the right E4X / JSON / XML idioms — HL7v2-passthrough, HL7v2-to-FHIR, JDBC-claim-to-X12, DICOM-to-FHIR, FHIR-to-E2B-XML), and a sample input message. Six built-in scenarios cover the canonical healthcare integration shapes: HL7v2-to-HL7v2 normalize/forward (EHR ADT → Lab); HL7v2 ORU → FHIR Observation/DiagnosticReport (Lab → EHR); JDBC claim → X12 837P → SFTP (Billing → Clearinghouse); DICOM C-STORE → FHIR ImagingStudy (Imaging modality → EHR); EHR ADT → batched Parquet warehouse; FHIR AdverseEvent → ICH E2B(R3) XML → AS2 (FDA submission).
+Generates a Mirth/OIE/BridgeLink channel scaffold importable into the engine's Channel Manager. Output: `channel.xml` (built via `healthcare_libs.integration_channel_xml` using real Mirth Java property class names; xmllint-validated), `transformer.js` (Rhino-compatible ES5; per-scenario complete mappings — no TODOs), and a sample input message. Six built-in scenarios cover the canonical integration shapes: HL7v2-to-HL7v2 normalize/forward (EHR ADT → Lab); HL7v2 ORU → FHIR Observation/DiagnosticReport (Lab → EHR); JDBC claim → X12 837P → SFTP (Billing → Clearinghouse); DICOM C-STORE → FHIR ImagingStudy (Imaging → EHR); EHR ADT → batched Parquet warehouse; FHIR AdverseEvent → ICH E2B(R3) XML → AS2 (FDA submission). The `engine_target` field on each scenario picks the xml dialect (Mirth Connect, Open Integration Engine, BridgeLink). Sub-agent prompts: channel topology, transformer enrichment, error handling, deployment runbook.
 
 ---
 
