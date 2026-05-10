@@ -2767,6 +2767,59 @@ def generate_curriculum(
 
 
 @mcp.tool
+def generate_fhir_ig(
+    use_case: str,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Healthcare interop — generate a FHIR Implementation Guide scaffold.
+
+    For a use case (bulk-data-export | patient-summary | tumor-board |
+    prior-auth | adverse-event), emits a buildable SUSHI/FSH IG repo:
+    sushi-config.yaml + ig.ini + per-resource FSH profiles + ValueSet
+    skeletons + extensions + JSON examples + pagecontent. Build with
+    `sushi build && publisher.jar`.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import fhir_ig_scaffold
+    gen = fhir_ig_scaffold.make_fhir_ig_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, use_case,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message}
+                    for i in issues],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "use_case_key": metadata.get("use_case_key"),
+        "fhir_version": metadata.get("fhir_version"),
+        "n_resources": metadata.get("n_resources", 0),
+        "n_value_sets": metadata.get("n_value_sets", 0),
+        "n_extensions": metadata.get("n_extensions", 0),
+        "n_citations": metadata.get("n_citations", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
 def generate_standards_translator(
     mapping: str,
     output_root: str = "data/generated-packages",
