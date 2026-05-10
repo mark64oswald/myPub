@@ -2767,6 +2767,56 @@ def generate_curriculum(
 
 
 @mcp.tool
+def generate_deid_bundle(
+    dataset: str,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Healthcare interop — generate a De-identification Procedure Bundle.
+
+    For a dataset shape (fhir | dicom | hl7v2 | clinical_trial), emits a
+    HIPAA Safe-Harbor-mapped PHI element list, per-element rationale,
+    runnable pipeline scaffold, audit trail template, and PHI-absence
+    tests. Citations from healthcare doc sources (pydicom, DCMTK, HAPI
+    HL7v2, Synthea, FHIR specs) appear inline.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import deid_bundle
+    gen = deid_bundle.make_deid_bundle_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, dataset,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message}
+                    for i in issues],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+            [package_id]).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "dataset_type": metadata.get("dataset_type"),
+        "n_phi_elements": metadata.get("n_phi_elements", 0),
+        "n_citations": metadata.get("n_citations", 0),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message} for i in issues],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
 def generate_edi_roundtrip(
     txn_code: str,
     output_root: str = "data/generated-packages",
