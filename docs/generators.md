@@ -493,6 +493,61 @@ Re-running a generator with the same inputs produces a new timestamped directory
 
 ---
 
+## Healthcare interop generators
+
+Built on the healthcare doc sources (HAPI FHIR, Medplum, Synthea, FHIR core spec, US Core IG, hl7apy, HAPI HL7v2 multi-file docs, Mirth/NextGen Connect, pyx12, Ballerina EDI, Stedi, pydicom, DCMTK, openEHR specs, Microsoft FHIR Server, HL7 CDA). Same Phase 7 protocols, completely different domain.
+
+### EDI Round-Trip Test
+
+**Slash command:** `/kb-edi-roundtrip <txn>` (e.g. `270`, `834`, `837`)
+**MCP tool:** `generate_edi_roundtrip`
+**Output:** `data/generated-packages/edi-roundtrip-<txn>/`
+
+Generates synthetic spec-conformant X12 fixtures plus a parse/round-trip Python test for any of 7 transaction sets (270/271 eligibility, 834 enrollment, 835 remittance, 837 claim, 997/999 acknowledgements). For paired transactions (270→271, 834→999, 837→835), emits both fixtures so paired-control-number matching can be tested. Each fixture has a complete ISA/GS/ST/SE/GE/IEA envelope and real X12 segment patterns (NM1, HL, CLM, BPR, CAS, etc.).
+
+```text
+edi-roundtrip-837/
+  README.md                  transaction set overview
+  mapping.md                 segment + loop reference + citations
+  fixtures/837_request.x12   spec-conformant claim
+  fixtures/835_response.x12  paired remittance
+  tests/test_roundtrip.py    parse + round-trip + paired-control-number
+```
+
+### De-identification Procedure Bundle
+
+**Slash command:** `/kb-deid-bundle <dataset>` (`fhir`, `dicom`, `hl7v2`, or `clinical_trial`)
+**MCP tool:** `generate_deid_bundle`
+**Output:** `data/generated-packages/deid-bundle-<dataset>/`
+
+For a healthcare dataset shape, emits a HIPAA Safe-Harbor-mapped de-identification package: PHI element catalog (where each Safe Harbor identifier lives in that data shape), per-element rationale + technique, runnable pipeline scaffold with HMAC pseudonymization + per-subject date offsets, audit-trail template with the Safe Harbor checklist, and PHI-absence regex tests (SSN, phone, email, full-date). Per-dataset PHI catalogs cover the actual locations PHI lives — `Patient.name` + `Observation.effectiveDateTime` for FHIR; `(0010,0010) PatientName` + burned-in pixel annotations for DICOM; PID-5/7/11/13 + NK1 + PV1 for HL7v2; subject pseudonyms + visit dates + k-anonymity for clinical-trial datasets. The 18-line technique library codifies the standard approaches (suppress, generalize, pseudonymize-with-kept-lookup, date-shift, k-anonymize, OCR-detect-and-redact).
+
+### Standards Translator
+
+**Slash command:** `/kb-standards-translator <mapping>` (e.g. `HL7v2 ADT^A01 to FHIR Patient`, `X12 837P to FHIR Claim`)
+**MCP tool:** `generate_standards_translator`
+**Output:** `data/generated-packages/mapping-<source>-to-<target>/`
+
+For a source-standard → target-standard pair, generates the field-by-field mapping table (with per-field transform pattern: `direct`, `lookup`, `split`, `concat`, `code-translation`, `compute`, `lossy`, `drop`), a Python transformer skeleton (one TODO function per source element), and round-trip + spec-conformance test scaffolds. Built-in catalog covers HL7v2 ADT^A01 → FHIR Patient/Encounter, HL7v2 ORU^R01 → FHIR Observation/DiagnosticReport, X12 837P → FHIR Claim, X12 835 → FHIR ClaimResponse + PaymentReconciliation, DICOM Series → FHIR ImagingStudy. Lossy fields are explicitly tagged so downstream transformer authors don't accidentally claim round-trip equivalence where it doesn't hold. Decomposer accepts loose phrasing — "convert ORU into FHIR Observation", "835 to claimresponse" all resolve via token-overlap matching.
+
+### FHIR Implementation Guide Scaffold
+
+**Slash command:** `/kb-fhir-ig <use-case>` (`bulk-data-export`, `patient-summary`, `tumor-board`, `prior-auth`, `adverse-event`)
+**MCP tool:** `generate_fhir_ig`
+**Output:** `data/generated-packages/fhir-ig-<use-case>/`
+
+Generates a buildable SUSHI/FSH IG repo: `sushi-config.yaml` + `ig.ini` + per-resource FSH `StructureDefinition` skeletons (US Core inheritance where applicable), ValueSet skeletons, Extension skeletons, JSON example resources, and pagecontent for the IG website. The five built-in use cases cover Bulk Data Export for clinical trials, the International Patient Summary, tumor board case presentations (mCODE-aligned: `PrimaryCancerCondition`, `TNMStageGroup`, `GenomicVariant`, `OncologyImagingStudy`), DaVinci PAS prior auth, and clinical-trial AE reporting (FHIR + ICH E2B(R3) alignment). Build with `npm install -g fsh-sushi && sushi build && publisher.jar`.
+
+### Integration Channel Generator
+
+**Slash command:** `/kb-integration-channel <scenario>` (`ehr-adt-to-lab`, `lab-result-to-ehr-fhir`, `claim-to-clearinghouse`, `imaging-study-ingest`, `adt-to-warehouse`, `adverse-event-to-regulator`)
+**MCP tool:** `generate_integration_channel`
+**Output:** `data/generated-packages/integration-channel-<scenario>/`
+
+Generates a Mirth/NextGen Connect channel scaffold importable into Mirth Channel Manager. Output: `channel.xml` (valid XML with source + destination connector skeletons), `transformer.js` (Rhino-compatible ES5; per-format scaffold with the right E4X / JSON / XML idioms — HL7v2-passthrough, HL7v2-to-FHIR, JDBC-claim-to-X12, DICOM-to-FHIR, FHIR-to-E2B-XML), and a sample input message. Six built-in scenarios cover the canonical healthcare integration shapes: HL7v2-to-HL7v2 normalize/forward (EHR ADT → Lab); HL7v2 ORU → FHIR Observation/DiagnosticReport (Lab → EHR); JDBC claim → X12 837P → SFTP (Billing → Clearinghouse); DICOM C-STORE → FHIR ImagingStudy (Imaging modality → EHR); EHR ADT → batched Parquet warehouse; FHIR AdverseEvent → ICH E2B(R3) XML → AS2 (FDA submission).
+
+---
+
 ## See also
 
 - [docs/architecture.md](architecture.md) — Phase 7 framework + ranking engine
