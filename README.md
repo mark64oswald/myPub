@@ -4,7 +4,7 @@
 
 A book is too coherent to chunk. A vendor doc is too current to ignore. Most knowledge bases pick one and lose the other half — myPub keeps both, in one DuckDB file, with edges between them.
 
-> **572 books · 75 live doc sources · 313K concepts · 1,378 alignment edges · 22 generators · one DuckDB file · zero cloud.**
+> **577 books · 109 live doc sources · 337K concepts · 5.9K alignment edges · 24 generators · one DuckDB file · zero cloud.**
 
 ---
 
@@ -12,7 +12,7 @@ A book is too coherent to chunk. A vendor doc is too current to ignore. Most kno
 
 1. **Books and live docs answer different questions.** Kleppmann teaches you what an idempotent producer *is*. The current Kafka docs tell you `enable.idempotence=true` is the default since 3.0. myPub indexes both, alignment-edges them where they overlap, and lets the ranker pick when to lean which way.
 2. **The unit of retrieval is the author's chapter, not a 512-token chunk.** Most chapters fit Claude's context. Author structure is preserved end-to-end.
-3. **The interesting outputs aren't search results — they're generated artifacts.** Twenty-two generators sit on a single Decompose → Plan → Validate → Materialize framework. Ask for an ADR, a tutorial, a refactoring playbook, a runnable CQRS+Kafka scaffold, an HL7v2→FHIR transformer, or a HIPAA-Safe-Harbor de-identification pipeline; get a versioned, citation-backed package on disk.
+3. **The interesting outputs aren't search results — they're generated artifacts.** Twenty-four generators sit on a single Decompose → Plan → Validate → Materialize framework. Ask for an ADR, a tutorial, a refactoring playbook, a runnable CQRS+Kafka scaffold, a domain-level library landscape, a one-page quickstart, an HL7v2→FHIR transformer, or a HIPAA-Safe-Harbor de-identification pipeline; get a versioned, citation-backed package on disk.
 
 ---
 
@@ -23,7 +23,7 @@ myPub combines two fundamentally different kinds of source material into one sub
 |   | **Local ePub library** | **Live documentation** |
 |---|---|---|
 | **What it is** | Technical books I've bought (.epub files) | Current vendor documentation pulled from MCP servers |
-| **Where it lives** | `~/Documents/eBooks/` (~572 books, ~470 GB total) | `doc_section` rows in the catalog, refreshed on TTL |
+| **Where it lives** | `~/Documents/eBooks/` (~577 books, ~470 GB total) | `doc_section` rows in the catalog, refreshed on TTL |
 | **How it gets there** | `scripts/index_books.py` walks the directory, extracts chapter structure, generates embeddings | `scripts/refresh_docs.py` calls Context7 / DeepWiki / GitHub raw via MCP, snapshots the markdown, sectionizes by heading |
 | **Granularity** | Chapter (preserves the author's structural intent) | Heading-aligned section (preserves the doc author's structure) |
 | **What it's good at** | Explaining *why* something is shaped the way it is. Foundational concepts. Tradeoffs. The long view. | Telling you what the *current* API surface looks like — what flag is the new default, what changed in 3.0 |
@@ -31,7 +31,7 @@ myPub combines two fundamentally different kinds of source material into one sub
 | **Authority** | Publisher-tier (O'Reilly, Manning, Addison-Wesley graded high; Packt mid; defaults below) | Provider-tier: Context7 = 0.85 (curated/vendor), DeepWiki = 0.70 (AI-generated), GitHub raw = 0.65 |
 | **Typical age** | Years (book publication date) | Days to weeks (`refresh_ttl_days`, default 30) |
 | **Schema** | `book` → `chapter` → `chapter_embedding` | `doc_source` → `doc_snapshot` → `doc_section` → `doc_section_embedding` |
-| **Today's count** | 572 books, 118K chapters | 75 sources, 2,227 sections |
+| **Today's count** | 577 books, 119K chapters | 109 sources, 9.5K sections |
 
 ### Why one without the other isn't enough
 
@@ -67,7 +67,7 @@ book route. Want to ship Kafka 3.x today? Use the doc route. Want both?
 The interactive mode shows them side by side and flags any conflicts.
 ```
 
-The catalog tracks **75 live doc sources** today (66 Context7, 7 GitHub raw, 2 DeepWiki) covering 2,227 sections. The breakdown spans the working stacks the corpus actually has books about — data platforms, ML frameworks, web frameworks, cloud services, databases, message queues, dev tooling. A representative sample by alignment density:
+The catalog tracks **109 live doc sources** today (mixed Context7 / DeepWiki / GitHub-raw — DeepWiki increasingly preferred for OSS libraries after the PDF + Rust expansion surfaced that Context7 returns dense-but-thin API summaries while DeepWiki returns full architectural docs) covering 9.5K sections. The breakdown spans the working stacks the corpus actually has books about — data platforms, ML frameworks, web frameworks, cloud services, databases, message queues, dev tooling. A representative sample by alignment density:
 
 | Source | Provider | Sections | Alignment edges |
 |---|---|---|---|
@@ -105,7 +105,7 @@ Start here. Everything is cross-linked.
 | [Data sources](docs/data-sources.md) | What goes in: ePubs, Context7, DeepWiki, GitHub raw |
 | [Ingestion & indexing](docs/ingestion-and-indexing.md) | Structural parse, FTS, vector embeddings, DuckPGQ, alignment |
 | [Concept graph](docs/concept-graph.md) | Entity extraction, EntityResolver, alignment edges, procedures |
-| [Generators](docs/generators.md) | Catalog of all 22 generators with sample outputs |
+| [Generators](docs/generators.md) | Catalog of all 24 generators with sample outputs |
 | [Customization](docs/customization.md) | Weight profiles, character profiles, adding your own generator |
 | [Operations](docs/operations.md) | Refresh, eval, deferred work, disaster recovery, diagnostics |
 
@@ -180,7 +180,11 @@ This is `compare_concept_across_authors` — one of four MCP tools the server ex
 This is the headline. The user's #1 motivating example:
 
 ```text
-You: /kb-bootstrap CQRS event-sourced order service with Kafka and HL7
+You: /kb-bootstrap Python CQRS event-sourced order service with Kafka and HL7
+
+[stack]       inferred from request: python
+              (override with the `stack` parameter — also accepts
+               rust / node / typescript / java / go / csharp / ruby)
 
 [decompose]   12 concept clusters identified
               (CQRS, Event Sourcing, Aggregate, CommandHandler,
@@ -188,7 +192,7 @@ You: /kb-bootstrap CQRS event-sourced order service with Kafka and HL7
                Kafka Connect, HL7 v2 parser, docker-compose,
                pytest fixtures, OpenAPI spec)
 
-[plan]        23 files projected
+[plan]        23 files projected (python stack template)
 
 [validate]    unresolved targets:    0
               unmatched procedures:  0
@@ -212,7 +216,7 @@ You: /kb-bootstrap CQRS event-sourced order service with Kafka and HL7
                                               (one per file)
 ```
 
-The v1 generator emits skeleton + per-file sub-agent prompts. You dispatch Task agents to fill them in from the prompts. v2 wraps the dispatch loop and adds runtime validation (`pip install + pytest + docker-compose up`). See [Generators → Project Bootstrap](docs/generators.md#project-bootstrap).
+The v1 generator emits skeleton + per-file sub-agent prompts in the right shape for the target stack (Python, Rust, Node, TypeScript, Java, Go, C#, Ruby, or a minimal generic skeleton). You dispatch Task agents to fill them in from the prompts. v2 wraps the dispatch loop and adds runtime validation — running the stack's build + test command (`cargo build && cargo test` for Rust, `pytest` for Python, `mvn verify` for Java, `npm test` for Node, etc.) plus a smoke check on the data flow. See [Generators → Project Bootstrap](docs/generators.md#project-bootstrap).
 
 ---
 
@@ -264,7 +268,7 @@ For the full walkthrough — including extraction, alignment, and the first gene
                   │
                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│              Phase 7 Generator Framework (22 generators)             │
+│              Phase 7 Generator Framework (24 generators)             │
 │   Decomposer ─► Planner ─► Validator ─► Materializer                 │
 │                                                                      │
 │   Concept Map · Learning Path · Cheatsheet · Slide Deck              │
@@ -324,7 +328,7 @@ Detailed walkthrough: [docs/architecture.md](docs/architecture.md).
 | Procedures (precondition / steps / postcondition / failure modes / concept links) | **47,874** with **175,106** concept links |
 | Live doc sources | **54** (52 Context7, 2 DeepWiki) |
 | Doc snapshots / sections | 54 / **1,909** |
-| Alignment edges (book chapter ↔ live-doc section) | **1,378** (1,354 CORROBORATES + 24 CONTRADICTS) |
+| Alignment edges (book chapter ↔ live-doc section) | **5,946** (5,872 CORROBORATES + 74 CONTRADICTS) |
 | Generators on the Phase 7 framework | **17** |
 | Tests | **37 test modules** (unit + live API) |
 
@@ -348,7 +352,7 @@ The substrate is more than a database — it's a hybrid retrieval engine designe
 | **FTS (BM25, Porter-stemmed)** | `chapter.content` and `doc_section.content` | Exact-phrase wins. "BM25", "Lambda Architecture", `enable.idempotence` — terms that semantic search dilutes by averaging | Without FTS, querying for a specific config flag returns chapters that *talk about* config flags but don't mention this one |
 | **VSS (HNSW, cosine)** | 384-dim `sentence-transformers/all-MiniLM-L6-v2` embeddings, in side tables | Paraphrases and conceptual neighbors. "consistent hashing" finds chapters about Rendezvous, Maglev, and DHT — even when those words don't appear in the query | Without VSS, the system can only find what you asked for verbatim |
 | **DuckPGQ property graph** | `mypub` graph: `author`/`book`/`chapter`/`concept` vertex tables, `wrote`/`book_contains`/`concept_relates_to` edges | "X relates to Y" queries that pure search can't express — author roll-ups, prerequisite walks | Without the graph, comparing how three authors handle CQRS becomes manual collation |
-| **Concept graph + alignment edges** | 312K concepts, 613K relations (CITES / IMPLEMENTS / REQUIRES / CONTRASTS_WITH / EXTENDS), 1,378 cross-source alignment edges | Cross-document reasoning: prerequisites, contrasts, book↔doc agreement and disagreement | Without this, the system is a pile of independent text files; with it, it's a knowledge structure |
+| **Concept graph + alignment edges** | 337K concepts, 657K relations (CITES / IMPLEMENTS / REQUIRES / CONTRASTS_WITH / EXTENDS), 5,946 cross-source alignment edges | Cross-document reasoning: prerequisites, contrasts, book↔doc agreement and disagreement | Without this, the system is a pile of independent text files; with it, it's a knowledge structure |
 
 Embeddings live in side tables (`chapter_embedding`, `concept_embedding`, etc.) instead of as columns on the parent. This isn't aesthetic — DuckDB 1.5.0 raises a spurious FK violation on `UPDATE chapter SET embedding = …` when the row has inbound FKs. The pinned regression test `tests/test_duckdb_fk_bugs.py` exercises three such bugs we work around. Full schema rationale: [docs/architecture.md → substrate](docs/architecture.md#the-substrate-duckdb).
 
@@ -434,7 +438,7 @@ Four MCP tools the `mypub-kb` server exposes, all auto-invoked from natural lang
 | `find_prerequisites(concept_name, max_depth)` | Recursive walk over `REQUIRES` edges; returns each prerequisite at its shortest depth |
 | `disambiguate_discovery(source, identifier, display_name, query_term)` | Closes the auto-discovery loop on user choice |
 
-For a search, comparison, or prerequisite walk, just ask Claude in natural language — the routing happens automatically. Slash commands are reserved for multi-step workflows (`/kb-discover` for an explicit discovery loop, `/kb-review-concepts` for the EntityResolver queue, and the 22 generator commands).
+For a search, comparison, or prerequisite walk, just ask Claude in natural language — the routing happens automatically. Slash commands are reserved for multi-step workflows (`/kb-discover` for an explicit discovery loop, `/kb-review-concepts` for the EntityResolver queue, and the 24 generator commands).
 
 ---
 
@@ -485,7 +489,7 @@ This is the value prop — when you write a new generator, you don't write any o
 | **Idempotent re-runs** | Re-running a generator produces a new timestamped directory; old runs aren't clobbered. Good for diff-vs-prior-run audits |
 | **Persistence schema** | `generated_package` (one row per run), `generated_unit` (concept clusters), `generated_file` (every materialized file), `generated_source` (provenance per file). All managed by the framework base class |
 
-### The seventeen generators today
+### The nineteen generators today
 
 Outputs land under `data/generated-packages/<name>_<timestamp>/`. Each entry below links to the full walkthrough in [docs/generators.md](docs/generators.md).
 
@@ -495,18 +499,20 @@ Outputs land under `data/generated-packages/<name>_<timestamp>/`. Each entry bel
 | | [Concept Neighborhood Map](docs/generators.md#concept-neighborhood-map) | `/kb-concept-map` | Visualize a concept's local graph |
 | | [Learning Path](docs/generators.md#learning-path) | `/kb-learning-path` | Topologically-sorted reading order to a target |
 | | [Curriculum](docs/generators.md#curriculum-composite) | `/kb-curriculum` | Multi-week course composing Learning Paths + Tutorials |
-| Reference & teaching | [Cheatsheet](docs/generators.md#cheatsheet) | `/kb-cheatsheet` | One-page quick reference with citations |
+| Reference & teaching | [Quickstart](docs/generators.md#quickstart) | `/kb-quickstart` | First-contact for any library: install + hello-world + verify (language inferred from corpus content; no hardcoded ecosystem assumptions) |
+| | [Cheatsheet](docs/generators.md#cheatsheet) | `/kb-cheatsheet` | One-page quick reference with citations |
 | | [Slide-Deck Outline](docs/generators.md#slide-deck-outline) | `/kb-slides` | 30–60 minute talk skeleton |
 | | [Tutorial](docs/generators.md#tutorial) | `/kb-tutorial` | Step-by-step walkthrough backed by procedures |
 | | [Content Brief](docs/generators.md#content-brief) | `/kb-content-brief` | Article / blog skeleton with sources |
 | | [Pattern + Anti-Pattern Catalog](docs/generators.md#pattern--anti-pattern-catalog) | `/kb-pattern-catalog` | Patterns paired with the anti-patterns to avoid |
 | Decisions & strategy | [ADR](docs/generators.md#adr-architecture-decision-record) | `/kb-adr` | Architecture Decision Record with options + rationale |
-| | [Tech Assessment](docs/generators.md#tech-assessment) | `/kb-tech-assessment` | Maturity, fit, risk, alternatives |
+| | [Tech Assessment](docs/generators.md#tech-assessment) | `/kb-tech-assessment` | Maturity, fit, risk, alternatives — one decision, N candidates |
+| | [Library Landscape](docs/generators.md#library-landscape) | `/kb-landscape` | M jobs-to-be-done × N candidates orientation for any domain — candidates auto-discovered by concept-overlap; rarity-weighted scoring + vector job seeding |
 | | [Migration Guide](docs/generators.md#migration-guide) | `/kb-migration-guide` | CONTRADICTS-edge-driven version migration |
 | | [Currency Report](docs/generators.md#currency-report) | `/kb-currency-report` | Where books and live docs disagree |
 | Voice & character | [Dialog](docs/generators.md#dialog) | `/kb-dialog` | Two-character conversation (Architect vs Practitioner) |
 | | [Author Panel](docs/generators.md#author-panel) | `/kb-author-panel` | Multi-author roundtable |
-| Bootstrap & refactor | [**Project Bootstrap**](docs/generators.md#project-bootstrap) ★ | `/kb-bootstrap` | Runnable project scaffold — code, configs, tests |
+| Bootstrap & refactor | [**Project Bootstrap**](docs/generators.md#project-bootstrap) ★ | `/kb-bootstrap` | Runnable project scaffold for any of 8 language stacks (python / rust / node / typescript / java / go / csharp / ruby) — detected from request keywords or set via the `stack` parameter |
 | | [Refactoring Playbook](docs/generators.md#refactoring-playbook) | `/kb-refactoring` | Targeted refactor with before/after |
 | Healthcare interop | [EDI Round-Trip](docs/generators.md#edi-round-trip-test) | `/kb-edi-roundtrip` | X12 transaction-set fixtures + parse/round-trip tests (270/271, 834, 835, 837, 997, 999) |
 | | [De-identification Bundle](docs/generators.md#de-identification-procedure-bundle) | `/kb-deid-bundle` | HIPAA Safe-Harbor de-id pipeline scaffold + audit trail (FHIR / DICOM / HL7v2 / clinical trial) |
@@ -547,11 +553,11 @@ myPub/
 │   ├── data-sources.md                # ePubs + live docs
 │   ├── ingestion-and-indexing.md      # FTS, VSS, DuckPGQ pipeline
 │   ├── concept-graph.md               # extraction, alignment, procedures
-│   ├── generators.md                  # all 22 generators
+│   ├── generators.md                  # all 24 generators
 │   ├── customization.md               # weight profiles, characters, new generators
 │   ├── operations.md                  # re-ingestion, refresh, eval, recovery
 │   └── mypub-v2-*.md                  # canonical specs
-├── mcp-servers/kb-mcp/                # FastMCP server + 22 generators
+├── mcp-servers/kb-mcp/                # FastMCP server + 24 generators
 │   ├── server.py · ranking.py · discovery.py · resolution.py
 │   ├── generator.py                   # Phase 7 framework protocols
 │   ├── concept_map.py · learning_path.py · cheatsheet.py · …
@@ -615,7 +621,7 @@ The pattern across all of these: trust internal code and framework guarantees; o
 
 ## Status
 
-The v2 substrate, ranking engine, concept graph, all 22 generators, and the doc-augmentation layer have shipped. The catalog is in continuous-improvement mode rather than feature-build mode.
+The v2 substrate, ranking engine, concept graph, all 24 generators, and the doc-augmentation layer have shipped. The catalog is in continuous-improvement mode rather than feature-build mode.
 
 Recent rounds of work:
 
@@ -627,9 +633,9 @@ Recent rounds of work:
 Honest open work — none blocking real use:
 
 - **CONTRADICTS quality.** The alignment edges are valid CORROBORATES at avg conf 0.72; CONTRADICTS edges are mostly degenerate (avg conf 0.16). A contradiction-tuned alignment prompt + multi-sample voting would meaningfully sharpen Migration Guide and Currency Report output.
-- **Generator-output validation.** The 22 generators all ship and run, but real eval data — running `/kb-currency-report`, `/kb-migration-guide`, `/kb-bootstrap` against the now-richer substrate and grading the output — is the open question. That's how you know if the substrate actually delivers, not just that it ingested cleanly.
+- **Generator-output validation.** The 24 generators all ship and run, but real eval data — running `/kb-currency-report`, `/kb-migration-guide`, `/kb-bootstrap` against the now-richer substrate and grading the output — is the open question. That's how you know if the substrate actually delivers, not just that it ingested cleanly.
 - **Domain gaps.** The corpus has decent biology/genomics books now (Biology for Engineers, NGS Data Analysis, Zero to Genetic Engineering Hero) but zero PubMed Central / clinical-trial papers / HL7-FHIR specs. Different ingestion paths than ePubs (JATS XML, FHIR resources). Would matter for life-sciences use cases.
-- **Project Bootstrap v2.** The v1 generator emits skeletons + sub-agent prompts. v2 wraps the dispatch loop and adds runtime validation (`pip install + pytest + docker-compose up + smoke-test data flow`).
+- **Project Bootstrap v2.** The v1 generator emits skeletons + sub-agent prompts, with stack-aware scaffolding for python / rust / node / typescript / java / go / csharp / ruby. v2 wraps the dispatch loop and adds stack-specific runtime validation (the right `build + test` command for each stack: `cargo build && cargo test`, `pytest`, `mvn verify`, `npm test`, `go test ./...`, `dotnet test`, etc.) plus a smoke check on the data flow.
 
 Full deferred-work tracker: [docs/operations.md](docs/operations.md#deferred-work).
 

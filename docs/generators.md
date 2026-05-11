@@ -1,6 +1,6 @@
 # Generators
 
-Seventeen generators on a single Phase 7 framework. Each takes a topic, a stack, or a question — and produces a deterministic, reproducible artifact backed by chapter citations, doc snapshots, and procedures.
+Nineteen generators on a single Phase 7 framework (plus five healthcare-interop generators rolled out alongside). Each takes a topic, a stack, or a question — and produces a deterministic, reproducible artifact backed by chapter citations, doc snapshots, and procedures.
 
 [← back to top-level README](../README.md) · [Architecture ↗](architecture.md) · [Concept graph ↗](concept-graph.md) · [Customization ↗](customization.md)
 
@@ -33,7 +33,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 
 ---
 
-## The seventeen, by category
+## The nineteen, by category
 
 ### Skills & curriculum
 
@@ -48,6 +48,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 
 | Generator | Slash command | Source file | What it does |
 |---|---|---|---|
+| Quickstart | `/kb-quickstart <library>` | [`quickstart.py`](../mcp-servers/kb-mcp/quickstart.py) | First-contact artifact: install command + hello-world + verify, for one library |
 | Cheatsheet | `/kb-cheatsheet <topic>` | [`cheatsheet.py`](../mcp-servers/kb-mcp/cheatsheet.py) | One-page quick reference: definitions, gotchas, code patterns |
 | Slide-Deck Outline | `/kb-slides <topic>` | [`slide_deck.py`](../mcp-servers/kb-mcp/slide_deck.py) | Title + bullets per slide with citations |
 | Tutorial | `/kb-tutorial <topic>` | [`tutorial.py`](../mcp-servers/kb-mcp/tutorial.py) | Step-by-step walkthrough backed by procedures |
@@ -59,7 +60,8 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 | Generator | Slash command | Source file | What it does |
 |---|---|---|---|
 | ADR | `/kb-adr <decision>` | [`adr.py`](../mcp-servers/kb-mcp/adr.py) | Architecture Decision Record with options + rationale |
-| Tech Assessment | `/kb-tech-assessment <tech>` | [`tech_assessment.py`](../mcp-servers/kb-mcp/tech_assessment.py) | Maturity, fit, risk, alternatives |
+| Tech Assessment | `/kb-tech-assessment <tech>` | [`tech_assessment.py`](../mcp-servers/kb-mcp/tech_assessment.py) | Maturity, fit, risk, alternatives — one decision, N candidates |
+| Library Landscape | `/kb-landscape <domain>` | [`library_landscape.py`](../mcp-servers/kb-mcp/library_landscape.py) | M jobs-to-be-done × N candidates orientation doc; rarity-weighted scoring + keyword/vector job seeding |
 | Migration Guide | `/kb-migration-guide <from> <to>` | [`migration_guide.py`](../mcp-servers/kb-mcp/migration_guide.py) | CONTRADICTS-edge-driven version migration |
 | Currency Report | `/kb-currency-report <topic>` | [`currency_report.py`](../mcp-servers/kb-mcp/currency_report.py) | Where books and live docs disagree |
 
@@ -74,7 +76,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 
 | Generator | Slash command | Source file | What it does |
 |---|---|---|---|
-| **Project Bootstrap** ★ | `/kb-bootstrap <stack>` | [`project_bootstrap.py`](../mcp-servers/kb-mcp/project_bootstrap.py) | Runnable scaffold — code, configs, docker-compose, tests |
+| **Project Bootstrap** ★ | `/kb-bootstrap <description>` | [`project_bootstrap.py`](../mcp-servers/kb-mcp/project_bootstrap.py) | Runnable scaffold for any of 8 language stacks (python / rust / node / typescript / java / go / csharp / ruby), inferred from request keywords; emits a generic skeleton if no signal — never Python-by-default |
 | Refactoring Playbook | `/kb-refactoring <pattern>` | [`refactoring_playbook.py`](../mcp-servers/kb-mcp/refactoring_playbook.py) | Targeted refactor with before/after snippets |
 
 ★ User's #1 motivating example. See [Project Bootstrap](#project-bootstrap) below for the canonical CQRS+Kafka+HL7 walkthrough.
@@ -391,7 +393,7 @@ data/generated-packages/cqrs-kafka-hl7-bootstrap_<timestamp>/
 |---|---|---|
 | Decompose | ✅ | ✅ |
 | Plan | ✅ | ✅ |
-| Validate | ✅ structural | + runtime: `pip install + pytest + docker-compose up + data flows` |
+| Validate | ✅ structural | + runtime: stack-aware build + test (`cargo build && cargo test` / `pytest` / `mvn verify` / `npm test` / `go test ./...` / `dotnet test` per chosen stack) + data flows |
 | Materialize | ✅ skeleton + per-file prompts | + dispatch loop: wraps the sub-agents (mirror of Skills Factory's prep/process pattern) |
 
 The canonical CQRS+Kafka+HL7 test output is preserved as a substrate-validation fixture.

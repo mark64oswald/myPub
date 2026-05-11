@@ -15,12 +15,28 @@ Call `generate_project_bootstrap` with:
 - `technologies` — list of tech names (Apache Kafka, etc.)
 - `patterns` — list of pattern names (CQRS, Event-driven architecture)
 - `project_name` (optional) — output folder name
+- `stack` (optional) — explicit language stack override. One of:
+  `python | rust | node | typescript | java | go | csharp | ruby |
+  generic`. Aliases `py / rs / js / ts / nodejs / golang / cs /
+  dotnet / kotlin` also work. If omitted, the generator infers the
+  stack from keywords in `description` (e.g., "Rust async server"
+  → rust, "Spring Boot" → java, "Node.js Express" → node).
 
 Surface:
 - the package folder
-- `_build_plan.md` — file-by-file build plan + stack metrics
-- `README.md`, `src/main.py`, `tests/test_smoke.py`, etc. (placeholders)
+- `_build_plan.md` — file-by-file build plan with the resolved stack
+- Stack-appropriate files (Cargo.toml for Rust, pyproject.toml for
+  Python, pom.xml for Java, go.mod for Go, etc.) — never Python by
+  default for non-Python requests
 - `_sub_agent_prompts/prompt_NN_<file>.txt` — one prompt per file
+
+## Stack handling
+
+The generator picks the right scaffolding for the target ecosystem.
+If no language signal appears in the request AND no `stack` argument
+is passed, the output is a minimal language-neutral skeleton (README
++ .gitignore only) rather than a Python-by-default scaffold. The
+notes field on the response will say which stack was chosen and why.
 
 ## Sub-agent dispatch (manual v1 workflow)
 

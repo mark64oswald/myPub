@@ -2432,6 +2432,159 @@ def generate_tech_assessment(
 
 
 @mcp.tool
+def generate_quickstart(
+    library: str,
+    language_hint: Optional[str] = None,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 18 — generate a Quickstart (install + hello-world + verify) artifact.
+
+    First-contact artifact for a single library. Distinct from
+    Cheatsheet (assumes you're already using it), Tutorial (sequenced
+    multi-stage), Bootstrap (composed project scaffold).
+
+    Args:
+        library: Library name; resolved against doc_source.name (e.g.
+            "pypdf", "Tokio", "Axum").
+        language_hint: Optional nudge for code-block selection when
+            the library has examples in multiple languages.
+
+    Returns:
+        ``{package_id, package_name, output_root, doc_source_id,
+        doc_source_name, n_install_blocks, n_hello_blocks,
+        n_verify_blocks, has_framing, file_paths, validation_issues,
+        notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import quickstart
+
+    gen = quickstart.make_quickstart_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, library,
+            library=library, language_hint=language_hint,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package "
+            " WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "doc_source_id": metadata.get("doc_source_id"),
+        "doc_source_name": metadata.get("doc_source_name"),
+        "n_install_blocks": metadata.get("n_install_blocks", 0),
+        "n_hello_blocks": metadata.get("n_hello_blocks", 0),
+        "n_verify_blocks": metadata.get("n_verify_blocks", 0),
+        "has_framing": metadata.get("has_framing", False),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
+def generate_library_landscape(
+    domain: str,
+    candidates: Optional[list[str]] = None,
+    jobs: Optional[list[str]] = None,
+    max_candidates: int = 12,
+    output_root: str = "data/generated-packages",
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Phase 17 — generate a Library Landscape / Ecosystem Map.
+
+    Spans M jobs-to-be-done × N candidates with editorial framing.
+    Where Tech Assessment compares N candidates for ONE decision,
+    Landscape spans multiple jobs and produces a discovery doc.
+
+    Args:
+        domain: Topic anchor (e.g. "PDF processing",
+            "Rust async runtimes").
+        candidates: Optional explicit library list. If None, top
+            doc_sources are auto-discovered by concept-overlap with
+            the domain anchor (ranked, capped at max_candidates).
+        jobs: Optional jobs-to-be-done labels. If None, falls back to
+            a single "Overview" job covering the domain anchor's
+            neighborhood.
+        max_candidates: Cap for auto-discovery (default 12).
+
+    Returns:
+        ``{package_id, package_name, output_root, n_candidates, n_jobs,
+        file_paths, validation_issues, notes}``.
+    """
+    _bootstrap()
+    # pylint: disable=import-outside-toplevel
+    import library_landscape
+
+    gen = library_landscape.make_library_landscape_generator()
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, domain,
+            candidates=candidates, jobs=jobs,
+            max_candidates=max_candidates,
+            output_root=output_root, overwrite=overwrite,
+        )
+        if package_id == -1:
+            return {
+                "package_id": -1, "package_name": "",
+                "output_root": output_root,
+                "validation_issues": [
+                    {"severity": i.severity, "message": i.message,
+                     "unit": i.unit_logical_key}
+                    for i in issues
+                ],
+                "notes": list(report.notes),
+            }
+        meta = rw_conn.execute(
+            "SELECT name, metadata_json FROM generated_package "
+            " WHERE package_id = ?",
+            [package_id],
+        ).fetchone()
+    import json as _json
+    metadata = _json.loads(meta[1]) if meta and meta[1] else {}
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else "",
+        "output_root": output_root,
+        "n_candidates": metadata.get("n_candidates", 0),
+        "n_jobs": metadata.get("n_jobs", 0),
+        "anchor_concept_ids": metadata.get("anchor_concept_ids", []),
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message,
+             "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
 def generate_migration_guide(
     subject: str,
     max_depth: int = 1,
@@ -2628,6 +2781,7 @@ def generate_project_bootstrap(
     technologies: Optional[list[str]] = None,
     patterns: Optional[list[str]] = None,
     project_name: Optional[str] = None,
+    stack: Optional[str] = None,
     output_root: str = "data/generated-packages",
     overwrite: bool = True,
 ) -> dict[str, Any]:
@@ -2638,11 +2792,21 @@ def generate_project_bootstrap(
     the structural skeleton; sub-agent dispatch (to fill in real code)
     is the user's manual follow-up.
 
+    Picks language-appropriate scaffolding (Cargo.toml for Rust,
+    pyproject.toml for Python, pom.xml for Java, etc.). The stack is
+    detected from the request keywords, or set explicitly via the
+    ``stack`` argument. Falls back to a minimal generic skeleton when
+    no signal is present — never a Python-by-default scaffold.
+
     Args:
         description: Project description / canonical request.
         technologies: List of technology names to include in the stack.
         patterns: List of pattern names to anchor the design.
         project_name: Output folder name (defaults to slug of description).
+        stack: Optional explicit stack override. One of:
+            ``python | rust | node | typescript | java | go | csharp |
+            ruby | generic``. Aliases ``py / rs / js / ts / nodejs /
+            golang / cs / dotnet / kotlin`` also accepted.
     """
     _bootstrap()
     # pylint: disable=import-outside-toplevel
@@ -2653,7 +2817,7 @@ def generate_project_bootstrap(
         package_id, report, issues = gen.run_deterministic(
             rw_conn, rw_resolver, description,
             technologies=technologies, patterns=patterns,
-            project_name=project_name,
+            project_name=project_name, stack=stack,
             output_root=output_root, overwrite=overwrite,
         )
         if package_id == -1:
@@ -2671,6 +2835,8 @@ def generate_project_bootstrap(
         "package_name": meta[0] if meta else "",
         "n_elements": metadata.get("n_elements", 0),
         "n_files": metadata.get("n_files", 0),
+        "stack": metadata.get("stack"),
+        "stack_description": metadata.get("stack_description"),
         "file_paths": report.file_paths,
         "validation_issues": [
             {"severity": i.severity, "message": i.message} for i in issues],

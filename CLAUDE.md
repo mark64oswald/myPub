@@ -81,9 +81,11 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-currency-report` | Currency Report (13) | doc_snapshot history audit |
 | `/kb-dialog` | Dialog (14) | Architect/Practitioner divergence |
 | `/kb-author-panel` | Author Panel (14) | N≥2 characters, per-topic positions |
-| `/kb-bootstrap` | Project Bootstrap (15) | **User #1.** Composes Concept→Pattern→Procedure into a project tree + sub-agent prompts |
+| `/kb-bootstrap` | Project Bootstrap (15) | **User #1.** Composes Concept→Pattern→Procedure into a project tree + sub-agent prompts. Stack-aware: detects target language (python/rust/node/typescript/java/go/csharp/ruby) from the request keywords; explicit `stack` param overrides; generic skeleton if no signal |
 | `/kb-refactoring` | Refactoring Playbook (15) | Anti-pattern → refactor target |
 | `/kb-curriculum` | Curriculum (16) | Multi-week composite |
+| `/kb-landscape` | Library Landscape (17) | Multi-job × multi-candidate orientation; rarity-weighted scoring, keyword + vector job seeding |
+| `/kb-quickstart` | Quickstart (18) | First-contact for one library: install + hello-world + verify |
 
 ## Other MCP servers
 
