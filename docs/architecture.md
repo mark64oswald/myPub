@@ -89,8 +89,8 @@ The fused candidate pool is then re-scored. The five factors:
 | **relevance** | RRF score from FTS × VSS × graph | Already in [0, 1] post-fusion; treated as the base signal |
 | **recency** | `book.publication_date`, `doc_snapshot.retrieved_at` | Exponential decay; half-life set per profile |
 | **authority** | Publisher tier for books; doc-source tier (Context7=0.85, DeepWiki=0.70, GitHub=0.65) | Hand-set tiers; books inherit publisher rank |
-| **corroboration** | `alignment_edge` table — CORROBORATES boosts, CONTRADICTS penalizes | 1,296 CORROBORATES + 24 CONTRADICTS edges live across all 54 doc sources |
-| **doc_alignment** | Whether the query domain has live-doc coverage at all | 1.00 for the 54 aligned sources, 0.50 neutral elsewhere — prevents penalizing a query that *can't* be corroborated because no live doc exists |
+| **corroboration** | `alignment_edge` table — CORROBORATES boosts, CONTRADICTS penalizes | 9,809 CORROBORATES + 150 CONTRADICTS edges live across all 150 doc sources |
+| **doc_alignment** | Whether the query domain has live-doc coverage at all | 1.00 for the 150 aligned sources, 0.50 neutral elsewhere — prevents penalizing a query that *can't* be corroborated because no live doc exists |
 
 The final score is a weighted combination determined by `weight_profile`. Profiles are tuned per use case — see [docs/customization.md](customization.md#weight-profiles).
 

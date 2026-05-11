@@ -4,7 +4,7 @@
 
 A book is too coherent to chunk. A vendor doc is too current to ignore. Most knowledge bases pick one and lose the other half — myPub keeps both, in one DuckDB file, with edges between them.
 
-> **577 books · 109 live doc sources · 337K concepts · 5.9K alignment edges · 24 generators · one DuckDB file · zero cloud.**
+> **581 books · 150 live doc sources · 366K concepts · 10K alignment edges · 26 generators · one DuckDB file · zero cloud.**
 
 ---
 
@@ -31,7 +31,7 @@ myPub combines two fundamentally different kinds of source material into one sub
 | **Authority** | Publisher-tier (O'Reilly, Manning, Addison-Wesley graded high; Packt mid; defaults below) | Provider-tier: Context7 = 0.85 (curated/vendor), DeepWiki = 0.70 (AI-generated), GitHub raw = 0.65 |
 | **Typical age** | Years (book publication date) | Days to weeks (`refresh_ttl_days`, default 30) |
 | **Schema** | `book` → `chapter` → `chapter_embedding` | `doc_source` → `doc_snapshot` → `doc_section` → `doc_section_embedding` |
-| **Today's count** | 577 books, 119K chapters | 109 sources, 9.5K sections |
+| **Today's count** | 581 books, 120K chapters | 150 sources, 18K sections |
 
 ### Why one without the other isn't enough
 
@@ -67,7 +67,7 @@ book route. Want to ship Kafka 3.x today? Use the doc route. Want both?
 The interactive mode shows them side by side and flags any conflicts.
 ```
 
-The catalog tracks **109 live doc sources** today (mixed Context7 / DeepWiki / GitHub-raw — DeepWiki increasingly preferred for OSS libraries after the PDF + Rust expansion surfaced that Context7 returns dense-but-thin API summaries while DeepWiki returns full architectural docs) covering 9.5K sections. The breakdown spans the working stacks the corpus actually has books about — data platforms, ML frameworks, web frameworks, cloud services, databases, message queues, dev tooling. A representative sample by alignment density:
+The catalog tracks **150 live doc sources** today (78 Context7 / 62 DeepWiki / 10 GitHub-raw — DeepWiki is the default for OSS libraries after the PDF, Rust, and bioscience expansions confirmed Context7 returns dense-but-thin API summaries while DeepWiki returns full architectural docs) covering 18K sections. The breakdown spans the working stacks the corpus actually has books about — data platforms, ML frameworks, web frameworks, cloud services, databases, message queues, dev tooling, healthcare interop, PDF processing, Rust ecosystem, and bioinformatics. A representative sample by alignment density:
 
 | Source | Provider | Sections | Alignment edges |
 |---|---|---|---|
@@ -320,16 +320,15 @@ Detailed walkthrough: [docs/architecture.md](docs/architecture.md).
 
 | | Count |
 |---|---|
-| Books indexed | **572** |
-| Chapters | **118,447** (118,110 with content + embeddings) |
-| Authors | **820** |
-| Concepts | **312,396** (every concept has a 384-dim embedding) |
-| Concept-graph edges (CITES, IMPLEMENTS, REQUIRES, CONTRASTS_WITH, EXTENDS) | **612,607** |
-| Procedures (precondition / steps / postcondition / failure modes / concept links) | **47,874** with **175,106** concept links |
-| Live doc sources | **54** (52 Context7, 2 DeepWiki) |
-| Doc snapshots / sections | 54 / **1,909** |
-| Alignment edges (book chapter ↔ live-doc section) | **5,946** (5,872 CORROBORATES + 74 CONTRADICTS) |
-| Generators on the Phase 7 framework | **17** |
+| Books indexed | **581** |
+| Chapters | **120,497** |
+| Concepts | **366,259** (every concept has a 384-dim embedding) |
+| Concept-graph edges (CITES, IMPLEMENTS, REQUIRES, CONTRASTS_WITH, EXTENDS) | **713,183** |
+| Procedures (precondition / steps / postcondition / failure modes / concept links) | **54,358** with **197,430** concept links |
+| Live doc sources | **150** (78 Context7, 62 DeepWiki, 10 GitHub-raw) |
+| Doc snapshots / sections | 150 / **18,313** |
+| Alignment edges (book chapter ↔ live-doc section) | **9,959** (9,809 CORROBORATES + 150 CONTRADICTS) |
+| Generators on the Phase 7 framework | **26** |
 | Tests | **37 test modules** (unit + live API) |
 
 **Concept-relation breakdown:** 410K CITES (66%), 83K IMPLEMENTS, 58K REQUIRES, 45K CONTRASTS_WITH, 16K EXTENDS — the shape of a graph that's been earning its edges for a year.

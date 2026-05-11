@@ -265,7 +265,7 @@ The full extraction lifecycle is in [docs/concept-graph.md](concept-graph.md#ext
 .venv/bin/python3 scripts/extract_procedures.py process
 ```
 
-Today's catalog: **47,874 procedures** with 175,106 procedure-concept links. 46,904 are chapter-sourced and 970 are doc-section-sourced.
+Today's catalog: **54,358 procedures** with 197,430 procedure-concept links. 47,778 are chapter-sourced and 6,580 are doc-section-sourced.
 
 The procedure schema:
 
@@ -301,7 +301,7 @@ The alignment pass takes a snapshot, identifies sections that overlap with book 
     --output-dir data/refresh/<ts>/alignment_14
 ```
 
-Today's results across all 54 sources: **1,296 CORROBORATES + 24 CONTRADICTS edges** (avg confidence 0.72 / 0.16). CORROBORATES dominates because narrow vendor docs tend to agree with or be unrelated to book content. High-confidence CONTRADICTS edges are rare but valuable when they appear — see [docs/concept-graph.md → alignment](concept-graph.md#alignment-edges).
+Today's results across all 150 sources: **9,809 CORROBORATES + 150 CONTRADICTS edges** (avg confidence 0.72 / 0.16). CORROBORATES dominates because narrow vendor docs tend to agree with or be unrelated to book content. High-confidence CONTRADICTS edges are rare but valuable when they appear — see [docs/concept-graph.md → alignment](concept-graph.md#alignment-edges).
 
 Alignment is non-deterministic at the per-section level; the same prompt produces different edges across runs. For high-stakes contradiction detection, multi-sample voting (run alignment N=3 times, accept any edge with conf ≥ 0.7 in any run) is the path forward — tracked in [docs/operations.md → Deferred work](operations.md#deferred-work).
 

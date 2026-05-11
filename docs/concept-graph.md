@@ -216,7 +216,7 @@ Most generators can run on chapter text alone. **Project Bootstrap can't.** A bo
 .venv/bin/python3 scripts/extract_procedures.py process
 ```
 
-Today's catalog: **47,874 procedures** with **175,106 procedure-concept links**. 46,904 are chapter-sourced; 970 are doc-section-sourced (extracted as part of the doc-source expansion). The Project Bootstrap generator handles missing procedures gracefully by warning when a domain has none.
+Today's catalog: **54,358 procedures** with **197,430 procedure-concept links**. 47,778 are chapter-sourced; 6,580 are doc-section-sourced (extracted as part of the doc-source expansion). The Project Bootstrap generator handles missing procedures gracefully by warning when a domain has none.
 
 ---
 
