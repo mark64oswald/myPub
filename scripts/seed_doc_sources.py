@@ -124,6 +124,61 @@ SEEDS: list[dict[str, Any]] = [
         "identifier": "cwida/duckpgq-extension",
         "refresh_ttl_days": 30,
     },
+    # ------------------------------------------------------------------
+    # PDF-processing landscape (Phase B addition, 2026-05-09).
+    # Four jobs-to-be-done: extract content, create from code, manipulate,
+    # parse for AI/RAG. Note license diversity (MIT/BSD/AGPL/MPL/commercial)
+    # — relevant to several downstream generators.
+    # ------------------------------------------------------------------
+    # Python — extraction & generic ops
+    {"name": "pypdf",          "source_type": "context7", "identifier": "/py-pdf/pypdf",         "refresh_ttl_days": 14},
+    {"name": "PyMuPDF",        "source_type": "deepwiki", "identifier": "pymupdf/PyMuPDF",       "refresh_ttl_days": 30},
+    {"name": "pdfplumber",     "source_type": "context7", "identifier": "/jsvine/pdfplumber",    "refresh_ttl_days": 30},
+    {"name": "pdfminer.six",   "source_type": "context7", "identifier": "/pdfminer/pdfminer.six","refresh_ttl_days": 60},
+    {"name": "pikepdf",        "source_type": "context7", "identifier": "/pikepdf/pikepdf",      "refresh_ttl_days": 30},
+    # Python — creation
+    {"name": "ReportLab",      "source_type": "deepwiki", "identifier": "MrBitBucket/reportlab-mirror", "refresh_ttl_days": 60},
+    {"name": "WeasyPrint",     "source_type": "deepwiki", "identifier": "Kozea/WeasyPrint",      "refresh_ttl_days": 30},
+    # Python — RAG-focused parsers (the new wave)
+    {"name": "pymupdf4llm",    "source_type": "deepwiki", "identifier": "pymupdf/pymupdf4llm",   "refresh_ttl_days": 14},
+    {"name": "MarkItDown",     "source_type": "context7", "identifier": "/microsoft/markitdown", "refresh_ttl_days": 14},
+    {"name": "Docling",        "source_type": "context7", "identifier": "/docling-project/docling","refresh_ttl_days": 14},
+    {"name": "MinerU",         "source_type": "deepwiki", "identifier": "opendatalab/MinerU",    "refresh_ttl_days": 14},
+    {"name": "Unstructured",   "source_type": "deepwiki", "identifier": "Unstructured-IO/unstructured","refresh_ttl_days": 14},
+    # JS / TS
+    {"name": "PDF.js",         "source_type": "context7", "identifier": "/mozilla/pdf.js",       "refresh_ttl_days": 30},
+    {"name": "pdf-lib",        "source_type": "deepwiki", "identifier": "Hopding/pdf-lib",       "refresh_ttl_days": 60},
+    {"name": "react-pdf",      "source_type": "context7", "identifier": "/wojtekmaj/react-pdf",  "refresh_ttl_days": 60},
+    # .NET (C#)
+    {"name": "QuestPDF",       "source_type": "deepwiki", "identifier": "QuestPDF/QuestPDF",     "refresh_ttl_days": 30},
+    {"name": "iText (Java)",   "source_type": "context7", "identifier": "/itext/itext-java",     "refresh_ttl_days": 30},
+    {"name": "PDFsharp",       "source_type": "deepwiki", "identifier": "empira/PDFsharp",       "refresh_ttl_days": 60},
+    # Java
+    {"name": "Apache PDFBox",  "source_type": "context7", "identifier": "/apache/pdfbox",        "refresh_ttl_days": 30},
+    # Go
+    {"name": "unipdf",         "source_type": "deepwiki", "identifier": "unidoc/unipdf",         "refresh_ttl_days": 60},
+    # Self-hosted app (not a library, but documents the user-facing surface)
+    {"name": "Stirling-PDF",   "source_type": "deepwiki", "identifier": "Stirling-Tools/Stirling-PDF","refresh_ttl_days": 60},
+    # ------------------------------------------------------------------
+    # Rust language + ecosystem (2026-05-10).
+    # Core language docs + the most-used ecosystem crates. Picked for
+    # breadth over depth on niche crates — generators benefit more from
+    # canonical sources than from ten variants of the same idea.
+    # ------------------------------------------------------------------
+    # Context7 returns API-doc-style entries that are too thin (~20
+    # sections each, ~125KB total across all 8) for a robust Rust KB.
+    # DeepWiki gives the full architectural docs.
+    # Rust core
+    {"name": "Rust language",      "source_type": "deepwiki", "identifier": "rust-lang/rust",          "refresh_ttl_days": 14},
+    {"name": "The Rust Book",      "source_type": "deepwiki", "identifier": "rust-lang/book",          "refresh_ttl_days": 30},
+    {"name": "Rust by Example",    "source_type": "deepwiki", "identifier": "rust-lang/rust-by-example","refresh_ttl_days": 30},
+    {"name": "Rust Reference",     "source_type": "deepwiki", "identifier": "rust-lang/reference",     "refresh_ttl_days": 30},
+    {"name": "Cargo",              "source_type": "deepwiki", "identifier": "rust-lang/cargo",         "refresh_ttl_days": 14},
+    # Async + data
+    {"name": "Tokio",              "source_type": "deepwiki", "identifier": "tokio-rs/tokio",          "refresh_ttl_days": 14},
+    {"name": "Serde",              "source_type": "deepwiki", "identifier": "serde-rs/serde",          "refresh_ttl_days": 30},
+    # Web frameworks
+    {"name": "Axum",               "source_type": "deepwiki", "identifier": "tokio-rs/axum",           "refresh_ttl_days": 14},
 ]
 
 
