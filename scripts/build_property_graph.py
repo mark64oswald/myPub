@@ -109,18 +109,27 @@ def _check_author_to_chapters(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def _check_concept_relations(conn: duckdb.DuckDBPyConnection) -> None:
-    """Syntax check: variable-length concept traversal (empty until Phase 2)."""
-    LOG.info("query: concept-[:concept_relates_to]* syntax check (expect 0 rows)")
+    """Smoke check: single-hop concept→concept traversal.
+
+    Avoids variable-length matches like ``->{1,3}`` — DuckPGQ's CSR builder
+    crashes (internal vector OOB) on those once concept_relation has
+    meaningful row counts. Single-hop covers the syntax check we actually
+    need; full prerequisite walks happen in `find_prerequisites` via a
+    recursive CTE rather than DuckPGQ.
+    """
+    LOG.info("query: concept-[:concept_relates_to]->concept smoke check")
     rows = conn.execute(
         """
         FROM GRAPH_TABLE (mypub
-            MATCH (c1:concept)-[r:concept_relates_to]->{1,3}(c2:concept)
+            MATCH (c1:concept)-[r:concept_relates_to]->(c2:concept)
             COLUMNS (c1.name AS from_name, c2.name AS to_name)
         )
         LIMIT 5
         """
     ).fetchall()
-    LOG.info("    %d concept→concept paths (0 expected before Phase 2)", len(rows))
+    LOG.info("    %d concept→concept edges sampled", len(rows))
+    for from_name, to_name in rows:
+        LOG.info("    %s → %s", (from_name or "")[:40], (to_name or "")[:40])
 
 
 def main() -> int:

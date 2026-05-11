@@ -258,6 +258,18 @@ def _clean_filename_title(filepath: Path) -> str:
     return stem or filepath.stem
 
 
+def _strip_personalization_suffix(title: str) -> str:
+    """Drop a trailing publisher-side personalization stamp like ' (for <name>)'.
+
+    Many ePub vendors stamp the buyer's name into DC:title for piracy-tracing,
+    yielding "Foo Bar (for Jane Doe)". The suffix carries no editorial value
+    and pollutes search/display, so strip it here.
+    """
+    import re  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+    cleaned = re.sub(r"\s+\(for [^)]+\)\s*$", "", title).strip()
+    return cleaned or title
+
+
 def _book_metadata(book: epub.EpubBook, filepath: Path) -> dict:
     """Pull the metadata we care about out of an ePub.
 
@@ -270,7 +282,7 @@ def _book_metadata(book: epub.EpubBook, filepath: Path) -> dict:
     if not raw_title or raw_title.lower() == "(blank)":
         title = _clean_filename_title(filepath)
     else:
-        title = raw_title
+        title = _strip_personalization_suffix(raw_title)
 
     creators = book.get_metadata("DC", "creator")
     authors = [c[0] for c in creators] if creators else []
