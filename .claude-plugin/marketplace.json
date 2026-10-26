@@ -1,0 +1,12 @@
+{
+  "name": "mypub-local",
+  "owner": { "name": "Mark Oswald" },
+  "description": "Local marketplace for the myPub plugin. Add it from the repo path so the plugin loads in place.",
+  "plugins": [
+    {
+      "name": "mypub",
+      "source": "./plugin",
+      "description": "myPub knowledge-base search and /kb-* generators"
+    }
+  ]
+}
