@@ -100,3 +100,17 @@ def test_prep_process_apply_round_trip(catalog, tmp_path):
     assert rel == "CONTRADICTS" and conf == pytest.approx(0.533, abs=1e-3)
     assert expl.startswith("[superseded]") and "ZooKeeper has been removed" in expl
     assert conn.execute("SELECT COUNT(*) FROM alignment_vote").fetchone()[0] == 6
+
+
+def test_batches_never_mix_sample_indexes_of_one_pair():
+    pairs = []
+    for eid in range(7):
+        p = rc.PairEntry(eid, 1, "c", 1, 1, "CONTRADICTS", 0.1, "", "", "b", None, "d")
+        p.samples = [{"prompt_path": f"{eid}_s{k}.txt", "result_path": f"{eid}_s{k}.json"}
+                     for k in range(3)]
+        pairs.append(p)
+    batches = rc.batch_by_sample(pairs, 3, 4)
+    assert sum(len(b) for b in batches) == 21
+    for b in batches:
+        assert len({j["prompt_path"].split("_s")[1] for j in b}) == 1
+        assert len({j["prompt_path"].split("_s")[0] for j in b}) == len(b)
