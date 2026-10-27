@@ -62,8 +62,11 @@ import skill_generation
 LOG = logging.getLogger("mypub-skills-factory")
 
 
-DEFAULT_OUTPUT_ROOT = "data/generated-packages"
-DEFAULT_PROMPT_ROOT = "data/skill-runs"
+# Anchored at the myPub repo root (not the process cwd) so the server
+# behaves the same when launched from another project via the plugin.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_OUTPUT_ROOT = str(_PROJECT_ROOT / "data" / "generated-packages")
+DEFAULT_PROMPT_ROOT = str(_PROJECT_ROOT / "data" / "skill-runs")
 
 
 # ---------------------------------------------------------------------------

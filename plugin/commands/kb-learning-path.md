@@ -13,6 +13,25 @@ LLM prose. Single MCP call produces the package. A future v2 will add
 sub-agent prose for "why this chapter" rationale and checkpoint
 questions.
 
+## Output location
+
+Every generator tool takes an `output_root` argument. Settle it before you
+call the tool:
+
+1. **The user named a folder** (e.g. `--out docs/kb`, "save it under
+   design/"): resolve it against the current project
+   (`${CLAUDE_PROJECT_DIR}`) and pass the **absolute** path.
+2. **No folder named, and the current project is not the myPub repo:**
+   ask once, recommending the first option:
+   - `${CLAUDE_PROJECT_DIR}/mypub-packages/` (keep it with this project)
+   - myPub's own `data/generated-packages/` (the shared archive)
+3. **Inside the myPub repo, or the user says "default":** omit
+   `output_root`. The server then uses `$MYPUB_OUTPUT` if set, otherwise
+   `<myPub>/data/generated-packages/`.
+
+Always pass an absolute path. The server resolves relative paths against
+the myPub repo, not against the project you are working in.
+
 ## How to run
 
 ### Step 1 — Parse the request
@@ -38,7 +57,7 @@ Call the `generate_learning_path` MCP tool from `mypub-kb` with:
 - `target` — the user's input verbatim
 - `start`, `max_depth`, `max_concepts`, `target_stage_size` per
   the user's flags
-- Leave `output_root` at the default
+- `output_root` per the Output location section above
 
 ### Step 3 — Surface the result
 
