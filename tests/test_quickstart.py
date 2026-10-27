@@ -68,3 +68,19 @@ def test_hello_fallback_rejects_install_command():
 
 def test_python_from_import_is_not_noise():
     assert not qs._is_noise_block(_b("x = 1\nfrom foo import bar\nprint(bar)"))
+
+
+def test_install_ranking_prefers_a_command_for_this_library():
+    other = qs._CodeBlock("bash", "pip install google-cloud-bigquery", 1)
+    own = qs._CodeBlock("bash", "pip install polars", 2)
+    assert qs._rank_install_blocks([other, own], "Polars")[0] is own
+    assert not qs._installs_library(other, "Polars")
+
+
+def test_name_keys_cover_common_package_spellings():
+    assert qs._installs_library(qs._CodeBlock("bash", "pip install delta-spark", 1), "Delta Lake")
+    assert qs._installs_library(qs._CodeBlock("bash", "pip3 install torch torchvision", 1), "PyTorch")
+    assert qs._installs_library(qs._CodeBlock("bash", "pip install pymupdf", 1), "PyMuPDF")
+    assert qs._installs_library(qs._CodeBlock("bash", "cargo add polars", 1), "pola-rs/polars")
+    assert not qs._installs_library(qs._CodeBlock("bash", "pip install apache-airflow", 1),
+                                    "Apache Kafka")

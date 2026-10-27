@@ -20,9 +20,11 @@ Output package: data/generated-packages/library-landscape-<slug>/
   jobs/<slug>.md  per-job detail (one per job)
   _decisions.md   "if building X, start with Y" shortcuts
 
-Coverage score per (candidate, job) cell: count of concepts that appear
-in BOTH the candidate's doc_source neighborhood AND the job's concept
-cluster. The matrix sorts candidates per job by this score.
+Coverage per (candidate, job) cell: count of concepts that appear in
+BOTH the candidate's doc_source neighborhood AND the job's concept
+cluster. Candidates are ranked by a score that weights each shared
+concept by rarity and divides by the candidate's neighborhood size
+(BM25-style, ``LENGTH_NORM_B``), so a big doc corpus doesn't win by size.
 """
 from __future__ import annotations
 
@@ -112,6 +114,11 @@ class _Decomposition:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+# BM25's b: 0 = no length normalisation, 1 = full (score ∝ share of the
+# candidate's own concepts that the job uses).
+LENGTH_NORM_B = 0.75
 
 
 def _slugify(name: str) -> str:
@@ -585,6 +592,18 @@ class LandscapeDecomposer:
             df = concept_doc_freq.get(cid, 1)
             return 1.0 / math.log(df + 1.0)
 
+        # Rarity alone doesn't stop a huge doc corpus from winning every
+        # job: more concepts means more rare ones too (FastMCP led every
+        # job in the 2026-10-27 overview run). BM25-style length
+        # normalisation divides by the candidate's neighborhood size
+        # relative to the average, softened by LENGTH_NORM_B.
+        sizes = [len(cs) for cs in cand_concepts.values() if cs]
+        avg_size = (sum(sizes) / len(sizes)) if sizes else 1.0
+
+        def _length_norm(name: str) -> float:
+            n = len(cand_concepts.get(name, ())) or avg_size
+            return 1.0 - LENGTH_NORM_B + LENGTH_NORM_B * (n / avg_size)
+
         matrix: list[_CandidateForJob] = []
         for job in jobs:
             for c in candidates:
@@ -596,7 +615,7 @@ class LandscapeDecomposer:
                     ))
                     continue
                 # Weighted score
-                weighted = sum(_rarity_weight(cid) for cid in shared)
+                weighted = sum(_rarity_weight(cid) for cid in shared) / _length_norm(c.name)
                 # Order top concepts by rarity (rarest first) — these are
                 # the highest-signal shared concepts
                 ranked = sorted(shared, key=_rarity_weight, reverse=True)[:5]

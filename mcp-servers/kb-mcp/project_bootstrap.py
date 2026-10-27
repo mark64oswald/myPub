@@ -634,6 +634,77 @@ def _short(text: str, limit: int = 300) -> str:
     return cut.rstrip(",.;:") + "…"
 
 
+_CTX_STOPWORDS = {
+    "the", "and", "for", "with", "from", "into", "that", "this", "using", "use",
+    "build", "project", "app", "application", "service", "system", "data", "new",
+    "create", "make", "via", "over", "based",
+}
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9+#]+", (text or "").lower())
+            if len(w) >= 3 and w not in _CTX_STOPWORDS}
+
+
+def _disambiguate(
+    conn: duckdb.DuckDBPyConnection, name: str, query: str, default_cid: Optional[int],
+) -> tuple[Optional[int], Optional[str]]:
+    """Pick the concept a short name means *in this request*.
+
+    ``resolve_lookup_only`` returns the most-connected concept with that
+    name, so "ADT" in an HL7 request resolved to a SAS date variable. Here
+    every concept named ``name`` (or aliased to it), plus concepts whose
+    name contains it as a word ("HL7 ADT message"), is scored against the
+    request's other words: in the candidate's name (×2), its description
+    and its graph neighbours' names. Extra name words the request doesn't
+    use cost a little. With no context signal the default stands.
+    Returns (concept_id, note-or-None).
+    """
+    token = name.strip().lower()
+    ctx = _words(query) - _words(name)
+    if not ctx:
+        return default_cid, None
+    rows = conn.execute(
+        """
+        SELECT DISTINCT c.concept_id, c.name, COALESCE(c.description, '')
+          FROM concept c
+          LEFT JOIN concept_alias a ON a.concept_id = c.concept_id
+         WHERE lower(c.name) = ? OR lower(a.alias) = ?
+            OR (regexp_matches(lower(c.name), '(^|[^a-z0-9])' || ? || '([^a-z0-9]|$)')
+                AND length(c.name) <= 60)
+         LIMIT 50
+        """,
+        [token, token, re.escape(token)],
+    ).fetchall()
+    if len(rows) <= 1 and (not rows or int(rows[0][0]) == default_cid):
+        return default_cid, None
+
+    def score(cid: int, cname: str, desc: str) -> float:
+        name_words = _words(cname) - _words(name)
+        neigh = conn.execute(
+            """
+            SELECT n.name FROM concept_relation cr
+              JOIN concept n ON n.concept_id = CASE WHEN cr.from_concept_id = ?
+                                                     THEN cr.to_concept_id
+                                                     ELSE cr.from_concept_id END
+             WHERE cr.from_concept_id = ? OR cr.to_concept_id = ?
+             GROUP BY n.name ORDER BY COUNT(*) DESC LIMIT 40
+            """, [cid, cid, cid]).fetchall()
+        neigh_words = set().union(*(_words(r[0]) for r in neigh)) if neigh else set()
+        return (2 * len(ctx & name_words) + len(ctx & _words(desc))
+                + min(3, len(ctx & neigh_words))
+                - 0.5 * len(name_words - ctx)
+                + (0.5 if cname.strip().lower() == token else 0.0))
+
+    scored = sorted(((score(int(r[0]), r[1], r[2]), int(r[0]), r[1]) for r in rows),
+                    key=lambda t: (-t[0], t[1]))
+    best_score, best_cid, best_name = scored[0]
+    if best_score <= 0.5 or best_cid == default_cid:
+        return default_cid, None
+    return best_cid, (f"{name!r} is ambiguous; picked {best_name!r} from the "
+                      f"request's context")
+
+
 class StackComposeDecomposer:
     """Resolve named technologies + patterns from the request and
     pull related procedures + doc_sections.
@@ -663,10 +734,12 @@ class StackComposeDecomposer:
         elements: list[_StackElement] = []
         notes: list[str] = []
         for name in all_named:
-            cid = resolver.resolve_lookup_only(name)
+            cid, why = _disambiguate(conn, name, query, resolver.resolve_lookup_only(name))
             if cid is None:
                 notes.append(f"named element {name!r} not found; skipped")
                 continue
+            if why:
+                notes.append(why)
             row = conn.execute(
                 "SELECT name, concept_type, description FROM concept "
                 "WHERE concept_id = ?", [cid],
