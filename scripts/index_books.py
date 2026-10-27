@@ -114,6 +114,21 @@ def _toc_fragments_per_file(toc: list[dict]) -> dict[str, set[str]]:
     return out
 
 
+def _flatten_pdf2htmlex_lines(soup: BeautifulSoup) -> None:
+    """Collapse pdf2htmlEX line divs to one text node each, in place.
+
+    PDF-to-ePub conversions made with pdf2htmlEX position every glyph run
+    in its own span, with empty kerning spans mid-word (``Int<span class="_
+    _0"></span>ro…``). Joining text nodes with newlines then shreds every
+    word. Each ``div.t`` is one rendered line, so take its text with no
+    separator.
+    """
+    if soup.find(id="pdf-main") is None:
+        return
+    for line in soup.find_all("div", class_="t"):
+        line.string = line.get_text("")
+
+
 def _slice_html_by_anchors(
     html_bytes: bytes, fragments: set[str]
 ) -> dict[str, str]:
@@ -139,6 +154,7 @@ def _slice_html_by_anchors(
     soup = BeautifulSoup(html_bytes, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
+    _flatten_pdf2htmlex_lines(soup)
 
     real_fragments = {f for f in fragments if f}
 
@@ -552,16 +568,23 @@ def _spine_ncx(zf: zipfile.ZipFile) -> Optional[tuple[str, bytes]]:
         m = re.search(r"<title[^>]*>(.*?)</title>", head, re.S | re.I)
         title = re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
         title = title or f"Section {n}"
-        points.append(
+        points.append((n, title, href))
+    if not points:
+        return None
+    # pdf2htmlEX books give every file the book's title; number them.
+    titles = [t for _, t, _ in points]
+    rendered = []
+    for n, title, href in points:
+        if titles.count(title) > 1:
+            title = f"{title} ({n})"
+        rendered.append(
             f'<navPoint id="np{n}" playOrder="{n}"><navLabel><text>{escape(title)}</text>'
             f'</navLabel><content src="{escape(href)}"/></navPoint>'
         )
-    if not points:
-        return None
     ncx = ('<?xml version="1.0" encoding="UTF-8"?>'
            '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
            '<head/><docTitle><text>toc</text></docTitle><navMap>'
-           + "".join(points) + "</navMap></ncx>")
+           + "".join(rendered) + "</navMap></ncx>")
     return ncx_path, ncx.encode("utf-8")
 
 
