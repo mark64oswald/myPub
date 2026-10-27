@@ -229,6 +229,19 @@ def test_bootstrap_picks_the_sense_of_a_short_name_from_the_request(catalog):
     # even though "HL7 ADT message" contains the word and names more context.
     assert by_name.get("HL7") == hl7
 
+    # A same-named duplicate with less coverage doesn't displace the default,
+    # even when only the duplicate ties to the request.
+    py_tool = _seed_concept(catalog, "Python", "Tool", "")
+    lang = _seed_concept(catalog, "Programming language", "Concept", "")
+    for _ in range(4):
+        _add_rel(catalog, py_tool, lang, "IS_A")
+    py_fw = _seed_concept(catalog, "Python", "Framework", "Used for FHIR services.")
+    res3 = _resolver({"python": py_tool})
+    d3 = pb.StackComposeDecomposer().decompose(
+        catalog, res3, "Write FHIR Encounters from Python", technologies=["Python"])
+    assert [el.concept_id for el in d3.elements] == [py_tool]
+    assert py_fw != py_tool
+
     # With no context words that point elsewhere, the resolver's pick stands.
     d2 = pb.StackComposeDecomposer().decompose(
         catalog, res, "ADT", technologies=["ADT"])

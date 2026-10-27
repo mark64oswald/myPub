@@ -721,6 +721,12 @@ def _disambiguate(
     best_score, _cov, best_cid, best_name = max(scored, key=lambda t: (t[0], t[1], -t[2]))
     if best_score < 1.0:
         return default_cid, None
+    # Same name, different type ("Python" Tool vs Framework): that's a
+    # duplicate more often than a different sense, so a much better-covered
+    # default keeps its place.
+    if (default_cid is not None and best_name.strip().lower() == token
+            and _coverage(conn, default_cid) >= 2 * _cov):
+        return default_cid, None
     return best_cid, (f"{name!r} is ambiguous; picked {best_name!r} from the "
                       f"request's context")
 
