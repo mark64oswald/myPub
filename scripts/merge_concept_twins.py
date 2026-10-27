@@ -66,6 +66,13 @@ _PAREN = re.compile(r"^(.+?)\s*\(([^()]+)\)\s*$")
 # ---------------------------------------------------------------------------
 
 
+def expansion_key(name: str) -> str:
+    """Spelling key without filler words: 'Extract, Transform, and Load'
+    and 'Extract-Transform-Load' are one expansion."""
+    words = [w for w in re.split(r"[\s\-/,]+", name.strip()) if w and w.lower() not in _INITIAL_SKIP]
+    return spelling_key(" ".join(words))
+
+
 def spelling_key(name: str) -> str:
     k = "".join(ch for ch in name.lower() if ch.isalnum())
     return k[:-1] if len(k) > 4 and k.endswith("s") else k
@@ -87,6 +94,19 @@ def acronym_key(name: str) -> Optional[str]:
     if not _ACRONYM.match(n) or sum(ch.isupper() for ch in n) < 2:
         return None
     return (n[:-1] if n.endswith("s") and n[:-1].isupper() else n).upper()
+
+
+def _parenthetical_consistent(outer: str, inner: str) -> bool:
+    """'Resource Description Framework Schema (RDF)' is a labelling slip, not
+    a synonym: when one side is an acronym and the other a multi-word name,
+    the initials must agree."""
+    if min(sum(ch.isalnum() for ch in p) for p in (outer, inner)) < 2:
+        return False  # 'RDF(S)' is a family name, not 'RDF' = 'S'
+    for long, short in ((outer, inner), (inner, outer)):
+        ak, ini = acronym_key(short.strip()), initials(long)
+        if ak and ini and ini != ak:
+            return False
+    return True
 
 
 def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
@@ -113,14 +133,20 @@ def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
         if a != b:
             pairs.add((min(a, b), max(a, b), rule))
 
+    by_acronym: dict[str, list[int]] = defaultdict(list)
     for cid, ak in acronyms:
+        by_acronym[ak].append(cid)
         for other in by_initials.get(ak, []):
             add(cid, other, "acronym")
+    for ids in by_acronym.values():          # 'RNN' / 'RNNs'
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                add(a, b, "acronym-variant")
     for cid, name in rows:
         m = _PAREN.match(name or "")
-        if m:
+        if m and _parenthetical_consistent(*m.groups()):
             for part in m.groups():
-                for other in by_lower.get(part.strip().lower(), []):
+                for other in by_spelling.get(spelling_key(part), []):
                     add(cid, other, "parenthetical")
     for ids in by_spelling.values():
         if 1 < len(ids) <= 6:
@@ -128,8 +154,13 @@ def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
             for i, a in enumerate(ids):
                 for b in ids[i + 1:]:
                     # Same-name twins are dedupe_concepts.py's job.
-                    if names[a].strip().lower() != names[b].strip().lower():
-                        add(a, b, "spelling")
+                    if names[a].strip().lower() == names[b].strip().lower():
+                        continue
+                    # 'RDFs' (plural of RDF) vs 'RDFS' (RDF Schema)
+                    ka, kb = acronym_key(names[a]), acronym_key(names[b])
+                    if ka and kb and ka != kb:
+                        continue
+                    add(a, b, "spelling")
     return sorted(pairs)
 
 
@@ -154,24 +185,61 @@ def _coverage(conn: duckdb.DuckDBPyConnection, ids: list[int]) -> dict[int, int]
 
 
 def _evidence(conn, a: int, b: int, rule: str, min_sim: float) -> Optional[dict]:
+    na, da, nb, db = conn.execute(
+        "SELECT a.name, COALESCE(a.description, ''), b.name, COALESCE(b.description, '') "
+        "FROM concept a, concept b WHERE a.concept_id = ? AND b.concept_id = ?",
+        [a, b]).fetchone()
     row = conn.execute(
         """
         SELECT array_cosine_similarity(ea.embedding, eb.embedding)
           FROM concept_embedding ea, concept_embedding eb
          WHERE ea.concept_id = ? AND eb.concept_id = ?
         """, [a, b]).fetchone()
-    threshold = ACRONYM_MIN_SIM if rule == "acronym" else min_sim
+    threshold = ACRONYM_MIN_SIM if rule.startswith("acronym") else min_sim
+    short = min(len(acronym_key(n) or "~~~") for n in (na, nb))
+    if rule == "acronym" and short < 3:
+        threshold = max(threshold, min_sim)  # 'DC', 'ML': two letters say little
     if row is not None and row[0] is not None:
         sim = float(row[0])
         return {"cosine": round(sim, 3)} if sim >= threshold else None
     # No embedding on one side: fall back to a description cross-mention.
-    na, da, nb, db = conn.execute(
-        "SELECT a.name, COALESCE(a.description, ''), b.name, COALESCE(b.description, '') "
-        "FROM concept a, concept b WHERE a.concept_id = ? AND b.concept_id = ?",
-        [a, b]).fetchone()
-    if na.lower() in db.lower() or nb.lower() in da.lower():
+    if _mentions(na, db) or _mentions(nb, da):
         return {"description_mentions": True}
     return None
+
+
+def _mentions(name: str, text: str) -> bool:
+    """Whole-word mention, so 'RDF' isn't found inside 'RDFS'."""
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", text, re.I) is not None
+
+
+def _one_expansion_per_acronym(confirmed: list, names: dict[int, str]) -> list:
+    """An acronym with several confirmed expansions ('SQL' → Structured /
+    Single Query Language, 'ORM' → Mapping / Mismatch / Model) keeps only
+    its most similar one; otherwise union-find chains unrelated ideas
+    through the shared acronym. Acronym variants ('RNN' / 'RNNs') share a
+    key, and spellings of one expansion ('Recurrent Neural Network(s)')
+    count as one, so a single group comes out per idea."""
+    def split(a: int, b: int) -> tuple[int, int]:
+        return (a, b) if acronym_key(names[a]) else (b, a)
+
+    best: dict[str, tuple[float, str]] = {}
+    for a, b, rule, ev in confirmed:
+        if rule != "acronym":
+            continue
+        acr, exp = split(a, b)
+        key, exp_key = acronym_key(names[acr]), expansion_key(names[exp])
+        score = ev.get("cosine", 0.0)
+        if key not in best or score > best[key][0]:
+            best[key] = (score, exp_key)
+    kept = []
+    for a, b, rule, ev in confirmed:
+        if rule == "acronym":
+            acr, exp = split(a, b)
+            if best[acronym_key(names[acr])][1] != expansion_key(names[exp]):
+                continue
+        kept.append((a, b, rule, ev))
+    return kept
 
 
 def find_groups(conn: duckdb.DuckDBPyConnection, *, min_sim: float = DEFAULT_MIN_SIM,
@@ -185,6 +253,7 @@ def find_groups(conn: duckdb.DuckDBPyConnection, *, min_sim: float = DEFAULT_MIN
         ev = _evidence(conn, a, b, rule, min_sim)
         if ev is not None:
             confirmed.append((a, b, rule, ev))
+    confirmed = _one_expansion_per_acronym(confirmed, names)
 
     parent: dict[int, int] = {}
 
@@ -297,6 +366,12 @@ def do_merge(args: argparse.Namespace) -> int:
     if args.only:
         keep = {int(x) for x in args.only.split(",")}
         groups = [g for i, g in enumerate(groups) if i in keep]
+    if args.skip_concepts:
+        skip = {int(x) for x in args.skip_concepts.split(",")}
+        before = len(groups)
+        groups = [g for g in groups
+                  if not ({g["canonical"]["concept_id"]} | {t["concept_id"] for t in g["twins"]}) & skip]
+        print(f"skipped {before - len(groups)} group(s) holding a --skip-concepts id")
     work = [(t["concept_id"], g["canonical"]["concept_id"]) for g in groups for t in g["twins"]]
     print(f"{len(work)} twin(s) in {len(groups)} group(s)")
     if not args.write:
@@ -351,7 +426,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     m = sub.add_parser("merge")
     m.add_argument("--plan", type=Path, required=True)
     m.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
-    m.add_argument("--only")
+    m.add_argument("--only", help="comma-separated group indices from the plan")
+    m.add_argument("--skip-concepts",
+                   help="comma-separated concept ids; any group containing one is left alone")
     m.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     return do_find(args) if args.cmd == "find" else do_merge(args)

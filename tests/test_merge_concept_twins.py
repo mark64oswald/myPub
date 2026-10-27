@@ -92,3 +92,58 @@ def test_merge_moves_children_and_leaves_an_alias(world, tmp_path):
     assert conn.execute("SELECT concept_id FROM concept_alias WHERE alias = 'RAG'").fetchone()[0] == long
     trail = json.loads(plan.with_suffix(".merged.json").read_text())
     assert trail["merged_into"] == {str(rag): long} and len(trail["embeddings"]) == 1
+
+
+def test_mismatched_parenthetical_is_not_a_twin():
+    assert not mct._parenthetical_consistent("Resource Description Framework Schema", "RDF")
+    assert mct._parenthetical_consistent("Retrieval Augmented Generation", "RAG")
+    rows = [(1, "RDF"), (2, "Resource Description Framework Schema (RDF)")]
+    assert mct.candidate_pairs(rows) == []
+
+
+def test_whole_word_description_mention():
+    assert mct._mentions("RDF", "Built on RDF triples.")
+    assert not mct._mentions("RDF", "RDFS adds classes.")
+
+
+def test_acronym_keeps_only_its_closest_expansion():
+    names = {1: "SQL", 2: "Structured Query Language", 3: "Single Query Language",
+             4: "SQL (Structured Query Language)"}
+    confirmed = [(1, 2, "acronym", {"cosine": 0.9}), (1, 3, "acronym", {"cosine": 0.7}),
+                 (1, 4, "parenthetical", {"cosine": 0.95})]
+    kept = mct._one_expansion_per_acronym(confirmed, names)
+    assert [(a, b) for a, b, *_ in kept] == [(1, 2), (1, 4)]
+
+
+def test_family_parenthetical_and_plural_acronym_guards():
+    rows = [(1, "RDF"), (2, "RDF(S)"), (3, "RDFS"), (4, "RDFs"), (5, "RNN"), (6, "RNNs")]
+    pairs = {(a, b, r) for a, b, r in mct.candidate_pairs(rows)}
+    assert not any({a, b} == {1, 2} for a, b, _ in pairs)   # RDF(S) isn't RDF
+    assert (3, 4, "spelling") not in pairs                   # RDFS isn't RDFs
+    assert (1, 4, "acronym-variant") in pairs and (5, 6, "acronym-variant") in pairs
+
+
+def test_acronym_variants_and_expansion_spellings_stay_together():
+    names = {1: "RNN", 2: "RNNs", 3: "Recurrent Neural Network",
+             4: "Recurrent Neural Networks", 5: "Random Neuron Net"}
+    confirmed = [(1, 3, "acronym", {"cosine": 0.90}), (2, 4, "acronym", {"cosine": 0.85}),
+                 (1, 5, "acronym", {"cosine": 0.62}), (1, 2, "acronym-variant", {"cosine": 0.95})]
+    kept = {(a, b) for a, b, *_ in mct._one_expansion_per_acronym(confirmed, names)}
+    assert kept == {(1, 3), (2, 4), (1, 2)}
+
+
+def test_expansion_key_ignores_filler_and_punctuation():
+    assert mct.expansion_key("Extract, Transform, and Load") == mct.expansion_key("Extract-Transform-Load")
+    rows = [(1, "ETL (Extract, Transform, Load)"), (2, "Extract Transform Load")]
+    assert (1, 2, "parenthetical") in set(mct.candidate_pairs(rows))
+
+
+def test_merge_skip_concepts_leaves_flagged_groups(world, tmp_path):
+    conn, ids = world
+    plan = tmp_path / "twins.json"
+    plan.write_text(json.dumps(mct.find_groups(conn)))
+    conn.close()
+    assert mct.main(["merge", "--plan", str(plan), "--catalog", str(tmp_path / "c.ddb"),
+                     "--skip-concepts", str(ids["rag"]), "--write"]) == 0
+    conn = duckdb.connect(str(tmp_path / "c.ddb"))
+    assert conn.execute("SELECT COUNT(*) FROM concept WHERE concept_id = ?", [ids["rag"]]).fetchone()[0] == 1
