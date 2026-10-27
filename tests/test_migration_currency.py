@@ -159,6 +159,30 @@ def test_migration_with_contradicts_edges_renders_diffs(catalog, tmp_path):
     assert "Tied Concept" in text
 
 
+def test_migration_dedupes_same_pair_under_two_concepts(catalog, tmp_path):
+    """One disagreement recorded under two neighbouring concepts is one diff."""
+    sid = _seed_concept(catalog, "Mirth Connect")
+    other = _seed_concept(catalog, "Licensing")
+    catalog.execute(
+        "INSERT INTO concept_relation (from_concept_id, to_concept_id, "
+        "relation_type, source_type, source_id, confidence) "
+        "VALUES (?, ?, 'CITES', 'chapter', 1, 0.9)", [sid, other],
+    )
+    ds_id = _seed_doc_source(catalog, "Mirth")
+    sec = _seed_section(catalog, ds_id, _seed_snapshot(catalog, ds_id, "h1"), heading="License")
+    chap = _seed_chapter(catalog, "Mirth Book", "Open source")
+    for cid in (sid, other):
+        _seed_alignment_edge(catalog, from_sec=sec, to_chapter=chap,
+                             concept_id=cid, relation="CONTRADICTS")
+    pid, _, _ = mg.make_migration_generator().run_deterministic(
+        catalog, _resolver({"mirth connect": sid}), "Mirth Connect",
+        output_root=str(tmp_path),
+    )
+    n = catalog.execute("SELECT COUNT(*) FROM generated_unit WHERE package_id = ?",
+                        [pid]).fetchone()[0]
+    assert n == 1
+
+
 def test_migration_idempotent(catalog, tmp_path):
     sid = _seed_concept(catalog, "Apache Kafka")
     res = _resolver({"apache kafka": sid})
@@ -232,6 +256,22 @@ def test_currency_volatility_higher_for_hash_churn(catalog, tmp_path):
     d = cr.SnapshotHistoryDecomposer().decompose(catalog, res, "all")
     by_name = {r.name: r for r in d.sources}
     assert by_name["Churning"].volatility_score > by_name["Stable"].volatility_score
+
+
+def test_currency_volatility_tracks_how_much_content_changed(catalog, tmp_path):
+    """Two sources with one hash change each: the one that rewrote more sections ranks higher."""
+    t0, t1 = datetime(2026, 5, 1), datetime(2026, 10, 26)
+    for name, changed in (("Small", 1), ("Big", 4)):
+        ds = _seed_doc_source(catalog, name)
+        old = _seed_snapshot(catalog, ds, f"{name}-old", t0)
+        new = _seed_snapshot(catalog, ds, f"{name}-new", t1)
+        for i in range(4):
+            _seed_section(catalog, ds, old, heading=f"H{i}")
+            _seed_section(catalog, ds, new, heading=f"H{i}" + ("-v2" if i < changed else ""))
+    d = cr.make_currency_report_generator().decomposer.decompose(catalog, _resolver({}), "all")
+    scores = {r.name: r.volatility_score for r in d.sources}
+    assert scores["Big"] > scores["Small"] > 0
+    assert [r.name for r in d.sources][:2] == ["Big", "Small"]
 
 
 def test_currency_renders_per_source_timeline(catalog, tmp_path):

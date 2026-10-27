@@ -93,6 +93,8 @@ def _parenthetical_consistent(outer: str, inner: str) -> bool:
     """'Resource Description Framework Schema (RDF)' is a labelling slip, not
     a synonym: when one side is an acronym and the other a multi-word name,
     the initials must agree."""
+    if min(sum(ch.isalnum() for ch in p) for p in (outer, inner)) < 2:
+        return False  # 'RDF(S)' is a family name, not 'RDF' = 'S'
     for long, short in ((outer, inner), (inner, outer)):
         ak, ini = acronym_key(short.strip()), initials(long)
         if ak and ini and ini != ak:
@@ -124,9 +126,15 @@ def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
         if a != b:
             pairs.add((min(a, b), max(a, b), rule))
 
+    by_acronym: dict[str, list[int]] = defaultdict(list)
     for cid, ak in acronyms:
+        by_acronym[ak].append(cid)
         for other in by_initials.get(ak, []):
             add(cid, other, "acronym")
+    for ids in by_acronym.values():          # 'RNN' / 'RNNs'
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                add(a, b, "acronym-variant")
     for cid, name in rows:
         m = _PAREN.match(name or "")
         if m and _parenthetical_consistent(*m.groups()):
@@ -139,8 +147,13 @@ def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
             for i, a in enumerate(ids):
                 for b in ids[i + 1:]:
                     # Same-name twins are dedupe_concepts.py's job.
-                    if names[a].strip().lower() != names[b].strip().lower():
-                        add(a, b, "spelling")
+                    if names[a].strip().lower() == names[b].strip().lower():
+                        continue
+                    # 'RDFs' (plural of RDF) vs 'RDFS' (RDF Schema)
+                    ka, kb = acronym_key(names[a]), acronym_key(names[b])
+                    if ka and kb and ka != kb:
+                        continue
+                    add(a, b, "spelling")
     return sorted(pairs)
 
 
@@ -171,7 +184,7 @@ def _evidence(conn, a: int, b: int, rule: str, min_sim: float) -> Optional[dict]
           FROM concept_embedding ea, concept_embedding eb
          WHERE ea.concept_id = ? AND eb.concept_id = ?
         """, [a, b]).fetchone()
-    threshold = ACRONYM_MIN_SIM if rule == "acronym" else min_sim
+    threshold = ACRONYM_MIN_SIM if rule.startswith("acronym") else min_sim
     if row is not None and row[0] is not None:
         sim = float(row[0])
         return {"cosine": round(sim, 3)} if sim >= threshold else None
@@ -194,20 +207,26 @@ def _one_expansion_per_acronym(confirmed: list, names: dict[int, str]) -> list:
     """An acronym with several confirmed expansions ('SQL' → Structured /
     Single Query Language, 'ORM' → Mapping / Mismatch / Model) keeps only
     its most similar one; otherwise union-find chains unrelated ideas
-    through the shared acronym."""
-    best: dict[int, tuple[float, int]] = {}
+    through the shared acronym. Acronym variants ('RNN' / 'RNNs') share a
+    key, and spellings of one expansion ('Recurrent Neural Network(s)')
+    count as one, so a single group comes out per idea."""
+    def split(a: int, b: int) -> tuple[int, int]:
+        return (a, b) if acronym_key(names[a]) else (b, a)
+
+    best: dict[str, tuple[float, str]] = {}
     for a, b, rule, ev in confirmed:
         if rule != "acronym":
             continue
-        acr, exp = (a, b) if acronym_key(names[a]) else (b, a)
+        acr, exp = split(a, b)
+        key, exp_key = acronym_key(names[acr]), spelling_key(names[exp])
         score = ev.get("cosine", 0.0)
-        if acr not in best or score > best[acr][0]:
-            best[acr] = (score, exp)
+        if key not in best or score > best[key][0]:
+            best[key] = (score, exp_key)
     kept = []
     for a, b, rule, ev in confirmed:
         if rule == "acronym":
-            acr, exp = (a, b) if acronym_key(names[a]) else (b, a)
-            if best[acr][1] != exp:
+            acr, exp = split(a, b)
+            if best[acronym_key(names[acr])][1] != spelling_key(names[exp]):
                 continue
         kept.append((a, b, rule, ev))
     return kept

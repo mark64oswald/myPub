@@ -64,6 +64,23 @@ class _Decomposition:
     notes: list[str] = field(default_factory=list)
 
 
+def _section_churn(conn, newer: "_SnapshotEvent", older: "_SnapshotEvent") -> float:
+    """Share of sections that differ between two snapshots (0..1)."""
+    if newer.content_hash == older.content_hash:
+        return 0.0
+    row = conn.execute(
+        """
+        WITH a AS (SELECT DISTINCT md5(COALESCE(heading_text, '') || '\x1f' || COALESCE(content, '')) h
+                     FROM doc_section WHERE snapshot_id = ?),
+             b AS (SELECT DISTINCT md5(COALESCE(heading_text, '') || '\x1f' || COALESCE(content, '')) h
+                     FROM doc_section WHERE snapshot_id = ?)
+        SELECT (SELECT COUNT(*) FROM a JOIN b USING (h)),
+               (SELECT COUNT(*) FROM (SELECT h FROM a UNION SELECT h FROM b))
+        """, [newer.snapshot_id, older.snapshot_id]).fetchone()
+    both, union = int(row[0] or 0), int(row[1] or 0)
+    return 1.0 if union == 0 else 1.0 - both / union
+
+
 def _slugify(name: str) -> str:
     s = name.lower().replace(" ", "-")
     keep = "abcdefghijklmnopqrstuvwxyz0123456789-"
@@ -126,13 +143,16 @@ class SnapshotHistoryDecomposer:
             ]
             distinct_hashes = len({s.content_hash for s in snapshots})
             section_count = max((s.section_count for s in snapshots), default=0)
-            # Volatility = (distinct hashes) × log(snapshot count + 1).
-            # Single-snapshot sources have volatility 0; sources with
-            # frequent hash flips score higher.
+            # Volatility = (sum of section churn between consecutive
+            # snapshots) × log(snapshot count + 1). Churn is the share of
+            # sections that changed (Jaccard distance over section hashes),
+            # so two sources refreshed once each no longer tie just because
+            # their whole-snapshot hashes differ. A hash change between
+            # snapshots with no sections counts as full churn.
             import math
-            volatility = (
-                distinct_hashes - 1
-            ) * math.log(len(snapshots) + 1) if snapshots else 0.0
+            churn = sum(_section_churn(conn, newer, older)
+                        for newer, older in zip(snapshots, snapshots[1:]))
+            volatility = churn * math.log(len(snapshots) + 1) if snapshots else 0.0
             rows.append(_SourceRow(
                 doc_source_id=ds_id, name=name, source_type=stype,
                 identifier=ident,
