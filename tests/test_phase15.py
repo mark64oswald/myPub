@@ -201,6 +201,32 @@ def test_bootstrap_idempotent(catalog, bootstrap_corpus, tmp_path):
     assert pid1 == pid2
 
 
+def test_bootstrap_picks_the_sense_of_a_short_name_from_the_request(catalog):
+    """'ADT' in an HL7 request means the HL7 message, not the SAS date
+    variable that has more edges."""
+    sas = _seed_concept(catalog, "ADT", "Concept", "SAS analysis date variable in ADaM datasets.")
+    adam = _seed_concept(catalog, "ADaM", "Concept", "CDISC analysis datasets.")
+    for _ in range(5):
+        _add_rel(catalog, sas, adam, "RELATED_TO")
+    msg = _seed_concept(catalog, "HL7 ADT message", "Concept",
+                        "Admit, discharge and transfer events in HL7 v2.")
+    hl7 = _seed_concept(catalog, "HL7", "Concept", "Healthcare messaging standard.")
+    _add_rel(catalog, msg, hl7, "PART_OF")
+    res = _resolver({"adt": sas, "hl7": hl7})
+    d = pb.StackComposeDecomposer().decompose(
+        catalog, res, "Consume HL7 ADT feeds and write FHIR Encounters in Python",
+        technologies=["ADT", "HL7"])
+    by_name = {el.name: el.concept_id for el in d.elements}
+    assert by_name.get("HL7 ADT message") == msg
+    assert sas not in by_name.values()
+    assert any("ambiguous" in n for n in d.notes)
+
+    # With no context words that point elsewhere, the resolver's pick stands.
+    d2 = pb.StackComposeDecomposer().decompose(
+        catalog, res, "ADT", technologies=["ADT"])
+    assert [el.concept_id for el in d2.elements] == [sas]
+
+
 # ---------------------------------------------------------------------------
 # Refactoring Playbook
 # ---------------------------------------------------------------------------
