@@ -92,3 +92,24 @@ def test_merge_moves_children_and_leaves_an_alias(world, tmp_path):
     assert conn.execute("SELECT concept_id FROM concept_alias WHERE alias = 'RAG'").fetchone()[0] == long
     trail = json.loads(plan.with_suffix(".merged.json").read_text())
     assert trail["merged_into"] == {str(rag): long} and len(trail["embeddings"]) == 1
+
+
+def test_mismatched_parenthetical_is_not_a_twin():
+    assert not mct._parenthetical_consistent("Resource Description Framework Schema", "RDF")
+    assert mct._parenthetical_consistent("Retrieval Augmented Generation", "RAG")
+    rows = [(1, "RDF"), (2, "Resource Description Framework Schema (RDF)")]
+    assert mct.candidate_pairs(rows) == []
+
+
+def test_whole_word_description_mention():
+    assert mct._mentions("RDF", "Built on RDF triples.")
+    assert not mct._mentions("RDF", "RDFS adds classes.")
+
+
+def test_acronym_keeps_only_its_closest_expansion():
+    names = {1: "SQL", 2: "Structured Query Language", 3: "Single Query Language",
+             4: "SQL (Structured Query Language)"}
+    confirmed = [(1, 2, "acronym", {"cosine": 0.9}), (1, 3, "acronym", {"cosine": 0.7}),
+                 (1, 4, "parenthetical", {"cosine": 0.95})]
+    kept = mct._one_expansion_per_acronym(confirmed, names)
+    assert [(a, b) for a, b, *_ in kept] == [(1, 2), (1, 4)]

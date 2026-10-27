@@ -89,6 +89,17 @@ def acronym_key(name: str) -> Optional[str]:
     return (n[:-1] if n.endswith("s") and n[:-1].isupper() else n).upper()
 
 
+def _parenthetical_consistent(outer: str, inner: str) -> bool:
+    """'Resource Description Framework Schema (RDF)' is a labelling slip, not
+    a synonym: when one side is an acronym and the other a multi-word name,
+    the initials must agree."""
+    for long, short in ((outer, inner), (inner, outer)):
+        ak, ini = acronym_key(short.strip()), initials(long)
+        if ak and ini and ini != ak:
+            return False
+    return True
+
+
 def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
     """(id_a, id_b, rule) from (concept_id, name) rows; no evidence check."""
     by_initials: dict[str, list[int]] = defaultdict(list)
@@ -118,7 +129,7 @@ def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
             add(cid, other, "acronym")
     for cid, name in rows:
         m = _PAREN.match(name or "")
-        if m:
+        if m and _parenthetical_consistent(*m.groups()):
             for part in m.groups():
                 for other in by_lower.get(part.strip().lower(), []):
                     add(cid, other, "parenthetical")
@@ -169,9 +180,37 @@ def _evidence(conn, a: int, b: int, rule: str, min_sim: float) -> Optional[dict]
         "SELECT a.name, COALESCE(a.description, ''), b.name, COALESCE(b.description, '') "
         "FROM concept a, concept b WHERE a.concept_id = ? AND b.concept_id = ?",
         [a, b]).fetchone()
-    if na.lower() in db.lower() or nb.lower() in da.lower():
+    if _mentions(na, db) or _mentions(nb, da):
         return {"description_mentions": True}
     return None
+
+
+def _mentions(name: str, text: str) -> bool:
+    """Whole-word mention, so 'RDF' isn't found inside 'RDFS'."""
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", text, re.I) is not None
+
+
+def _one_expansion_per_acronym(confirmed: list, names: dict[int, str]) -> list:
+    """An acronym with several confirmed expansions ('SQL' → Structured /
+    Single Query Language, 'ORM' → Mapping / Mismatch / Model) keeps only
+    its most similar one; otherwise union-find chains unrelated ideas
+    through the shared acronym."""
+    best: dict[int, tuple[float, int]] = {}
+    for a, b, rule, ev in confirmed:
+        if rule != "acronym":
+            continue
+        acr, exp = (a, b) if acronym_key(names[a]) else (b, a)
+        score = ev.get("cosine", 0.0)
+        if acr not in best or score > best[acr][0]:
+            best[acr] = (score, exp)
+    kept = []
+    for a, b, rule, ev in confirmed:
+        if rule == "acronym":
+            acr, exp = (a, b) if acronym_key(names[a]) else (b, a)
+            if best[acr][1] != exp:
+                continue
+        kept.append((a, b, rule, ev))
+    return kept
 
 
 def find_groups(conn: duckdb.DuckDBPyConnection, *, min_sim: float = DEFAULT_MIN_SIM,
@@ -185,6 +224,7 @@ def find_groups(conn: duckdb.DuckDBPyConnection, *, min_sim: float = DEFAULT_MIN
         ev = _evidence(conn, a, b, rule, min_sim)
         if ev is not None:
             confirmed.append((a, b, rule, ev))
+    confirmed = _one_expansion_per_acronym(confirmed, names)
 
     parent: dict[int, int] = {}
 
