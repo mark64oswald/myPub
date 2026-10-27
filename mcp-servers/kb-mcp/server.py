@@ -29,15 +29,18 @@ Implementation notes
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+import duckdb
 from fastmcp import FastMCP
 
 # Make sibling modules importable when this file is run as a script.
@@ -232,15 +235,25 @@ _MODEL = None  # sentence-transformers model, shared by resolver and search
 _CATALOG_PATH: Path | None = None  # cached so writer-context can reopen
 
 
+def _load_model() -> None:
+    """Load the sentence-transformers model once per process."""
+    global _MODEL
+    if _MODEL is None:
+        # pylint: disable=import-outside-toplevel
+        from sentence_transformers import SentenceTransformer
+        LOG.info("loading sentence-transformers model …")
+        _MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+
 def _bootstrap() -> None:
     """Open the catalog, pre-warm the embedding model, build the resolver.
 
     Idempotent across partial state: if the model is already loaded but the
-    connection was torn down (e.g., a writer-context exception path left
-    ``_CONN=None``), reopen the connection without paying the cold-start
-    cost on the embedding model.
+    connection was torn down (after a tool call released it, or a
+    writer-context exception path left ``_CONN=None``), reopen the
+    connection without paying the cold-start cost on the embedding model.
     """
-    global _CONN, _RESOLVER, _MODEL, _CATALOG_PATH
+    global _CONN, _RESOLVER, _CATALOG_PATH
     if _CONN is not None:
         return
 
@@ -250,16 +263,66 @@ def _bootstrap() -> None:
     # Explicit read-only at the call site: server.py only issues SELECTs.
     # Holding an RW lock blocks every other process (other Claude Code
     # sessions, test suite, refresh scripts) — see db.py module docstring.
-    _CONN = open_catalog(_CATALOG_PATH, read_only=True)
+    try:
+        _CONN = open_catalog(_CATALOG_PATH, read_only=True)
+    except duckdb.IOException as e:
+        if "lock" in str(e).lower():
+            raise RuntimeError(
+                "the myPub catalog is locked by a writer (refresh, "
+                "extraction or alignment job); retry when it finishes"
+            ) from e
+        raise
 
-    if _MODEL is None:
-        # pylint: disable=import-outside-toplevel
-        from sentence_transformers import SentenceTransformer
-        LOG.info("loading sentence-transformers model …")
-        _MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
+    _load_model()
     _RESOLVER = EntityResolver(_CONN, model=_MODEL)
-    LOG.info("kb-mcp server ready")
+    LOG.info("kb-mcp catalog open")
+
+
+# Every Claude Code session (and sub-agent) that has the myPub plugin
+# starts its own kb-mcp process. Even a read-only DuckDB handle blocks the
+# catalog's single writer, so a server that held its connection for its
+# whole lifetime locked out refresh/extraction/alignment jobs as long as
+# any session was open. Instead, each tool call opens the catalog on
+# demand (via _bootstrap) and _release_catalog closes it when the
+# outermost call returns. Set MYPUB_KB_HOLD_CATALOG=1 to keep the old
+# hold-open behaviour (faster repeat queries, single-session use only).
+_CALL_LOCK = threading.Lock()
+_CALL_DEPTH = 0
+
+
+def _close_catalog() -> None:
+    global _CONN, _RESOLVER
+    if _CONN is not None:
+        try:
+            _CONN.close()
+        except Exception as e:  # pragma: no cover - best-effort cleanup
+            LOG.warning("catalog close failed: %s", e)
+    _CONN = None
+    _RESOLVER = None
+
+
+def _release_catalog(fn):
+    """Close the catalog after the outermost tool call returns.
+
+    Tools call each other (e.g. generators pass ``search_chapters`` as
+    ``search_fn``) and FastMCP may run sync tools on worker threads, so a
+    shared depth counter decides when the last call has finished.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        global _CALL_DEPTH
+        with _CALL_LOCK:
+            _CALL_DEPTH += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with _CALL_LOCK:
+                _CALL_DEPTH -= 1
+                if _CALL_DEPTH == 0 and not os.environ.get("MYPUB_KB_HOLD_CATALOG"):
+                    _close_catalog()
+
+    return wrapper
 
 
 @contextmanager
@@ -1018,6 +1081,7 @@ def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
 
 
 @mcp.tool
+@_release_catalog
 def search_chapters(
     query: str, mode: str = "interactive", limit: int = 10,
     weight_profile: str = DEFAULT_INTERACTIVE_PROFILE,
@@ -1241,6 +1305,7 @@ def _run_auto_discovery(
 
 
 @mcp.tool
+@_release_catalog
 def disambiguate_discovery(
     source: str, identifier: str,
     display_name: Optional[str] = None,
@@ -1358,6 +1423,7 @@ def disambiguate_discovery(
 
 
 @mcp.tool
+@_release_catalog
 def compare_concept_across_authors(
     concept_name: str, limit_per_author: int = 2
 ) -> dict[str, Any]:
@@ -1456,6 +1522,7 @@ def compare_concept_across_authors(
 
 
 @mcp.tool
+@_release_catalog
 def find_prerequisites(
     concept_name: str, max_depth: int = 5
 ) -> dict[str, Any]:
@@ -1535,6 +1602,7 @@ def find_prerequisites(
 
 
 @mcp.tool
+@_release_catalog
 def generate_skills_prep(
     domain: str,
     package_name: Optional[str] = None,
@@ -1608,6 +1676,7 @@ def generate_skills_prep(
 
 
 @mcp.tool
+@_release_catalog
 def generate_skills_process(output_dir: str) -> dict[str, Any]:
     """Phase 5.4 step 3 — ingest sub-agent results into the catalog.
 
@@ -1651,6 +1720,7 @@ def generate_skills_process(output_dir: str) -> dict[str, Any]:
 
 
 @mcp.tool
+@_release_catalog
 def generate_skills_materialize(
     package_id: Optional[int] = None,
     package_name: Optional[str] = None,
@@ -1694,6 +1764,7 @@ def generate_skills_materialize(
 
 
 @mcp.tool
+@_release_catalog
 def eval_skills_routing(
     package_id: int,
     queries_per_skill: int = 5,
@@ -1739,6 +1810,7 @@ def eval_skills_routing(
 
 
 @mcp.tool
+@_release_catalog
 def generate_concept_map(
     concept: str,
     depth: int = 2,
@@ -1832,6 +1904,7 @@ def generate_concept_map(
 
 
 @mcp.tool
+@_release_catalog
 def generate_learning_path(
     target: str,
     start: Optional[str] = None,
@@ -1921,6 +1994,7 @@ def generate_learning_path(
 
 
 @mcp.tool
+@_release_catalog
 def generate_cheatsheet(
     subject: str,
     extends_depth: int = 1,
@@ -2009,6 +2083,7 @@ def generate_cheatsheet(
 
 
 @mcp.tool
+@_release_catalog
 def generate_slide_deck(
     topic: str,
     duration_min: int = 30,
@@ -2087,6 +2162,7 @@ def generate_slide_deck(
 
 
 @mcp.tool
+@_release_catalog
 def generate_pattern_catalog(
     domain: str,
     max_depth: int = 2,
@@ -2168,6 +2244,7 @@ def generate_pattern_catalog(
 
 
 @mcp.tool
+@_release_catalog
 def generate_content_brief(
     topic: str,
     fmt: str = "blog",
@@ -2246,6 +2323,7 @@ def generate_content_brief(
 
 
 @mcp.tool
+@_release_catalog
 def generate_tutorial(
     target: str,
     level: str = "intermediate",
@@ -2324,6 +2402,7 @@ def generate_tutorial(
 
 
 @mcp.tool
+@_release_catalog
 def generate_adr(
     question: str,
     max_options: int = 5,
@@ -2394,6 +2473,7 @@ def generate_adr(
 
 
 @mcp.tool
+@_release_catalog
 def generate_tech_assessment(
     title: str,
     candidates: list[str],
@@ -2464,6 +2544,7 @@ def generate_tech_assessment(
 
 
 @mcp.tool
+@_release_catalog
 def generate_quickstart(
     library: str,
     language_hint: Optional[str] = None,
@@ -2540,6 +2621,7 @@ def generate_quickstart(
 
 
 @mcp.tool
+@_release_catalog
 def generate_library_landscape(
     domain: str,
     candidates: Optional[list[str]] = None,
@@ -2619,6 +2701,7 @@ def generate_library_landscape(
 
 
 @mcp.tool
+@_release_catalog
 def generate_migration_guide(
     subject: str,
     max_depth: int = 1,
@@ -2668,6 +2751,7 @@ def generate_migration_guide(
 
 
 @mcp.tool
+@_release_catalog
 def generate_currency_report(
     scope: str = "all-sources",
     source_filter: Optional[str] = None,
@@ -2718,6 +2802,7 @@ def generate_currency_report(
 
 
 @mcp.tool
+@_release_catalog
 def generate_dialog(
     topic: str,
     max_beats: int = 6,
@@ -2759,6 +2844,7 @@ def generate_dialog(
 
 
 @mcp.tool
+@_release_catalog
 def generate_author_panel(
     panel_name: str,
     topics: list[str],
@@ -2814,6 +2900,7 @@ def generate_author_panel(
 
 
 @mcp.tool
+@_release_catalog
 def generate_project_bootstrap(
     description: str,
     technologies: Optional[list[str]] = None,
@@ -2884,6 +2971,7 @@ def generate_project_bootstrap(
 
 
 @mcp.tool
+@_release_catalog
 def generate_refactoring_playbook(
     topic: str,
     max_findings: int = 12,
@@ -2929,6 +3017,7 @@ def generate_refactoring_playbook(
 
 
 @mcp.tool
+@_release_catalog
 def generate_curriculum(
     topic: str,
     n_weeks: int = 12,
@@ -2974,6 +3063,7 @@ def generate_curriculum(
 
 
 @mcp.tool
+@_release_catalog
 def generate_integration_channel(
     scenario: str,
     output_root: Optional[str] = None,
@@ -3026,6 +3116,7 @@ def generate_integration_channel(
 
 
 @mcp.tool
+@_release_catalog
 def generate_fhir_ig(
     use_case: str,
     output_root: Optional[str] = None,
@@ -3080,6 +3171,7 @@ def generate_fhir_ig(
 
 
 @mcp.tool
+@_release_catalog
 def generate_standards_translator(
     mapping: str,
     output_root: Optional[str] = None,
@@ -3135,6 +3227,7 @@ def generate_standards_translator(
 
 
 @mcp.tool
+@_release_catalog
 def generate_deid_bundle(
     dataset: str,
     output_root: Optional[str] = None,
@@ -3186,6 +3279,7 @@ def generate_deid_bundle(
 
 
 @mcp.tool
+@_release_catalog
 def generate_edi_roundtrip(
     txn_code: str,
     output_root: Optional[str] = None,
@@ -3248,7 +3342,10 @@ def main() -> None:
         # Stdio MCP uses stdout for the protocol; logs must go to stderr.
         stream=sys.stderr,
     )
-    _bootstrap()
+    # Warm the embedding model only; the catalog opens per tool call so an
+    # idle server never holds a lock on it (see _release_catalog).
+    _load_model()
+    LOG.info("kb-mcp server ready")
     mcp.run()  # default transport is stdio
 
 

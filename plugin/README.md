@@ -27,7 +27,18 @@ no version bump needed.
 |---|---|
 | `MYPUB_OUTPUT` | Default folder for generator packages when a command doesn't pass one. Falls back to `<myPub>/data/generated-packages/`. |
 | `MYPUB_CATALOG` | Use a different catalog file (e.g. an APFS clone). |
+| `MYPUB_KB_HOLD_CATALOG` | Set to `1` to keep the catalog open between tool calls. Faster repeat queries, but it blocks writers while any session is open. |
 | `CONTEXT7_API_KEY` | Passed to the server's own Context7 client for discovery. Set it in the environment Claude Code starts from. |
+
+## Catalog locking
+
+Every session that has the plugin runs its own `mypub-kb` process, and a
+DuckDB read-only handle still blocks the catalog's single writer. So the
+server opens the catalog at the start of each tool call and closes it
+when the call returns. Idle sessions hold no lock, and refresh,
+extraction and alignment jobs can run while sessions are open. If a
+writer holds the catalog when a tool is called, the call fails with a
+"catalog is locked by a writer" error; retry after the job finishes.
 
 ## Live docs
 
