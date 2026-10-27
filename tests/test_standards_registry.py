@@ -114,7 +114,16 @@ def test_cited_source_names_adds_loaded_registry_sources(conn):
         {"key": "x12-5010", "name": "X12", "license_tier": "licensed",
          "sources": [{"name": "pyx12", "role": "library", "match": "%pyx12%"}]}]})
     assert standards.cited_source_names(conn, ["Stedi"], "x12 835") == ["Stedi", "pyx12 docs"]
-    assert standards.cited_source_names(conn, ["Stedi"], "fhir only") == ["Stedi"]
+    # Registry spec sources lead, ahead of the hard-coded tools.
+    standards.load(conn, {"standards": [
+        {"key": "fhir-r4", "name": "R4", "license_tier": "open",
+         "sources": [{"name": "core", "role": "spec", "source_type": "fhir_package",
+                      "identifier": "hl7.fhir.r4.core@4.0.1"}]}]})
+    conn.execute("INSERT INTO doc_section (snapshot_id, ordinal) SELECT snapshot_id, 0 "
+                 "FROM doc_snapshot JOIN doc_source USING (doc_source_id) "
+                 "WHERE name = 'FHIR R4 core'")
+    assert standards.cited_source_names(conn, ["HAPI"], "fhir") == ["FHIR R4 core", "HAPI"]
+    assert standards.cited_source_names(conn, ["Stedi"], "dicom only") == ["Stedi"]
 
 
 def test_cite_concepts_round_robins_across_sources(conn):
@@ -135,6 +144,10 @@ def test_cite_concepts_round_robins_across_sources(conn):
     cites = standards.cite_concepts(conn, ["pyx12 docs", "FHIR R4 core"], limit=4)
     assert len(cites) == 4
     assert {c[3] for c in cites} == {"pyx12 docs", "FHIR R4 core"}
+    # The first-named source leads each round.
+    assert [c[3] for c in cites] == ["pyx12 docs", "FHIR R4 core"] * 2
+    first = standards.cite_concepts(conn, ["FHIR R4 core", "pyx12 docs"], limit=1)
+    assert first[0][3] == "FHIR R4 core"
     only = standards.cite_concepts(conn, ["pyx12 docs"], limit=10, name_like="%c1%")
     assert [c[1] for c in only] == ["pyx12 docs c1"]
 
