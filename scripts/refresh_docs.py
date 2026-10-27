@@ -1612,6 +1612,7 @@ def gather_alignment_candidates(
     *,
     max_concepts: int = DEFAULT_MAX_CONCEPTS_PER_SECTION,
     max_chapters_per_concept: int = DEFAULT_MAX_CHAPTERS_PER_CONCEPT,
+    extra_concepts: Optional[list[tuple[int, str]]] = None,
 ) -> list[dict[str, Any]]:
     """For one section, return up to max_concepts (concept, candidate_chapters) pairs.
 
@@ -1620,6 +1621,11 @@ def gather_alignment_candidates(
     talks about most win). Candidate chapters per concept come from
     concept_relation rows where source_type='chapter' that touch the same
     concept_id (either as from_ or to_).
+
+    ``extra_concepts`` — (concept_id, name) pairs the section mentions
+    without a relation (see ``section_entity_concepts``) — are appended
+    after the relation-ranked ones. Most refreshed sections name concepts
+    but yield no relation between them, so without this they never align.
 
     Skips concepts with zero candidate chapters — alignment requires book
     content to compare against.
@@ -1644,8 +1650,14 @@ def gather_alignment_candidates(
         [doc_section_id, doc_section_id, max_concepts],
     ).fetchall()
 
+    ordered: dict[int, str] = {int(cid): cname for cid, cname, _n in section_concepts}
+    for cid, cname in extra_concepts or []:
+        ordered.setdefault(int(cid), cname)
+
     out: list[dict[str, Any]] = []
-    for cid, cname, _mention_count in section_concepts:
+    for cid, cname in ordered.items():
+        if len(out) >= max_concepts:
+            break
         chapter_ids = [
             int(r[0]) for r in conn.execute(
                 """
@@ -1666,6 +1678,53 @@ def gather_alignment_candidates(
             "candidate_chapter_ids": chapter_ids,
         })
     return out
+
+
+def section_entity_concepts(
+    conn: duckdb.DuckDBPyConnection,
+    doc_section_id: int,
+    extraction_dir: Optional[Path],
+) -> list[tuple[int, str]]:
+    """(concept_id, name) for concepts a section mentions without a relation.
+
+    Two sources, neither of which writes anything:
+      - the section's step-7 entity result file under
+        ``extraction_dir/results/result_section_<id>.json`` (entity names
+        resolved by exact name / alias only — never creates concepts);
+      - concepts linked to the section's step-8 procedures.
+    """
+    out: dict[int, str] = {}
+    if extraction_dir is not None:
+        result_path = Path(extraction_dir) / "results" / f"result_section_{doc_section_id}.json"
+        if result_path.exists():
+            import extract_entities  # type: ignore[import-not-found]
+            from resolution import EntityResolver  # type: ignore[import-not-found]
+            try:
+                raw = extract_entities.parse_llm_json(result_path.read_text())
+                entities, _ = extract_entities.validate_extraction(raw)
+            except (json.JSONDecodeError, ValueError):
+                entities = []
+            resolver = EntityResolver(conn)
+            for ent in entities:
+                cid = (resolver.resolve_lookup_only(ent["name"], ent.get("type"))
+                       or resolver.resolve_lookup_only(ent["name"]))
+                if cid is not None and int(cid) not in out:
+                    row = conn.execute("SELECT name FROM concept WHERE concept_id = ?",
+                                       [cid]).fetchone()
+                    out[int(cid)] = row[0] if row else ent["name"]
+    for cid, cname in conn.execute(
+        """
+        SELECT DISTINCT c.concept_id, c.name
+          FROM procedure p
+          JOIN procedure_concept pc ON pc.procedure_id = p.procedure_id
+          JOIN concept c            ON c.concept_id = pc.concept_id
+         WHERE p.source_type = 'doc_section' AND p.source_id = ?
+         ORDER BY c.concept_id
+        """,
+        [doc_section_id],
+    ).fetchall():
+        out.setdefault(int(cid), cname)
+    return list(out.items())
 
 
 def build_section_alignment_prompt(
@@ -1762,8 +1821,13 @@ def prep_alignment(
     max_concepts: int = DEFAULT_MAX_CONCEPTS_PER_SECTION,
     max_chapters_per_concept: int = DEFAULT_MAX_CHAPTERS_PER_CONCEPT,
     excerpt_chars: int = DEFAULT_CHAPTER_EXCERPT_CHARS,
+    extraction_dir: Optional[Path] = None,
 ) -> AlignmentManifest:
     """Emit alignment prompts for every section in the snapshot.
+
+    ``extraction_dir`` is the snapshot's step-7/8 prep dir. When given,
+    concepts named in its entity results (and the section's procedure
+    concepts) also count, not just concepts with a concept_relation row.
 
     Sections with no concept_relation rows yet (step 7 process hasn't run)
     are skipped — alignment is meaningless without known concepts.
@@ -1792,6 +1856,7 @@ def prep_alignment(
             conn, int(sid),
             max_concepts=max_concepts,
             max_chapters_per_concept=max_chapters_per_concept,
+            extra_concepts=section_entity_concepts(conn, int(sid), extraction_dir),
         )
         if not candidates:
             continue  # nothing to align
@@ -2071,6 +2136,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p_align_prep.add_argument("--snapshot-id", type=int, required=True)
     p_align_prep.add_argument("--output-dir", type=Path, required=True,
                               help="Alignment manifest dir (typically <run>/alignment).")
+    p_align_prep.add_argument(
+        "--extraction-dir", type=Path,
+        help="The snapshot's step-7/8 prep dir. Concepts named in its entity "
+             "results count as alignment candidates too, not only concepts "
+             "with a concept_relation row.")
     p_align_prep.add_argument("--no-auto-stop", action="store_true")
 
     p_align_proc = sub.add_parser(
@@ -2169,7 +2239,8 @@ def _cmd_process(args: argparse.Namespace) -> int:
 def _cmd_align_prep(args: argparse.Namespace) -> int:
     conn = open_writer(args.catalog, auto_stop=not args.no_auto_stop)
     try:
-        prep_alignment(conn, args.snapshot_id, args.output_dir)
+        prep_alignment(conn, args.snapshot_id, args.output_dir,
+                       extraction_dir=args.extraction_dir)
         return 0
     finally:
         conn.close()

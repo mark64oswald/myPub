@@ -1974,3 +1974,49 @@ def test_lock_integration_untrusted_holder_not_auto_killed(rw_catalog):
     finally:
         proc.terminate()
         proc.join(timeout=5)
+
+
+def test_prep_alignment_uses_entity_results_when_section_has_no_relations(
+    rw_conn, aligned_world, seeded_doc_source, tmp_path,
+):
+    """A section that names a concept but yielded no relation still aligns
+    when its step-7 entity result is supplied via extraction_dir."""
+    snap_id = _seed_snapshot_with_sections(
+        rw_conn, seeded_doc_source,
+        "# Producers\n\nKafka producers dedupe with enable.idempotence.",
+    )
+    section_id = rw_conn.execute(
+        "SELECT MIN(doc_section_id) FROM doc_section WHERE snapshot_id = ?", [snap_id],
+    ).fetchone()[0]
+    assert refresh_docs.prep_alignment(rw_conn, snap_id, tmp_path / "a0").sections == []
+
+    extraction = tmp_path / "extract"
+    (extraction / "results").mkdir(parents=True)
+    (extraction / "results" / f"result_section_{section_id}.json").write_text(json.dumps({
+        "entities": [
+            {"name": "kafka", "type": "Tool", "description": "log"},
+            {"name": "Never Seen Before", "type": "Concept", "description": "x"},
+        ],
+        "relations": [],
+    }))
+    before = rw_conn.execute("SELECT COUNT(*) FROM concept").fetchone()[0]
+    manifest = refresh_docs.prep_alignment(
+        rw_conn, snap_id, tmp_path / "a1", extraction_dir=extraction,
+    )
+    assert [e.doc_section_id for e in manifest.sections] == [section_id]
+    cands = manifest.sections[0].concepts_with_candidates
+    assert {c["concept_id"] for c in cands} == {aligned_world["concept_id"]}
+    # Lookup only: the unknown entity must not create a concept.
+    assert rw_conn.execute("SELECT COUNT(*) FROM concept").fetchone()[0] == before
+
+
+def test_gather_alignment_candidates_extra_concepts_follow_relation_concepts(
+    rw_conn, aligned_world,
+):
+    """extra_concepts are appended after relation-ranked ones and deduped."""
+    cands = refresh_docs.gather_alignment_candidates(
+        rw_conn, aligned_world["section_id"],
+        extra_concepts=[(aligned_world["concept_id"], "Kafka")],
+    )
+    ids = [c["concept_id"] for c in cands]
+    assert len(ids) == len(set(ids))
