@@ -210,8 +210,12 @@ def sectionize_context7(chunks: list[dict[str, Any]]) -> list[Section]:
     """
     sections: list[Section] = []
     for ordinal, chunk in enumerate(chunks):
-        title = chunk.get("title") or chunk.get("source") or None
         body = chunk.get("content") or chunk.get("snippet") or ""
+        title = chunk.get("title") or chunk.get("source") or None
+        if _is_url_heading(title):
+            # A source URL makes a poor heading (and changes when Context7
+            # changes its output format); prefer one from the body.
+            title = _derive_body_heading(body) or title
         sections.append(
             Section(
                 heading_level=None,

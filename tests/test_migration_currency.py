@@ -159,6 +159,56 @@ def test_migration_with_contradicts_edges_renders_diffs(catalog, tmp_path):
     assert "Tied Concept" in text
 
 
+def test_migration_dedupes_same_pair_under_two_concepts(catalog, tmp_path):
+    """One disagreement recorded under two neighbouring concepts is one diff."""
+    sid = _seed_concept(catalog, "Mirth Connect")
+    other = _seed_concept(catalog, "Licensing")
+    catalog.execute(
+        "INSERT INTO concept_relation (from_concept_id, to_concept_id, "
+        "relation_type, source_type, source_id, confidence) "
+        "VALUES (?, ?, 'CITES', 'chapter', 1, 0.9)", [sid, other],
+    )
+    ds_id = _seed_doc_source(catalog, "Mirth")
+    sec = _seed_section(catalog, ds_id, _seed_snapshot(catalog, ds_id, "h1"), heading="License")
+    chap = _seed_chapter(catalog, "Mirth Book", "Open source")
+    for cid in (sid, other):
+        _seed_alignment_edge(catalog, from_sec=sec, to_chapter=chap,
+                             concept_id=cid, relation="CONTRADICTS")
+    pid, _, _ = mg.make_migration_generator().run_deterministic(
+        catalog, _resolver({"mirth connect": sid}), "Mirth Connect",
+        output_root=str(tmp_path),
+    )
+    n = catalog.execute("SELECT COUNT(*) FROM generated_unit WHERE package_id = ?",
+                        [pid]).fetchone()[0]
+    assert n == 1
+
+
+def test_migration_dedupes_same_heading_across_snapshots(catalog, tmp_path):
+    """A re-fetched source repeats the heading in a new snapshot: still one diff."""
+    sid = _seed_concept(catalog, "Mirth Connect")
+    ds_id = _seed_doc_source(catalog, "OIE")
+    old = _seed_section(catalog, ds_id, _seed_snapshot(catalog, ds_id, "h1", datetime(2026, 5, 1)),
+                        heading="History and Roadmap")
+    new = _seed_section(catalog, ds_id, _seed_snapshot(catalog, ds_id, "h2", datetime(2026, 10, 26)),
+                        heading="History and Roadmap")
+    chap = _seed_chapter(catalog, "Mirth Book", "Open source")
+    catalog.execute(
+        "INSERT INTO concept_relation (from_concept_id, to_concept_id, "
+        "relation_type, source_type, source_id, confidence) "
+        "VALUES (?, ?, 'CITES', 'chapter', 1, 0.9)", [sid, sid],
+    )
+    for sec in (old, new):
+        _seed_alignment_edge(catalog, from_sec=sec, to_chapter=chap,
+                             concept_id=sid, relation="CONTRADICTS")
+    pid, _, _ = mg.make_migration_generator().run_deterministic(
+        catalog, _resolver({"mirth connect": sid}), "Mirth Connect",
+        output_root=str(tmp_path),
+    )
+    rows = catalog.execute("SELECT metadata_json FROM generated_unit WHERE package_id = ?",
+                           [pid]).fetchall()
+    assert len(rows) == 1 and f'"doc_section_id": {new}' in rows[0][0]
+
+
 def test_migration_idempotent(catalog, tmp_path):
     sid = _seed_concept(catalog, "Apache Kafka")
     res = _resolver({"apache kafka": sid})
@@ -215,8 +265,8 @@ def test_currency_filtered_to_one_source(catalog, tmp_path):
 
 
 def test_currency_volatility_higher_for_hash_churn(catalog, tmp_path):
-    ds1 = _seed_doc_source(catalog, "Stable")
-    ds2 = _seed_doc_source(catalog, "Churning")
+    ds1 = _seed_doc_source(catalog, "Stable", "deepwiki")
+    ds2 = _seed_doc_source(catalog, "Churning", "deepwiki")
     # Stable: same hash repeated
     _seed_snapshot(catalog, ds1, "h_same",
                     retrieved_at=datetime(2026, 1, 1))
@@ -232,6 +282,50 @@ def test_currency_volatility_higher_for_hash_churn(catalog, tmp_path):
     d = cr.SnapshotHistoryDecomposer().decompose(catalog, res, "all")
     by_name = {r.name: r for r in d.sources}
     assert by_name["Churning"].volatility_score > by_name["Stable"].volatility_score
+
+
+def test_currency_volatility_tracks_how_much_content_changed(catalog, tmp_path):
+    """Two sources with one hash change each: the one that rewrote more sections ranks higher."""
+    t0, t1 = datetime(2026, 5, 1), datetime(2026, 10, 26)
+    for name, changed in (("Small", 1), ("Big", 4)):
+        ds = _seed_doc_source(catalog, name, "deepwiki")
+        old = _seed_snapshot(catalog, ds, f"{name}-old", t0)
+        new = _seed_snapshot(catalog, ds, f"{name}-new", t1)
+        for i in range(4):
+            for snap, body in ((old, f"body {i}"), (new, f"body {i}" + (" v2" if i < changed else ""))):
+                catalog.execute("INSERT INTO doc_section (snapshot_id, ordinal, content, heading_text) "
+                                "VALUES (?, ?, ?, ?)", [snap, i, body, f"H{i}"])
+    d = cr.make_currency_report_generator().decomposer.decompose(catalog, _resolver({}), "all")
+    scores = {r.name: r.volatility_score for r in d.sources}
+    assert scores["Big"] > scores["Small"] > 0
+    assert [r.name for r in d.sources][:2] == ["Big", "Small"]
+
+
+def test_currency_ignores_heading_only_rewrites(catalog, tmp_path):
+    """A fetcher change that renames every heading isn't doc churn."""
+    ds = _seed_doc_source(catalog, "Kafka", "deepwiki")
+    old = _seed_snapshot(catalog, ds, "k-old", datetime(2026, 5, 1))
+    new = _seed_snapshot(catalog, ds, "k-new", datetime(2026, 10, 26))
+    for snap, head in ((old, "POST /connectors"), (new, "https://github.com/apache/kafka/blob/trunk/docs/x")):
+        catalog.execute("INSERT INTO doc_section (snapshot_id, ordinal, content, heading_text) "
+                        "VALUES (?, 0, ?, ?)", [snap, f"### {head}\nCreate a connector.", head])
+    d = cr.make_currency_report_generator().decomposer.decompose(catalog, _resolver({}), "all")
+    assert d.sources[0].volatility_score == 0.0
+
+
+def test_currency_does_not_score_sampled_context7_sources(catalog, tmp_path):
+    """Context7 snapshots are query samples; churn between them isn't doc change."""
+    for name, stype in (("Kafka", "context7"), ("Repo", "deepwiki")):
+        ds = _seed_doc_source(catalog, name, stype)
+        for h, t, body in (("a", datetime(2026, 5, 1), "old"), ("b", datetime(2026, 10, 26), "new")):
+            snap = _seed_snapshot(catalog, ds, f"{name}-{h}", t)
+            catalog.execute("INSERT INTO doc_section (snapshot_id, ordinal, content, heading_text) "
+                            "VALUES (?, 0, ?, 'H')", [snap, body])
+    d = cr.make_currency_report_generator().decomposer.decompose(catalog, _resolver({}), "all")
+    assert [(r.name, r.measurable) for r in d.sources] == [("Repo", True), ("Kafka", False)]
+    assert d.sources[1].volatility_score == 0.0 and any("Context7" in n for n in d.notes)
+    text = cr._render_report(d)
+    assert "n/a (sampled)" in text
 
 
 def test_currency_renders_per_source_timeline(catalog, tmp_path):

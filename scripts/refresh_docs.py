@@ -524,6 +524,11 @@ class Context7Fetcher:
             for line in raw.splitlines():
                 if line.startswith("Title:") and title is None:
                     title = line[len("Title:"):].strip()
+                elif (title is None and not body_lines and line.lstrip().startswith("#")
+                      and line.lstrip("# ").strip()):
+                    # Newer Context7 responses lead with '### <title>' instead
+                    # of a 'Title:' line; without this the URL became the heading.
+                    title = line.lstrip("# ").strip()
                 elif line.startswith("Source:") and source is None:
                     source = line[len("Source:"):].strip()
                 else:
