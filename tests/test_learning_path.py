@@ -210,6 +210,79 @@ def test_decomposer_max_concepts_caps_dense_path(catalog):
     assert covered_kept > bare_kept
 
 
+def _embed(conn, concept_id, direction):
+    """Store a unit vector mixing axis 0 (on-topic) and axis 1 (off)."""
+    on, off = direction
+    norm = (on * on + off * off) ** 0.5
+    vec = [0.0] * 384
+    vec[0], vec[1] = on / norm, off / norm
+    conn.execute(
+        "INSERT INTO concept_embedding (concept_id, embedding) VALUES (?, ?)",
+        [concept_id, vec],
+    )
+
+
+def test_decomposer_drops_off_topic_hub_and_its_subtree(catalog):
+    """A hub prereq that isn't similar to the target is neither kept nor
+    expanded, so its own prereqs don't leak into the path."""
+    target = _seed_concept(catalog, "Delta Lake")
+    on = _seed_concept(catalog, "Parquet")
+    hub = _seed_concept(catalog, "Machine Learning")
+    hub_child = _seed_concept(catalog, "Linear Algebra")
+    bare = _seed_concept(catalog, "No Embedding")
+    _add_rel(catalog, target, on, "REQUIRES")
+    _add_rel(catalog, target, hub, "REQUIRES")
+    _add_rel(catalog, target, bare, "REQUIRES")
+    _add_rel(catalog, hub, hub_child, "REQUIRES")
+    _embed(catalog, target, (1, 0))
+    _embed(catalog, on, (1, 0.5))
+    _embed(catalog, hub, (0.1, 1))
+    _embed(catalog, hub_child, (1, 0))  # on-topic, but only reachable via hub
+
+    d = lp.PrerequisiteDecomposer().decompose(
+        catalog, _resolver_for({"delta lake": target}), "Delta Lake",
+    )
+    ids = {c.concept_id for c in d.concepts}
+    assert on in ids and bare in ids and target in ids
+    assert hub not in ids and hub_child not in ids
+    assert any("off-topic" in n for n in d.notes)
+    by_id = {c.concept_id: c for c in d.concepts}
+    assert by_id[bare].similarity is None
+    assert by_id[on].similarity > 0.8
+
+
+def test_decomposer_min_similarity_zero_disables_gate(catalog):
+    target = _seed_concept(catalog, "Delta Lake")
+    hub = _seed_concept(catalog, "Machine Learning")
+    _add_rel(catalog, target, hub, "REQUIRES")
+    _embed(catalog, target, (1, 0))
+    _embed(catalog, hub, (0, 1))
+    d = lp.PrerequisiteDecomposer().decompose(
+        catalog, _resolver_for({"delta lake": target}), "Delta Lake",
+        min_similarity=0,
+    )
+    assert hub in {c.concept_id for c in d.concepts}
+
+
+def test_stage_anchor_prefers_similarity_over_chapter_count():
+    """A well-covered but less on-topic concept must not name the stage."""
+    concepts = [
+        lp._PathConcept(concept_id=1, name="Machine Learning", concept_type=None,
+                        description=None, depth=2, chapter_count=200,
+                        doc_section_count=0, similarity=0.3),
+        lp._PathConcept(concept_id=2, name="Parquet", concept_type=None,
+                        description=None, depth=1, chapter_count=4,
+                        doc_section_count=0, similarity=0.7),
+        lp._PathConcept(concept_id=3, name="Columnar Storage", concept_type=None,
+                        description=None, depth=1, chapter_count=8,
+                        doc_section_count=0, similarity=0.6),
+    ]
+    stages = lp.group_into_stages(concepts)
+    assert len(stages) == 1  # tiny buckets merge
+    assert stages[0].name == "Parquet"
+    assert stages[0].concepts[0].name == "Parquet"
+
+
 def test_decomposer_unknown_start_emits_note(catalog, chain_graph):
     resolver = _resolver_for({"change data capture": chain_graph["cdc"]})
     d = lp.PrerequisiteDecomposer().decompose(

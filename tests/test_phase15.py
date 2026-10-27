@@ -233,6 +233,48 @@ def test_refactor_attaches_target_procedures(catalog, refactor_corpus):
     assert "Implement exponential backoff" in f.refactor_procedure_names
 
 
+def test_refactor_skips_contrast_without_procedure_or_implements_path(catalog):
+    """'Database' vs 'Flat Files' contrast, no procedures either side:
+    not a refactor."""
+    domain = _seed_concept(catalog, "Storage")
+    db = _seed_concept(catalog, "Database", "Technique")
+    flat = _seed_concept(catalog, "Flat Files", "Technique")
+    _add_rel(catalog, domain, db, "REQUIRES")
+    _add_rel(catalog, db, flat, "CONTRASTS_WITH")
+    d = rp.AntiPatternDecomposer().decompose(
+        catalog, _resolver({"storage": domain}), "Storage")
+    assert d.findings == []
+    assert any("contrast alone" in n for n in d.notes)
+
+
+def test_refactor_direction_follows_anti_pattern_type(catalog):
+    """Edge stored target → anti still yields anti → target."""
+    domain = _seed_concept(catalog, "Messaging")
+    good = _seed_concept(catalog, "Outbox Pattern", "Pattern")
+    bad = _seed_concept(catalog, "Dual Write", "Anti-Pattern")
+    _add_rel(catalog, domain, good, "REQUIRES")
+    _add_rel(catalog, good, bad, "CONTRASTS_WITH")
+    _link_proc(catalog, _seed_procedure(catalog, "Add an outbox table"), good)
+    d = rp.AntiPatternDecomposer().decompose(
+        catalog, _resolver({"messaging": domain}), "Messaging")
+    assert [(f.anti_name, f.target_name) for f in d.findings] == [
+        ("Dual Write", "Outbox Pattern")]
+
+
+def test_refactor_accepts_implements_path_without_procedure(catalog):
+    domain = _seed_concept(catalog, "Caching")
+    a = _seed_concept(catalog, "Read-Through Cache", "Pattern")
+    b = _seed_concept(catalog, "Cache-Aside", "Pattern")
+    impl = _seed_concept(catalog, "Redis", "Technology")
+    _add_rel(catalog, domain, a, "REQUIRES")
+    _add_rel(catalog, a, b, "CONTRASTS_WITH")
+    _add_rel(catalog, impl, b, "IMPLEMENTS")
+    d = rp.AntiPatternDecomposer().decompose(
+        catalog, _resolver({"caching": domain}), "Caching")
+    assert [(f.anti_name, f.target_name) for f in d.findings] == [
+        ("Read-Through Cache", "Cache-Aside")]
+
+
 def test_refactor_topic_without_findings_emits_note(catalog):
     seed = _seed_concept(catalog, "Lonely")
     res = _resolver({"lonely": seed})

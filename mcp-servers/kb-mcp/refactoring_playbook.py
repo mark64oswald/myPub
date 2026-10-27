@@ -112,10 +112,16 @@ class AntiPatternDecomposer:
         if not pattern_ids:
             pattern_ids = {tid}  # at least try the topic itself
 
-        # For each pattern, find CONTRASTS_WITH partners that we'll suggest
-        # as the refactor target.
+        # For each pattern, walk its CONTRASTS_WITH partners. A contrast
+        # alone only says two things differ ("Database" vs "Flat Files");
+        # a refactor needs a way to get there. So a direction anti → target
+        # is accepted only when the target has a procedure or an
+        # IMPLEMENTS edge, isn't itself an Anti-Pattern, and (when either
+        # side is typed Anti-Pattern) the anti side is the one typed so.
         findings: list[_Finding] = []
-        for pid in list(pattern_ids)[:max_findings * 2]:
+        seen_pairs: set[frozenset[int]] = set()
+        rejected = 0
+        for pid in sorted(pattern_ids)[:max_findings * 2]:
             partners = conn.execute(
                 """
                 SELECT DISTINCT
@@ -127,41 +133,29 @@ class AntiPatternDecomposer:
                 """,
                 [pid, pid, pid],
             ).fetchall()
-            if not partners:
-                continue
-            partner_id = int(partners[0][0])
-            anti_row = conn.execute(
-                "SELECT name, description FROM concept WHERE concept_id = ?",
-                [pid],
-            ).fetchone()
-            tgt_row = conn.execute(
-                "SELECT name, description FROM concept WHERE concept_id = ?",
-                [partner_id],
-            ).fetchone()
-            # Refactor procedures: from the target (recommended) pattern
-            proc_rows = conn.execute(
-                """
-                SELECT p.procedure_id, p.name FROM procedure p
-                 JOIN procedure_concept pc ON pc.procedure_id = p.procedure_id
-                 WHERE pc.concept_id = ?
-                   AND p.steps IS NOT NULL
-                 ORDER BY length(p.steps) ASC
-                 LIMIT 3
-                """,
-                [partner_id],
-            ).fetchall()
-            findings.append(_Finding(
-                anti_concept_id=pid, anti_name=anti_row[0],
-                anti_description=anti_row[1],
-                target_concept_id=partner_id, target_name=tgt_row[0],
-                target_description=tgt_row[1],
-                refactor_procedure_ids=[int(r[0]) for r in proc_rows],
-                refactor_procedure_names=[r[1] or "(unnamed)" for r in proc_rows],
-            ))
+            for (partner,) in partners:
+                partner = int(partner)
+                pair = frozenset((pid, partner))
+                if partner == pid or pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                finding = self._best_direction(conn, pid, partner)
+                if finding is None:
+                    rejected += 1
+                    continue
+                findings.append(finding)
+                if len(findings) >= max_findings:
+                    break
             if len(findings) >= max_findings:
                 break
 
         notes: list[str] = []
+        if rejected:
+            notes.append(
+                f"skipped {rejected} CONTRASTS_WITH pair(s) with no procedure "
+                f"or IMPLEMENTS path to either side — contrast alone isn't a "
+                f"refactor"
+            )
         if not findings:
             notes.append(
                 "no anti-pattern findings — no Pattern-typed concept in the "
@@ -173,6 +167,68 @@ class AntiPatternDecomposer:
             topic_concept_id=tid, topic_name=topic_name,
             findings=findings, notes=notes,
         )
+
+
+    @staticmethod
+    def _refactor_path(
+        conn: duckdb.DuckDBPyConnection, concept_id: int,
+    ) -> tuple[list[tuple[int, str]], int]:
+        """(procedures linked to the concept, IMPLEMENTS edge count)."""
+        procs = conn.execute(
+            """
+            SELECT p.procedure_id, p.name FROM procedure p
+             JOIN procedure_concept pc ON pc.procedure_id = p.procedure_id
+             WHERE pc.concept_id = ?
+               AND p.steps IS NOT NULL
+               AND length(trim(p.steps)) > 0
+             ORDER BY length(p.steps) ASC
+             LIMIT 3
+            """,
+            [concept_id],
+        ).fetchall()
+        n_impl = conn.execute(
+            """
+            SELECT COUNT(*) FROM concept_relation
+             WHERE relation_type = 'IMPLEMENTS'
+               AND (from_concept_id = ? OR to_concept_id = ?)
+            """,
+            [concept_id, concept_id],
+        ).fetchone()[0]
+        return [(int(r[0]), r[1] or "(unnamed)") for r in procs], int(n_impl)
+
+    def _best_direction(
+        self, conn: duckdb.DuckDBPyConnection, a: int, b: int,
+    ) -> Optional[_Finding]:
+        rows = {
+            int(r[0]): r[1:] for r in conn.execute(
+                "SELECT concept_id, name, description, concept_type "
+                "  FROM concept WHERE concept_id IN (?, ?)",
+                [a, b],
+            ).fetchall()
+        }
+        if a not in rows or b not in rows:
+            return None
+        is_anti = {cid: rows[cid][2] == "Anti-Pattern" for cid in (a, b)}
+        best: Optional[tuple[int, _Finding]] = None
+        for anti, target in ((a, b), (b, a)):
+            if is_anti[target]:
+                continue
+            if any(is_anti.values()) and not is_anti[anti]:
+                continue
+            procs, n_impl = self._refactor_path(conn, target)
+            if not procs and n_impl == 0:
+                continue
+            score = 10 * len(procs) + n_impl
+            if best is None or score > best[0]:
+                best = (score, _Finding(
+                    anti_concept_id=anti, anti_name=rows[anti][0],
+                    anti_description=rows[anti][1],
+                    target_concept_id=target, target_name=rows[target][0],
+                    target_description=rows[target][1],
+                    refactor_procedure_ids=[p[0] for p in procs],
+                    refactor_procedure_names=[p[1] for p in procs],
+                ))
+        return best[1] if best else None
 
 
 def _render_findings(d: _Decomposition) -> str:

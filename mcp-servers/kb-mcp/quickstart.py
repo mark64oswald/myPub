@@ -687,45 +687,124 @@ class QuickstartDecomposer:
 # ---------------------------------------------------------------------------
 
 
+# Markers of blocks that live near install/getting-started headings but
+# aren't something a first-time user should run: CI workflows, venv /
+# build-tool internals, container recipes. Matched case-insensitively.
+_NOISE_MARKERS = (
+    # CI
+    "runs-on:", "uses: actions/", "jobs:", "on: [push", "on:\n  push",
+    "github.workflow", ".github/workflows", "gitlab-ci", "circleci",
+    "travis", "azure-pipelines",
+    # venv / interpreter internals
+    "site-packages", "bin/activate", "pyvenv.cfg", "virtualenv ",
+    "python -m venv", "python3 -m venv", "scripts\\activate",
+    # build / dev tooling internals
+    "tox.ini", "[tox]", "noxfile", "pre-commit", "setup.cfg",
+    "manifest.in", "maturin develop", "pip install -e", "make install",
+    "make test", "cmake --build", "git clone",
+    # containers
+    "dockerfile", "docker build", "docker run", "apt-get update",
+)
+_IMPORT_TOKENS = ("import ", "from ", "use ", "require(", "#include", "using ")
+_OUTPUT_TOKENS = ("print(", "println!", "console.log", "fmt.print",
+                  "system.out", "puts ", "echo ", "console.writeline")
+
+
+def _is_noise_block(b: _CodeBlock) -> bool:
+    """True for CI / venv / build-internal blocks. Config-language blocks
+    (yaml, toml, dockerfile …) count as noise unless they carry a
+    dependency declaration (Cargo.toml ``[dependencies]``, pom fragments)."""
+    code_lc = "\n" + b.code.lower()
+    if any(m in code_lc for m in _NOISE_MARKERS):
+        return True
+    if b.language in {"yaml", "yml", "dockerfile", "docker", "makefile"}:
+        return True
+    if b.language in {"toml", "xml", "json"}:
+        return not any(k in code_lc for k in (
+            "[dependencies]", "<dependency>", "<artifactid>", '"dependencies"',
+        ))
+    return False
+
+
+def _intent_score(
+    b: _CodeBlock, intent: str, language_hint: Optional[str],
+) -> float:
+    """Score a block for how well it serves one quickstart intent.
+
+    ``install``: a package-manager command, short.
+    ``hello`` / ``verify``: a short, import-bearing program in the
+    library's language that prints something.
+
+    Every intent prefers short blocks — a 200-line example is a
+    tutorial, not a first contact.
+    """
+    head = b.code[:200].lower()
+    n_lines = b.code.count("\n") + 1
+    score = 0.0
+    hint = (language_hint or "").lower()
+    if hint and (hint in b.language or (b.language and b.language in hint)):
+        score += 2.0
+    if intent == "install":
+        if _has_package_manager_command([b]):
+            score += 5.0
+        score -= max(0, n_lines - 4) * 0.25
+    else:
+        if any(tok in head for tok in _IMPORT_TOKENS):
+            score += 3.0
+        if any(tok in b.code.lower() for tok in _OUTPUT_TOKENS):
+            score += 1.0
+        if _has_package_manager_command([b]):
+            score -= 2.0     # an install line isn't a hello world
+        if 3 <= n_lines <= 30:
+            score += 1.0
+        score -= max(0, n_lines - 30) / 20
+    if _is_noise_block(b):
+        score -= 6.0
+    return score
+
+
 def _pick_primary_block(
     blocks: list[_CodeBlock], language_hint: Optional[str],
+    intent: str = "hello",
 ) -> Optional[_CodeBlock]:
-    """Pick the canonical block for an artifact.
+    """Pick the canonical block for an artifact by intent score.
 
-    Preference order:
-      1. Language-hint-matched blocks containing an import/use/require
-         (canonical hello-world shape)
-      2. Language-hint-matched blocks, longest first
-      3. Any blocks containing an import statement
-      4. Longest block
+    Noise blocks (CI YAML, venv internals, build tooling) are dropped
+    whenever anything else is available. Among the rest: language-hint
+    match, imports and output for hello/verify, a package-manager
+    command for install, and shortness. Ties go to the shorter block.
     """
     if not blocks:
         return None
-    hint = (language_hint or "").lower()
-    matched = []
-    if hint:
-        matched = [b for b in blocks
-                   if hint in b.language or b.language in hint]
+    clean = [b for b in blocks if not _is_noise_block(b)] or blocks
+    return max(
+        clean,
+        key=lambda b: (_intent_score(b, intent, language_hint), -len(b.code)),
+    )
 
-    def _has_import(b: _CodeBlock) -> bool:
-        head = b.code[:200].lower()
-        return any(tok in head for tok in (
-            "import ", "from ", "use ", "require(", "#include", "using ",
-        ))
 
-    # Tier 1: matched + has-import
-    matched_imports = [b for b in matched if _has_import(b)]
-    if matched_imports:
-        return max(matched_imports, key=lambda b: len(b.code))
-    # Tier 2: matched (any)
-    if matched:
-        return max(matched, key=lambda b: len(b.code))
-    # Tier 3: any block with import
-    with_imports = [b for b in blocks if _has_import(b)]
-    if with_imports:
-        return max(with_imports, key=lambda b: len(b.code))
-    # Tier 4: longest
-    return max(blocks, key=lambda b: len(b.code))
+def _pick_hello_block(d: "_Decomposition") -> Optional[_CodeBlock]:
+    """Hello-world block, falling back to install sections (often the
+    first install example is also a hello world) — but never an install
+    command or a noise block."""
+    block = _pick_primary_block(d.hello_blocks, d.language_hint)
+    if block is None:
+        block = _pick_primary_block(d.install_blocks, d.language_hint)
+        if block is not None and (
+            _is_noise_block(block) or _has_package_manager_command([block])
+        ):
+            block = None
+    return block
+
+
+def _rank_install_blocks(blocks: list[_CodeBlock]) -> list[_CodeBlock]:
+    """Install blocks in display order: noise out (if anything else is
+    left), package-manager commands first, then shortest."""
+    clean = [b for b in blocks if not _is_noise_block(b)] or blocks
+    return sorted(
+        clean,
+        key=lambda b: (-_intent_score(b, "install", None), len(b.code)),
+    )
 
 
 def _render_install(d: _Decomposition) -> str:
@@ -734,7 +813,7 @@ def _render_install(d: _Decomposition) -> str:
         # Show up to 3 install variants
         seen_lang: set[str] = set()
         n_shown = 0
-        for b in d.install_blocks:
+        for b in _rank_install_blocks(d.install_blocks):
             if b.language in seen_lang and b.language:
                 continue
             seen_lang.add(b.language)
@@ -765,11 +844,7 @@ def _render_install(d: _Decomposition) -> str:
 
 def _render_hello(d: _Decomposition) -> str:
     lines = ["## Hello World", ""]
-    block = _pick_primary_block(d.hello_blocks, d.language_hint)
-    if block is None:
-        # Fall back to extracting any code block from install sections —
-        # often the first install example is also a hello-world
-        block = _pick_primary_block(d.install_blocks, d.language_hint)
+    block = _pick_hello_block(d)
     if block:
         fence_lang = block.language or (d.language_hint or "")
         lines.append(f"```{fence_lang}")
@@ -791,7 +866,7 @@ def _render_hello(d: _Decomposition) -> str:
 
 def _render_verify(d: _Decomposition) -> str:
     lines = ["## Verify it works", ""]
-    block = _pick_primary_block(d.verify_blocks, d.language_hint)
+    block = _pick_primary_block(d.verify_blocks, d.language_hint, intent="verify")
     if block:
         fence_lang = block.language or (d.language_hint or "")
         lines.append(f"```{fence_lang}")
@@ -942,9 +1017,7 @@ class QuickstartPlanner:
         ))
 
         # If we have a hello-world code block, also write it as a runnable file
-        hello_block = _pick_primary_block(
-            d.hello_blocks or d.install_blocks, d.language_hint,
-        )
+        hello_block = _pick_hello_block(d)
         if hello_block:
             ext = _file_extension(hello_block.language, d.language_hint)
             plan.files.append(GenFile(
