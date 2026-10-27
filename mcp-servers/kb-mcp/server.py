@@ -45,7 +45,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from db import open_catalog  # noqa: E402
+from db import PROJECT_ROOT, open_catalog  # noqa: E402
 from resolution import EntityResolver  # noqa: E402
 import ranking  # noqa: E402
 import discovery  # noqa: E402
@@ -58,6 +58,28 @@ RRF_K = 60                     # reciprocal-rank-fusion smoothing constant
 PER_MODALITY_LIMIT = 20        # candidates pulled from each modality before merge
 SCORING_POOL_MULTIPLIER = 5    # ranker sees limit * this many candidates before truncation
 WRITER_GRACE_SECONDS = 0.05    # OS lock-release breathing room (Topology A)
+
+
+def _resolve_output_root(output_root: Optional[str]) -> str:
+    """Turn a generator's ``output_root`` argument into an absolute path.
+
+    The server may be launched from any project (e.g. via the myPub
+    Claude Code plugin), so the process cwd is not a reliable anchor.
+
+    * absolute path → used as-is (``~`` is expanded)
+    * relative path → resolved against the myPub repo root, which keeps
+      the historical ``data/generated-packages`` behaviour
+    * ``None`` / empty → ``$MYPUB_OUTPUT`` if set, else
+      ``<myPub>/data/generated-packages``
+    """
+    if not output_root:
+        output_root = os.environ.get("MYPUB_OUTPUT") or str(
+            PROJECT_ROOT / "data" / "generated-packages"
+        )
+    path = Path(output_root).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return str(path)
 
 
 # Patterns that mark a leading boilerplate line in book chapter content.
@@ -1632,7 +1654,7 @@ def generate_skills_process(output_dir: str) -> dict[str, Any]:
 def generate_skills_materialize(
     package_id: Optional[int] = None,
     package_name: Optional[str] = None,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 5.4 step 4 — write SKILL.md files to disk.
@@ -1651,6 +1673,7 @@ def generate_skills_materialize(
         ``{package_id, package_name, output_root, skill_md_paths,
         provenance_paths, package_md_path}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import skills_factory
@@ -1721,7 +1744,7 @@ def generate_concept_map(
     depth: int = 2,
     max_nodes: int = 60,
     relation_filter: Optional[list[str]] = None,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 7.2 — generate a Concept Neighborhood Map package.
@@ -1755,6 +1778,7 @@ def generate_concept_map(
         ``{package_id, package_name, output_root, n_nodes, n_edges,
         pruned_node_count, file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import concept_map
@@ -1815,7 +1839,7 @@ def generate_learning_path(
     max_concepts: int = 30,
     target_stage_size: int = 5,
     max_chapters_per_stage: int = 4,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 8 — generate a Learning Path package.
@@ -1846,6 +1870,7 @@ def generate_learning_path(
         ``{package_id, package_name, output_root, n_stages, n_concepts,
         file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import learning_path
@@ -1901,7 +1926,7 @@ def generate_cheatsheet(
     extends_depth: int = 1,
     max_per_section: int = 6,
     max_words: int = 1200,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 9.4 — generate a Cheatsheet package.
@@ -1935,6 +1960,7 @@ def generate_cheatsheet(
         ``{package_id, package_name, output_root, n_procedures_total,
         n_clusters, file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import cheatsheet
@@ -1989,7 +2015,7 @@ def generate_slide_deck(
     audience: str = "engineers",
     n_insights: int = 3,
     thesis: Optional[str] = None,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 9.5 — generate a Slide-deck Outline.
@@ -2011,6 +2037,7 @@ def generate_slide_deck(
         ``{package_id, package_name, output_root, n_slides, n_insights,
         duration_min, audience, file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import slide_deck
@@ -2065,7 +2092,7 @@ def generate_pattern_catalog(
     max_depth: int = 2,
     max_patterns: int = 30,
     max_anti_patterns: int = 20,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 11 — generate a Pattern + Anti-Pattern Catalog.
@@ -2091,6 +2118,7 @@ def generate_pattern_catalog(
         n_families, n_anti_patterns, file_paths, validation_issues,
         notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import pattern_catalog
@@ -2146,7 +2174,7 @@ def generate_content_brief(
     audience: str = "engineers",
     angle: Optional[str] = None,
     max_sources: int = 4,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 9.1-9.3 — generate a Content Brief.
@@ -2169,6 +2197,7 @@ def generate_content_brief(
         n_sources_total, fmt, audience, file_paths,
         validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import content_brief
@@ -2223,7 +2252,7 @@ def generate_tutorial(
     max_depth: int = 4,
     max_concepts: int = 30,
     max_stages: int = 5,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 10 — generate a Tutorial.
@@ -2246,6 +2275,7 @@ def generate_tutorial(
         ``{package_id, package_name, output_root, n_stages,
         n_unbacked_stages, level, file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import tutorial
@@ -2298,7 +2328,7 @@ def generate_adr(
     question: str,
     max_options: int = 5,
     max_references: int = 4,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 12 — generate an Architecture Decision Record.
@@ -2318,6 +2348,7 @@ def generate_adr(
         ``{package_id, package_name, output_root, n_options,
         file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import adr
@@ -2366,7 +2397,7 @@ def generate_adr(
 def generate_tech_assessment(
     title: str,
     candidates: list[str],
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 12 — generate a Tech Assessment (feature-matrix comparison).
@@ -2385,6 +2416,7 @@ def generate_tech_assessment(
         ``{package_id, package_name, output_root, n_candidates,
         winner, file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import tech_assessment
@@ -2435,7 +2467,7 @@ def generate_tech_assessment(
 def generate_quickstart(
     library: str,
     language_hint: Optional[str] = None,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 18 — generate a Quickstart (install + hello-world + verify) artifact.
@@ -2456,6 +2488,7 @@ def generate_quickstart(
         n_verify_blocks, has_framing, file_paths, validation_issues,
         notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import quickstart
@@ -2512,7 +2545,7 @@ def generate_library_landscape(
     candidates: Optional[list[str]] = None,
     jobs: Optional[list[str]] = None,
     max_candidates: int = 12,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 17 — generate a Library Landscape / Ecosystem Map.
@@ -2536,6 +2569,7 @@ def generate_library_landscape(
         ``{package_id, package_name, output_root, n_candidates, n_jobs,
         file_paths, validation_issues, notes}``.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import library_landscape
@@ -2588,7 +2622,7 @@ def generate_library_landscape(
 def generate_migration_guide(
     subject: str,
     max_depth: int = 1,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 13 — generate a Migration Guide.
@@ -2598,6 +2632,7 @@ def generate_migration_guide(
     edges; the generator infrastructure is correct but produces an
     empty deliverable until alignment runs surface contradictions.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import migration_guide
@@ -2636,7 +2671,7 @@ def generate_migration_guide(
 def generate_currency_report(
     scope: str = "all-sources",
     source_filter: Optional[str] = None,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 13 — generate a Currency Report.
@@ -2644,6 +2679,7 @@ def generate_currency_report(
     Audits doc_snapshot freshness across all (or one) doc_source.
     Surfaces volatility per source.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import currency_report
@@ -2685,10 +2721,11 @@ def generate_currency_report(
 def generate_dialog(
     topic: str,
     max_beats: int = 6,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 14 — generate a Dialog between Architect + Practitioner."""
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import dialog
@@ -2726,7 +2763,7 @@ def generate_author_panel(
     panel_name: str,
     topics: list[str],
     characters: Optional[list[dict[str, Any]]] = None,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 14 — generate an Author Panel debating per-topic positions
@@ -2739,6 +2776,7 @@ def generate_author_panel(
             name, bio, preferred_relations, preferred_concept_types,
             preferred_era. Defaults to [Architect, Practitioner].
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import author_panel
@@ -2782,7 +2820,7 @@ def generate_project_bootstrap(
     patterns: Optional[list[str]] = None,
     project_name: Optional[str] = None,
     stack: Optional[str] = None,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 15 — generate a Project Bootstrap scaffold.
@@ -2808,6 +2846,7 @@ def generate_project_bootstrap(
             ruby | generic``. Aliases ``py / rs / js / ts / nodejs /
             golang / cs / dotnet / kotlin`` also accepted.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import project_bootstrap
@@ -2848,7 +2887,7 @@ def generate_project_bootstrap(
 def generate_refactoring_playbook(
     topic: str,
     max_findings: int = 12,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 15 — generate a Refactoring Playbook.
@@ -2857,6 +2896,7 @@ def generate_refactoring_playbook(
     concepts with CONTRASTS_WITH neighbors) and pairs each with a
     refactor target plus available refactor procedures.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import refactoring_playbook
@@ -2892,7 +2932,7 @@ def generate_refactoring_playbook(
 def generate_curriculum(
     topic: str,
     n_weeks: int = 12,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Phase 16 — generate a multi-week Curriculum.
@@ -2901,6 +2941,7 @@ def generate_curriculum(
     starting week 2 and pattern catalogs in the last third of the
     schedule.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import curriculum
@@ -2935,7 +2976,7 @@ def generate_curriculum(
 @mcp.tool
 def generate_integration_channel(
     scenario: str,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Healthcare interop — generate a Mirth Connect integration channel.
@@ -2946,6 +2987,7 @@ def generate_integration_channel(
     lab-result-to-ehr-fhir, claim-to-clearinghouse, imaging-study-ingest,
     adt-to-warehouse, adverse-event-to-regulator.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import integration_channel
@@ -2986,7 +3028,7 @@ def generate_integration_channel(
 @mcp.tool
 def generate_fhir_ig(
     use_case: str,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Healthcare interop — generate a FHIR Implementation Guide scaffold.
@@ -2997,6 +3039,7 @@ def generate_fhir_ig(
     skeletons + extensions + JSON examples + pagecontent. Build with
     `sushi build && publisher.jar`.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import fhir_ig_scaffold
@@ -3039,7 +3082,7 @@ def generate_fhir_ig(
 @mcp.tool
 def generate_standards_translator(
     mapping: str,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Healthcare interop — generate a Standards Translator package.
@@ -3052,6 +3095,7 @@ def generate_standards_translator(
     healthcare doc sources (HAPI FHIR, hl7apy, pyx12, pydicom, etc.)
     appear inline.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import standards_translator
@@ -3093,7 +3137,7 @@ def generate_standards_translator(
 @mcp.tool
 def generate_deid_bundle(
     dataset: str,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Healthcare interop — generate a De-identification Procedure Bundle.
@@ -3104,6 +3148,7 @@ def generate_deid_bundle(
     tests. Citations from healthcare doc sources (pydicom, DCMTK, HAPI
     HL7v2, Synthea, FHIR specs) appear inline.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import deid_bundle
@@ -3143,7 +3188,7 @@ def generate_deid_bundle(
 @mcp.tool
 def generate_edi_roundtrip(
     txn_code: str,
-    output_root: str = "data/generated-packages",
+    output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Healthcare interop — generate an X12 EDI Round-Trip Test package.
@@ -3153,6 +3198,7 @@ def generate_edi_roundtrip(
     citations from the X12 doc sources in the catalog (pyx12, Ballerina
     EDI, Stedi). Supported codes: 270, 271, 834, 835, 837, 997, 999.
     """
+    output_root = _resolve_output_root(output_root)
     _bootstrap()
     # pylint: disable=import-outside-toplevel
     import edi_roundtrip

@@ -21,6 +21,25 @@ fhir-ig-<use-case>/
     └── examples/              JSON example resources (one per profile)
 ```
 
+## Output location
+
+Every generator tool takes an `output_root` argument. Settle it before you
+call the tool:
+
+1. **The user named a folder** (e.g. `--out docs/kb`, "save it under
+   design/"): resolve it against the current project
+   (`${CLAUDE_PROJECT_DIR}`) and pass the **absolute** path.
+2. **No folder named, and the current project is not the myPub repo:**
+   ask once, recommending the first option:
+   - `${CLAUDE_PROJECT_DIR}/mypub-packages/` (keep it with this project)
+   - myPub's own `data/generated-packages/` (the shared archive)
+3. **Inside the myPub repo, or the user says "default":** omit
+   `output_root`. The server then uses `$MYPUB_OUTPUT` if set, otherwise
+   `<myPub>/data/generated-packages/`.
+
+Always pass an absolute path. The server resolves relative paths against
+the myPub repo, not against the project you are working in.
+
 ## Supported use cases
 
 - `bulk-data-export` — FHIR Bulk Data Access for clinical trial cohort extraction (SMART Backend Services + Flat FHIR)
@@ -31,7 +50,7 @@ fhir-ig-<use-case>/
 
 ## How to run
 
-Call `generate_fhir_ig` with `use_case`. Output package lands at `data/generated-packages/fhir-ig-<use-case>/`.
+Call `generate_fhir_ig` with `use_case`. Output package lands at `<output_root>/fhir-ig-<use-case>/`.
 
 ## How to build the IG
 

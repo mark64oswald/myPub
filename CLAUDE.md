@@ -9,7 +9,9 @@ framework.
 
 - Local DuckDB: `data/catalog.ddb`
 - ePub collection: `~/Documents/eBooks`
-- Generated packages (all generators): `data/generated-packages/`
+- Generated packages (all generators): `data/generated-packages/` by default
+  (`$MYPUB_OUTPUT` overrides; commands can target the current project)
+- Claude Code plugin: `plugin/` (+ marketplace at `.claude-plugin/`)
 - Architecture spec: `docs/mypub-v2-architecture.md`
 - Generator spec: `docs/mypub-v2-generators.md`
 - Execution plan: `docs/mypub-v2-execution-plan.md`
@@ -45,6 +47,14 @@ Kafka Streams" — route automatically to the right tool. There's no
 slash command needed for these.
 
 ### Slash commands (workflow shortcuts)
+
+The commands ship as the **`mypub` Claude Code plugin** in `plugin/`, so
+they work from any project on this Mac and are invoked as
+`/mypub:kb-<name>` (e.g. `/mypub:kb-concept-map`). Install once with
+`/plugin marketplace add ~/Developer/projects/myPub` then
+`/plugin install mypub@mypub-local`; see `plugin/README.md`. The plugin
+also registers `mypub-kb`, and generator commands ask where to write
+their package (current project or `data/generated-packages/`).
 
 A slash command is here only when it composes multiple tools, drives an
 interactive multi-step flow, or carries workflow context that natural

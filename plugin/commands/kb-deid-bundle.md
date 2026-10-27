@@ -11,6 +11,25 @@ The generator emits:
 - `deid_pipeline.py` — runnable Python scaffold with per-PHI-category functions; ships with helpers for HMAC pseudonymization + per-subject date offsets
 - `tests/test_deid.py` — assertions that PHI is absent from post-pipeline output (SSN, phone, email, full-date regexes)
 
+## Output location
+
+Every generator tool takes an `output_root` argument. Settle it before you
+call the tool:
+
+1. **The user named a folder** (e.g. `--out docs/kb`, "save it under
+   design/"): resolve it against the current project
+   (`${CLAUDE_PROJECT_DIR}`) and pass the **absolute** path.
+2. **No folder named, and the current project is not the myPub repo:**
+   ask once, recommending the first option:
+   - `${CLAUDE_PROJECT_DIR}/mypub-packages/` (keep it with this project)
+   - myPub's own `data/generated-packages/` (the shared archive)
+3. **Inside the myPub repo, or the user says "default":** omit
+   `output_root`. The server then uses `$MYPUB_OUTPUT` if set, otherwise
+   `<myPub>/data/generated-packages/`.
+
+Always pass an absolute path. The server resolves relative paths against
+the myPub repo, not against the project you are working in.
+
 ## How to run
 
 Call `generate_deid_bundle` with `dataset` set to one of:
@@ -19,7 +38,7 @@ Call `generate_deid_bundle` with `dataset` set to one of:
 - `hl7v2` — HL7 v2 messages (ADT/ORU/ORM)
 - `clinical_trial` — Trial subject data (REDCap/EDC + central lab + AE)
 
-Output package lands at `data/generated-packages/deid-bundle-<dataset>/`.
+Output package lands at `<output_root>/deid-bundle-<dataset>/`.
 
 ## What the package guarantees
 
