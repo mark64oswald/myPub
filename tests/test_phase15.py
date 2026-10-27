@@ -242,6 +242,14 @@ def test_bootstrap_picks_the_sense_of_a_short_name_from_the_request(catalog):
     assert [el.concept_id for el in d3.elements] == [py_tool]
     assert py_fw != py_tool
 
+    # A concept that only contains the name ("kafka-python") needs a word
+    # that sits next to the name in the request.
+    _seed_concept(catalog, "kafka-python", "Tool", "Kafka client for Python.")
+    d4 = pb.StackComposeDecomposer().decompose(
+        catalog, res3, "A Python service that consumes Kafka topics",
+        technologies=["Python"])
+    assert [el.concept_id for el in d4.elements] == [py_tool]
+
     # With no context words that point elsewhere, the resolver's pick stands.
     d2 = pb.StackComposeDecomposer().decompose(
         catalog, res, "ADT", technologies=["ADT"])

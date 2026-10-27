@@ -707,12 +707,21 @@ def _disambiguate(
         """,
         [token, token, re.escape(token)],
     ).fetchall()
+    # Words right next to the name in the request ("HL7 ADT feeds" → hl7,
+    # feeds). A candidate that merely *contains* the name must also contain
+    # one of these, or "Python" in a Kafka request becomes "kafka-python".
+    qwords = re.findall(r"[a-z0-9+#]+", (query or "").lower())
+    adjacent = {qwords[j] for i, w in enumerate(qwords) if w == token
+                for j in (i - 1, i + 1) if 0 <= j < len(qwords)} & ctx
     scored = []
     for cid, cname, desc in rows:
         cid = int(cid)
         if cid == default_cid:
             continue
         name_words = _words(cname) - _words(name)
+        same_sense = cname.strip().lower() == token or not name_words
+        if not same_sense and not (name_words & adjacent):
+            continue
         sc = (2 * len(ctx & name_words) + tie(cid, desc)
               - 0.5 * len(name_words - ctx))
         scored.append((sc, _coverage(conn, cid), cid, cname))
