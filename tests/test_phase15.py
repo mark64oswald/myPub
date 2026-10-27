@@ -101,13 +101,23 @@ def test_bootstrap_resolves_named_elements(catalog, bootstrap_corpus):
 def test_bootstrap_emits_full_file_plan(catalog, bootstrap_corpus):
     res = _resolver({"cqrs": bootstrap_corpus["cqrs"]})
     d = pb.StackComposeDecomposer().decompose(
-        catalog, res, "CQRS demo", patterns=["CQRS"],
+        catalog, res, "CQRS demo", patterns=["CQRS"], stack="python",
     )
     paths = {pf.relative_path for pf in d.planned_files}
     assert "README.md" in paths
     assert "src/main.py" in paths
     assert "tests/test_smoke.py" in paths
-    assert "docker-compose.yml" in paths
+    assert "pyproject.toml" in paths
+
+
+def test_bootstrap_without_stack_signal_is_generic(catalog, bootstrap_corpus):
+    """No language keyword and no explicit stack → README-only skeleton."""
+    res = _resolver({"cqrs": bootstrap_corpus["cqrs"]})
+    d = pb.StackComposeDecomposer().decompose(
+        catalog, res, "CQRS demo", patterns=["CQRS"],
+    )
+    assert d.stack.name == "generic"
+    assert {pf.relative_path for pf in d.planned_files} == {"README.md", ".gitignore"}
 
 
 def test_bootstrap_skips_unresolved_names(catalog, bootstrap_corpus):
@@ -163,7 +173,7 @@ def test_bootstrap_run_deterministic_writes_project_tree(
     g = pb.make_project_bootstrap_generator()
     pid, report, _ = g.run_deterministic(
         catalog, res, "CQRS demo with Kafka",
-        patterns=["CQRS"], technologies=["Apache Kafka"],
+        patterns=["CQRS"], technologies=["Apache Kafka"], stack="python",
         project_name="cqrs-kafka-demo",
         output_root=str(tmp_path),
     )

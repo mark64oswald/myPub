@@ -573,6 +573,40 @@ def test_context7_merge_query_results_skips_protocol_errors():
     assert merged[0]["source"] == "https://example/x"
 
 
+def test_context7_merge_query_results_skips_json_error_payloads():
+    """Context7 JSON errors (e.g. library still re-indexing) must not become chunks."""
+    error_response = (
+        '{"error":"library_not_finalized","message":"Library /websites/databricks '
+        'is still being processed. Please try again shortly."}'
+    )
+    merged = refresh_docs.Context7Fetcher._merge_query_results([error_response] * 5)
+    assert merged == []
+
+
+def test_context7_redirect_target_parses_notice():
+    notice = (
+        "Library /fastapi/fastapi has been redirected to this library: "
+        "/websites/fastapi_tiangolo."
+    )
+    assert (refresh_docs.Context7Fetcher._redirect_target(notice)
+            == "/websites/fastapi_tiangolo")
+    assert refresh_docs.Context7Fetcher._redirect_target(
+        "### Title\n\nSource: https://example/x\nbody"
+    ) is None
+
+
+@live_only
+def test_context7_fetch_live_follows_redirect():
+    """Live: a moved library is fetched from its new ID, not stored as the notice."""
+    fetched = refresh_docs.Context7Fetcher().fetch(
+        "/fastapi/fastapi", queries=["installation, getting started, and basic usage"],
+    )
+    assert fetched.url == "https://context7.com/websites/fastapi_tiangolo"
+    chunks = json.loads(fetched.content)
+    assert len(chunks) > 1
+    assert all("redirected" not in c["content"] for c in chunks)
+
+
 def test_context7_merge_query_results_drops_empty_content_chunks():
     """A chunk with no body text contributes nothing — drop, don't index empty rows."""
     response = (
@@ -625,6 +659,13 @@ def test_deepwiki_fetch_live_fastmcp():
     assert result.source_type == "markdown"
     assert "fastmcp" in result.content.lower() or "FastMCP" in result.content
     assert result.url == "https://deepwiki.com/PrefectHQ/fastmcp"
+
+
+@live_only
+def test_deepwiki_fetch_live_unindexed_repo_raises():
+    """Live: DeepWiki's 'Repository not found' text must raise, not become a snapshot."""
+    with pytest.raises(refresh_docs.FetchError, match="Repository not found"):
+        refresh_docs.DeepWikiFetcher().fetch("bioperl/bioperl-live")
 
 
 # ---------------------------------------------------------------------------
