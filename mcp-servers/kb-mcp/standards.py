@@ -289,7 +289,9 @@ def cite_concepts(
     """(concept_id, concept name, doc_section_id, source name) citations
     drawn round-robin across ``source_names`` in the order given, so one
     alphabetically early source can't fill the whole limit and the first
-    sources lead every round."""
+    sources lead every round. A concept counts for a section when one of
+    its relations or procedures was extracted from it; segment-table
+    guides often yield procedures but no relations."""
     names = list(dict.fromkeys(source_names))
     if not names:
         return []
@@ -300,13 +302,22 @@ def cite_concepts(
         params.append(name_like)
     rows = conn.execute(
         f"""
-        WITH hits AS (
+        WITH section_concepts AS (
+            SELECT cr.from_concept_id AS concept_id, cr.source_id AS doc_section_id
+              FROM concept_relation cr WHERE cr.source_type = 'doc_section'
+            UNION
+            SELECT cr.to_concept_id, cr.source_id
+              FROM concept_relation cr WHERE cr.source_type = 'doc_section'
+            UNION
+            SELECT pc.concept_id, p.source_id
+              FROM procedure p
+              JOIN procedure_concept pc USING (procedure_id)
+             WHERE p.source_type = 'doc_section'
+        ), hits AS (
             SELECT DISTINCT c.concept_id, c.name, ds.doc_section_id, src.name AS src_name
-              FROM concept c
-              JOIN concept_relation cr ON cr.from_concept_id = c.concept_id
-                                       OR cr.to_concept_id = c.concept_id
-              JOIN doc_section ds ON cr.source_id = ds.doc_section_id
-                                  AND cr.source_type = 'doc_section'
+              FROM section_concepts sc
+              JOIN concept c ON c.concept_id = sc.concept_id
+              JOIN doc_section ds ON ds.doc_section_id = sc.doc_section_id
               JOIN doc_snapshot sn USING (snapshot_id)
               JOIN doc_source src ON sn.doc_source_id = src.doc_source_id
              WHERE src.name IN ({', '.join('?' * len(names))}) {extra}
