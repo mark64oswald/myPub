@@ -240,6 +240,7 @@ _KEY_PATTERNS: list[tuple[str, str]] = [
     ("davinci-pas", r"prior auth|\bpas\b|\b278\b"),
     ("carin-bb", r"explanationofbenefit|explanation of benefit|\beob\b|\bcarin\b|blue button"),
     ("cda", r"\bc-?cda\b|\bccd\b"),
+    ("ncpdp-d0", r"\bncpdp\b|\bd\.0\b|pharmacy claim"),
     ("dicom-deid", r"\bdicom\b"),
 ]
 
@@ -257,8 +258,8 @@ def cited_source_names(
     tools_cited: Iterable[str],
     text: str = "",
 ) -> list[str]:
-    """The loaded registry spec/guide sources for the standards ``text``
-    names, then ``tools_cited``, then the registry's library/tool sources.
+    """The loaded registry spec, then guide, sources for the standards
+    ``text`` names, then ``tools_cited``, then the registry's library/tool sources.
     The order is citation priority (see ``cite_concepts``): generators keep
     only their first ~10 citations as provenance, so specs go first. Falls
     back to ``tools_cited`` alone when the registry tables are absent."""
@@ -270,7 +271,10 @@ def cited_source_names(
         rows = standard_sources(conn, keys=keys)
     except duckdb.Error:
         return cited
-    specs = [r["doc_source_name"] for r in rows if r["role"] in ("spec", "guide")]
+    # Rows come back ordered by role name; official specs lead their
+    # secondary guides.
+    specs = ([r["doc_source_name"] for r in rows if r["role"] == "spec"]
+             + [r["doc_source_name"] for r in rows if r["role"] == "guide"])
     others = [r["doc_source_name"] for r in rows if r["role"] not in ("spec", "guide")]
     return list(dict.fromkeys(specs + cited + others))
 

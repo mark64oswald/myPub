@@ -155,3 +155,36 @@ def test_cite_concepts_round_robins_across_sources(conn):
 def test_infer_us_core_with_hyphen():
     assert "us-core" in standards.infer_standard_keys("base_ig us-core + davinci-pas")
     assert "davinci-pas" in standards.infer_standard_keys("base_ig us-core + davinci-pas")
+
+
+def test_infer_ncpdp():
+    assert standards.infer_standard_keys("NCPDP D.0 B1 claim to FHIR") == [
+        "fhir-r4", "ncpdp-d0"]
+
+
+def test_cited_source_names_puts_specs_before_guides(conn):
+    conn.execute("INSERT INTO doc_source (name, source_type, mcp_server, identifier) "
+                 "VALUES ('HealthSim FHIR R4 format guide', 'github_raw', 'github_raw', 'hs:main:fhir.md')")
+    conn.execute("INSERT INTO doc_snapshot (doc_source_id) SELECT doc_source_id "
+                 "FROM doc_source WHERE identifier = 'hs:main:fhir.md'")
+    conn.execute("INSERT INTO doc_section (snapshot_id, ordinal) SELECT snapshot_id, 0 "
+                 "FROM doc_snapshot JOIN doc_source USING (doc_source_id) "
+                 "WHERE name IN ('FHIR R4 core', 'HealthSim FHIR R4 format guide')")
+    standards.load(conn, {"standards": [
+        {"key": "fhir-r4", "name": "R4", "license_tier": "open", "sources": [
+            {"name": "core", "role": "spec", "source_type": "fhir_package",
+             "identifier": "hl7.fhir.r4.core@4.0.1"},
+            {"name": "hs", "role": "guide", "source_type": "github_raw",
+             "identifier": "hs:main:fhir.md"}]}]})
+    assert standards.cited_source_names(conn, ["HAPI"], "fhir") == [
+        "FHIR R4 core", "HealthSim FHIR R4 format guide", "HAPI"]
+
+
+def test_healthsim_guides_are_seeded():
+    import seed_healthsim
+    seeded = {s["identifier"] for s in seed_healthsim.HEALTHSIM_SEEDS}
+    pinned = {src["identifier"]
+              for std in standards.read_registry()["standards"]
+              for src in std.get("sources") or []
+              if src.get("identifier", "").startswith(seed_healthsim.REPO)}
+    assert pinned and pinned <= seeded
