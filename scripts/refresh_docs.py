@@ -50,6 +50,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -399,19 +400,29 @@ class Context7Fetcher:
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     query_results: list[str] = []
+                    # Context7 answers a moved library with a one-line notice
+                    # naming its new ID; follow it so the notice itself never
+                    # becomes the snapshot.
+                    library_id = identifier
                     for q in queries:
                         try:
-                            result = await session.call_tool(
-                                self.TOOL_NAME,
-                                {"libraryId": identifier, "query": q},
-                            )
+                            text = await self._query(session, library_id, q)
+                            target = self._redirect_target(text)
+                            if target and target != library_id:
+                                log.warning(
+                                    "Context7 library %s redirected to %s "
+                                    "(update doc_source.identifier)",
+                                    library_id, target,
+                                )
+                                library_id = target
+                                text = await self._query(session, library_id, q)
                         except Exception as e:
                             log.warning(
                                 "Context7 query %r for %s failed (continuing): %s",
-                                q, identifier, e,
+                                q, library_id, e,
                             )
                             continue
-                        query_results.append(_extract_text_from_call_result(result))
+                        query_results.append(text)
         except Exception as e:  # subprocess / transport / protocol failures
             raise FetchError(f"Context7 session failed for {identifier}: {e}") from e
 
@@ -421,8 +432,15 @@ class Context7Fetcher:
                 f"Context7 returned no usable content for {identifier} "
                 f"across {len(queries)} queries"
             )
+        if not any(c.get("source") for c in chunks):
+            # Real doc snippets always carry a Source: line; a sourceless
+            # response is a status message we don't recognise yet.
+            raise FetchError(
+                f"Context7 returned no sourced snippets for {identifier}: "
+                f"{chunks[0]['content'][:160]!r}"
+            )
         return FetchResult(
-            url=f"https://context7.com{identifier}",
+            url=f"https://context7.com{library_id}",
             content=json.dumps(chunks),
             source_type="context7",
         )
@@ -443,6 +461,12 @@ class Context7Fetcher:
             if text.startswith("MCP error") or "Tool not found" in text:
                 log.warning("Context7 returned protocol error: %s", text[:160])
                 continue
+            if Context7Fetcher._is_json_error(text):
+                # e.g. {"error":"library_not_finalized",...} while Context7
+                # re-indexes a library. Indexing it would replace a good
+                # snapshot with a one-section error message.
+                log.warning("Context7 returned error payload: %s", text[:160])
+                continue
             for chunk in Context7Fetcher._text_to_chunks(text):
                 source = (chunk.get("source") or "").strip()
                 content = (chunk.get("content") or "").strip()
@@ -454,6 +478,30 @@ class Context7Fetcher:
                 seen_keys.add(key)
                 merged.append(chunk)
         return merged
+
+    async def _query(self, session: ClientSession, library_id: str, query: str) -> str:
+        result = await session.call_tool(
+            self.TOOL_NAME, {"libraryId": library_id, "query": query},
+        )
+        return _extract_text_from_call_result(result)
+
+    @staticmethod
+    def _redirect_target(text: str) -> Optional[str]:
+        """Return the new library ID from a Context7 redirect notice, else None."""
+        match = _CONTEXT7_REDIRECT_RE.search(text[:500])
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _is_json_error(text: str) -> bool:
+        """True when the response is a JSON object carrying an ``error`` key."""
+        stripped = text.strip()
+        if not stripped.startswith("{"):
+            return False
+        try:
+            payload = json.loads(stripped)
+        except ValueError:
+            return False
+        return isinstance(payload, dict) and "error" in payload
 
     @staticmethod
     def _text_to_chunks(text: str) -> list[dict[str, Any]]:
@@ -488,6 +536,11 @@ class Context7Fetcher:
         return chunks
 
 
+_CONTEXT7_REDIRECT_RE = re.compile(
+    r"has been redirected to this library:\s*(/\S+?)\.?\s*$", re.MULTILINE,
+)
+
+
 class DeepWikiFetcher:
     """Fetch wiki content via DeepWiki MCP (HTTP-streamable).
 
@@ -520,6 +573,9 @@ class DeepWikiFetcher:
         text = _extract_text_from_call_result(result)
         if not text.strip():
             raise FetchError(f"DeepWiki returned empty content for {identifier}")
+        if text.lstrip().startswith("Error fetching wiki for"):
+            # e.g. "Repository not found. Visit https://deepwiki.com/... to index it."
+            raise FetchError(f"DeepWiki error for {identifier}: {text.strip()[:200]}")
         return FetchResult(
             url=f"https://deepwiki.com/{identifier}",
             content=text,
