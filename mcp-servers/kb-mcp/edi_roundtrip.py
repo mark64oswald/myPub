@@ -92,7 +92,8 @@ TRANSACTION_SETS: dict[str, dict[str, Any]] = {
                    "adjudication detail back to the provider.",
         "paired_response": None,  # this is itself a response to 837
         "key_loops": ["1000A Payer Identification", "1000B Payee Identification",
-                      "2000 Header Number", "2100 Claim Payment Information"],
+                      "2000 Header Number", "2100 Claim Payment Information",
+                      "2110 Service Payment Information"],
         "key_segments": ["BPR", "TRN", "CLP", "CAS", "SVC"],
     },
     "837": {
@@ -306,8 +307,8 @@ class EdiRoundTripDecomposer:
         # term also matches "X12 834") before taking each term's top 5, so
         # they don't use up its slots. Loop ids only mean something inside
         # one transaction (837 2000A is Billing Provider, 270 2000A is
-        # Information Source), so a loop counts only from a source named for
-        # this transaction or its paired response.
+        # Information Source; 837 1000A is Submitter, 835 1000A is Payer), so
+        # a loop counts only from a source named for this transaction.
         allowed = {txn_code, paired} - {None}
         seen: set[int] = set()
         unique: list[tuple[int, str, int, str]] = []
@@ -318,7 +319,7 @@ class EdiRoundTripDecomposer:
                     break
                 if c[0] in seen or _txn_codes_in(c[1]) - allowed:
                     continue
-                if term in loop_ids and not (_txn_codes_in(c[3]) & allowed):
+                if term in loop_ids and txn_code not in _txn_codes_in(c[3]):
                     continue
                 seen.add(c[0])
                 unique.append(c)

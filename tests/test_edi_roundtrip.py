@@ -33,11 +33,14 @@ def test_txn_codes_in():
 
 
 def test_decomposer_dedupes_and_scopes_loops(monkeypatch):
-    """One citation per concept; loops only from this txn's (or its pair's) guide."""
+    """One citation per concept; loops only from this txn's own guide."""
     rows = {
         "HIPAA": [(1, "HIPAA", 10, "pyx12"), (1, "HIPAA", 11, "HealthSim X12 834 guide")],
         "2000A": [(2, "Loop 2000A", 20, "HealthSim X12 270/271 guide"),
                   (3, "Loop 2000A Billing Provider", 21, "HealthSim X12 837 guide")],
+        # 835 is the 837's pair, but its 1000A is Payer, not Submitter.
+        "1000A": [(4, "Loop 1000A", 30, "HealthSim X12 835 guide"),
+                  (4, "Loop 1000A", 31, "HealthSim X12 837 guide")],
     }
     monkeypatch.setattr(edi_roundtrip.standards, "cited_source_names",
                         lambda conn, tools, text="": list(tools))
@@ -45,7 +48,7 @@ def test_decomposer_dedupes_and_scopes_loops(monkeypatch):
                         lambda conn, names, limit=30, name_word=None, **kw:
                         rows.get(name_word, []))
     d = edi_roundtrip.EdiRoundTripDecomposer().decompose(None, None, "837")
-    assert [c[0] for c in d.concept_citations] == [3, 1]
+    assert [(c[0], c[2]) for c in d.concept_citations] == [(4, 31), (3, 21), (1, 10)]
 
 
 def test_pair_metadata_consistency():
