@@ -13,13 +13,13 @@ actions per item.
 1. Show the top pending items so we know what's in the queue:
 
    ```bash
-   .venv/bin/python3 scripts/resolve_concept.py list --limit 10
+   "${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3" "${CLAUDE_PLUGIN_ROOT}/../scripts/resolve_concept.py" list --limit 10
    ```
 
 2. Pick the highest-similarity pending item and show full details:
 
    ```bash
-   .venv/bin/python3 scripts/resolve_concept.py show <queue_id>
+   "${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3" "${CLAUDE_PLUGIN_ROOT}/../scripts/resolve_concept.py" show <queue_id>
    ```
 
 3. Present the item to the user concisely — candidate name, nearest
@@ -30,26 +30,26 @@ actions per item.
      Rewrites provisional edges to the nearest concept and deletes the
      provisional.
      ```bash
-     .venv/bin/python3 scripts/resolve_concept.py merge <queue_id> [--register-alias]
+     "${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3" "${CLAUDE_PLUGIN_ROOT}/../scripts/resolve_concept.py" merge <queue_id> [--register-alias]
      ```
 
    - **alias** — Same effect as `merge --register-alias`: treat as
      duplicate and also record the candidate_name as a future alias.
      ```bash
-     .venv/bin/python3 scripts/resolve_concept.py alias <queue_id>
+     "${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3" "${CLAUDE_PLUGIN_ROOT}/../scripts/resolve_concept.py" alias <queue_id>
      ```
 
    - **keep-separate** — The candidate is genuinely a distinct concept.
      Clears the pending_review flag so it becomes canonical.
      ```bash
-     .venv/bin/python3 scripts/resolve_concept.py keep-separate <queue_id>
+     "${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3" "${CLAUDE_PLUGIN_ROOT}/../scripts/resolve_concept.py" keep-separate <queue_id>
      ```
 
    - **rename** — The extractor produced a bad name. Provide a better
      one. Add `--merge-into <concept_id>` if after renaming it should
      fold into an existing concept.
      ```bash
-     .venv/bin/python3 scripts/resolve_concept.py rename <queue_id> "Better Name" [--merge-into <concept_id>]
+     "${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3" "${CLAUDE_PLUGIN_ROOT}/../scripts/resolve_concept.py" rename <queue_id> "Better Name" [--merge-into <concept_id>]
      ```
 
 4. Loop: back to step 2 with the next highest-similarity pending item

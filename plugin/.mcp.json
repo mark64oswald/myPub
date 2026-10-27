@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mypub-kb": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/../mcp-servers/kb-mcp/server.py"]
+    }
+  }
+}

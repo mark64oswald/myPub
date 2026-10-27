@@ -1,0 +1,9 @@
+{
+  "name": "mypub",
+  "displayName": "myPub knowledge base",
+  "description": "Search Mark's indexed ePub library and live docs, and run the /kb-* generators, from any project. Needs the local myPub repo and its catalog.",
+  "author": { "name": "Mark Oswald" },
+  "repository": "https://github.com/mark64oswald/myPub",
+  "license": "Apache-2.0",
+  "keywords": ["knowledge-base", "epub", "generators", "duckdb"]
+}
