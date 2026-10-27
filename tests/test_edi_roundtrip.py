@@ -32,6 +32,22 @@ def test_txn_codes_in():
     assert edi_roundtrip._txn_codes_in("Loop 2300 Claim Information") == set()
 
 
+def test_decomposer_dedupes_and_scopes_loops(monkeypatch):
+    """One citation per concept; loops only from this txn's (or its pair's) guide."""
+    rows = {
+        "HIPAA": [(1, "HIPAA", 10, "pyx12"), (1, "HIPAA", 11, "HealthSim X12 834 guide")],
+        "2000A": [(2, "Loop 2000A", 20, "HealthSim X12 270/271 guide"),
+                  (3, "Loop 2000A Billing Provider", 21, "HealthSim X12 837 guide")],
+    }
+    monkeypatch.setattr(edi_roundtrip.standards, "cited_source_names",
+                        lambda conn, tools, text="": list(tools))
+    monkeypatch.setattr(edi_roundtrip.standards, "cite_concepts",
+                        lambda conn, names, limit=30, name_word=None, **kw:
+                        rows.get(name_word, []))
+    d = edi_roundtrip.EdiRoundTripDecomposer().decompose(None, None, "837")
+    assert [c[0] for c in d.concept_citations] == [3, 1]
+
+
 def test_pair_metadata_consistency():
     """If A.paired_response = B, then B must also be a registered transaction."""
     for code, meta in edi_roundtrip.TRANSACTION_SETS.items():
