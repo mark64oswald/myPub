@@ -14,6 +14,12 @@ Embedding-stage thresholds (cosine similarity, not distance):
                 pending_review=True and enqueue to concept_resolution_queue
     < 0.75 → genuinely new: create a new concept cleanly
 
+Names that carry an identifier code (an HL7 event like ORU^R01, a
+segment like PV1, a version like EC2 or X12 837) skip the embedding
+auto-match unless the nearest concept carries the same codes. Embeddings
+barely see the code, so "ORU^R01 message structure" and "MFN^M01 message
+structure" score above 0.90 while naming different things.
+
 Every path returns a `ResolveResult` carrying the concept_id, whether it's
 newly created, and a type tag suitable for logging/analytics.
 
@@ -26,6 +32,7 @@ caller decides transaction boundaries.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -35,6 +42,22 @@ DEFAULT_EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBED_DIM = 384
 DEFAULT_HIGH_THRESHOLD = 0.90      # similarity — above here is auto-match
 DEFAULT_LOW_THRESHOLD = 0.75       # similarity — below here is a new concept
+
+# An upper-case token with both a letter and a digit, optionally joined
+# by ^ or _ (ORU^R01, MFN_M01, PV1, A01, EC2, 837P).
+_CODE_RE = re.compile(r"\b(?=[A-Z0-9^_]*\d)(?=[A-Z0-9^_]*[A-Z])[A-Z0-9]+(?:[\^_][A-Z0-9]+)*\b")
+
+
+def code_tokens(name: str) -> frozenset[str]:
+    """Identifier codes in a concept name; `_` and `^` count as the same."""
+    return frozenset(m.replace("_", "^") for m in _CODE_RE.findall(name or ""))
+
+
+def codes_conflict(a: str, b: str) -> bool:
+    """True when either name carries codes and the two code sets differ."""
+    ca, cb = code_tokens(a), code_tokens(b)
+    return bool(ca or cb) and ca != cb
+
 
 RESOLUTION_TYPES = {"exact", "alias", "embedding_high", "borderline", "new"}
 
@@ -152,7 +175,12 @@ class EntityResolver:
         qvec = self._embed(candidate_name, candidate_context)
         nearest = self._nearest_by_embedding(qvec, concept_type)
 
-        if nearest is not None:
+        # Different codes are different entities however close the vectors
+        # are: don't merge them or queue them for review.
+        if nearest is not None and nearest[1] >= self.low_threshold and codes_conflict(
+                candidate_name, self._concept_name(nearest[0])):
+            pass
+        elif nearest is not None:
             neighbor_id, similarity = nearest
             if similarity >= self.high_threshold:
                 return ResolveResult(
@@ -243,6 +271,12 @@ class EntityResolver:
             params = [candidate_name, concept_type]
         row = self.conn.execute(sql, params).fetchone()
         return row[0] if row else None
+
+    def _concept_name(self, concept_id: int) -> str:
+        row = self.conn.execute(
+            "SELECT name FROM concept WHERE concept_id = ?", [concept_id]
+        ).fetchone()
+        return row[0] if row else ""
 
     def _alias_match(self, candidate_name: str) -> Optional[int]:
         """Case-insensitive lookup on concept_alias.alias.
