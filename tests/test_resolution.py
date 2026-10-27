@@ -352,3 +352,40 @@ def test_empty_candidate_name_rejected(resolver):
         resolver.resolve("")
     with pytest.raises(ValueError):
         resolver.resolve("   ")
+
+
+def test_code_tokens_and_conflicts():
+    from resolution import code_tokens, codes_conflict  # pylint: disable=import-outside-toplevel
+    assert code_tokens("MFN_M01 message structure") == {"MFN^M01"}
+    assert code_tokens("PV1 segment") == {"PV1"}
+    assert code_tokens("REST API design") == frozenset()
+    assert codes_conflict("ORU^R01 message structure", "MFN^M01 message structure")
+    assert codes_conflict("PV1 segment", "PID segment")
+    assert not codes_conflict("MFN_M01 message structure", "MFN^M01 message")
+    assert not codes_conflict("Event Sourcing", "event-sourced systems")
+
+
+class _SameVector:
+    """Embeds every text to one vector, so every neighbor scores 1.0."""
+
+    def encode(self, texts, convert_to_numpy=True):  # pylint: disable=unused-argument
+        import numpy as np  # pylint: disable=import-outside-toplevel
+        return np.ones((len(texts), 384), dtype="float32")
+
+
+def test_code_mismatch_skips_embedding_match(conn):
+    """Names that differ only by an HL7 code must not auto-merge."""
+    model = _SameVector()
+    resolver = EntityResolver(conn, model=model)
+    mfn = _seed_concept(conn, model, "MFN^M01 message structure",
+                        "Segments of the HL7 v2 MFN^M01 message structure.")
+    result = resolver.resolve("ORU^R01 message structure")
+    assert result.concept_id != mfn
+    assert result.resolution_type == "new"
+    assert result.nearest_concept_id == mfn
+    assert result.similarity >= resolver.high_threshold
+    queued = conn.execute("SELECT COUNT(*) FROM concept_resolution_queue").fetchone()[0]
+    assert queued == 0
+    # MFN_M01 is the same code spelled with an underscore.
+    same = resolver.resolve("MFN_M01 message structure")
+    assert (same.concept_id, same.resolution_type) == (mfn, "embedding_high")
