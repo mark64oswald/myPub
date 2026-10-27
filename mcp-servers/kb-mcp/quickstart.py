@@ -291,6 +291,46 @@ _PM_COMMAND_TOKENS = (
 )
 
 
+# Vendor / foundation words that don't identify a package on their own.
+_VENDOR_WORDS = {"apache", "google", "cloud", "aws", "amazon", "azure", "microsoft",
+                 "open", "source", "the", "docs", "documentation", "sdk", "api"}
+
+
+def _name_keys(library_name: str) -> set[str]:
+    """Normalized spellings a package name might take for a library.
+
+    'pola-rs/polars' → {'polars'}; 'Delta Lake' → {'deltalake', 'delta',
+    'lake'} (matches delta-spark); 'PyTorch' → {'pytorch', 'torch'}.
+    """
+    keys: set[str] = set()
+    for part in {library_name, library_name.rsplit("/", 1)[-1]}:
+        part = part.split("(")[0].lower()
+        k = "".join(ch for ch in part if ch.isalnum())
+        if len(k) >= 2:
+            keys.add(k)
+        for word in part.replace("-", " ").replace("_", " ").replace(".", " ").split():
+            w = "".join(ch for ch in word if ch.isalnum())
+            if len(w) >= 4 and w not in _VENDOR_WORDS:
+                keys.add(w)
+    for k in list(keys):
+        if k.startswith("py") and len(k) >= 6:
+            keys.add(k[2:])
+    return keys
+
+
+def _installs_library(b: _CodeBlock, library_name: Optional[str]) -> bool:
+    """True if the block's package-manager command names the library.
+
+    A library's docs often carry install lines for *other* packages
+    (Polars' BigQuery page: ``pip install google-cloud-bigquery``).
+    With no library name to check, every command counts.
+    """
+    if not library_name:
+        return True
+    code = "".join(ch for ch in b.code[:400].lower() if ch.isalnum())
+    return any(k in code for k in _name_keys(library_name))
+
+
 def _has_package_manager_command(blocks: list[_CodeBlock]) -> bool:
     """True if any block looks like a real package-manager install command."""
     for b in blocks:
@@ -473,12 +513,15 @@ class QuickstartDecomposer:
         # dependency fragment), float it to the front so the renderer's
         # by-language dedup picks the install command — not whichever
         # block happened to appear earliest in the section list.
-        if _has_package_manager_command(install_blocks):
-            install_blocks = sorted(
-                install_blocks,
-                key=lambda b: 0 if _has_package_manager_command([b]) else 1,
-            )
-        if not _has_package_manager_command(install_blocks):
+        # Only a command that names this library counts: Polars' docs
+        # quote `pip install google-cloud-bigquery` on their BigQuery page.
+        own_install = [b for b in install_blocks
+                       if _has_package_manager_command([b])
+                       and _installs_library(b, library_name)]
+        if own_install:
+            install_blocks = own_install + [b for b in install_blocks
+                                            if b not in own_install]
+        else:
             default_block = _default_install_command(
                 library_name, language_hint, sections,
             )
@@ -728,6 +771,7 @@ def _is_noise_block(b: _CodeBlock) -> bool:
 
 def _intent_score(
     b: _CodeBlock, intent: str, language_hint: Optional[str],
+    library_name: Optional[str] = None,
 ) -> float:
     """Score a block for how well it serves one quickstart intent.
 
@@ -746,7 +790,8 @@ def _intent_score(
         score += 2.0
     if intent == "install":
         if _has_package_manager_command([b]):
-            score += 5.0
+            # A command for some other package is no better than prose.
+            score += 5.0 if _installs_library(b, library_name) else -1.0
         score -= max(0, n_lines - 4) * 0.25
     else:
         if any(tok in head for tok in _IMPORT_TOKENS):
@@ -797,13 +842,15 @@ def _pick_hello_block(d: "_Decomposition") -> Optional[_CodeBlock]:
     return block
 
 
-def _rank_install_blocks(blocks: list[_CodeBlock]) -> list[_CodeBlock]:
+def _rank_install_blocks(
+    blocks: list[_CodeBlock], library_name: Optional[str] = None,
+) -> list[_CodeBlock]:
     """Install blocks in display order: noise out (if anything else is
-    left), package-manager commands first, then shortest."""
+    left), commands that install this library first, then shortest."""
     clean = [b for b in blocks if not _is_noise_block(b)] or blocks
     return sorted(
         clean,
-        key=lambda b: (-_intent_score(b, "install", None), len(b.code)),
+        key=lambda b: (-_intent_score(b, "install", None, library_name), len(b.code)),
     )
 
 
@@ -813,7 +860,7 @@ def _render_install(d: _Decomposition) -> str:
         # Show up to 3 install variants
         seen_lang: set[str] = set()
         n_shown = 0
-        for b in _rank_install_blocks(d.install_blocks):
+        for b in _rank_install_blocks(d.install_blocks, d.library_name):
             if b.language in seen_lang and b.language:
                 continue
             seen_lang.add(b.language)
