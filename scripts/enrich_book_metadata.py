@@ -61,6 +61,30 @@ _SUBJECT_NOISE = re.compile(
     r"long now|^open library|^nyt:|^award:|^place:|^person:|^time:",
     re.I,
 )
+# Library call numbers (LC "QA76.9.D26 S53 2001", Dewey "005.13") — shelf
+# locations, not topics.
+_CALL_NUMBER = re.compile(
+    r"^[a-z]{1,3}\s?\d{2,4}(\.\d+)?(\s?\.?[a-z]\d+)*(\s+[a-z]?\d+[a-z]*)*(\s+\d{4})?$"
+    r"|^\d{3}(\.\d+)?(\s+\S+)?$",
+    re.I,
+)
+# Whole-word markers of French / German / Spanish / Portuguese / Italian /
+# Dutch headings ("Bases de données", "Programmierung und …").
+_FOREIGN_WORDS = re.compile(
+    r"\b(de|des|du|la|le|les|et|und|für|der|das|y|del|los|las|para|da|"
+    r"di|della|het|een|voor|en)\b",
+    re.I,
+)
+
+
+def _is_foreign(part: str) -> bool:
+    # OpenLibrary's English headings are ASCII; an accented letter almost
+    # always means a translated heading ("Informática").
+    if any(ch.isalpha() and not ch.isascii() for ch in part):
+        return True
+    return bool(_FOREIGN_WORDS.search(part))
+
+
 _ISBN_RE = re.compile(r"(97[89]\d{10}|\d{9}[\dXx])")
 _STOPWORDS = {"the", "a", "an", "and", "of", "for", "to", "in", "on", "with", "edition"}
 
@@ -144,7 +168,8 @@ def clean_subjects(raw: list[str]) -> list[str]:
     seen: set[str] = set()
     for s in raw:
         for part in [p.strip() for p in re.split(r"\s+/\s+", s or "")]:
-            if not part or len(part) > 80 or _SUBJECT_NOISE.search(part):
+            if (not part or len(part) > 80 or _SUBJECT_NOISE.search(part)
+                    or _CALL_NUMBER.match(part) or _is_foreign(part)):
                 continue
             key = part.lower()
             if key in seen or key == "general":
@@ -221,7 +246,8 @@ def _accept(cand: dict, gap: BookGap, by_isbn: bool) -> bool:
             and authors_agree(gap.authors, cand.get("authors") or []))
 
 
-def enrich_one(gap: BookGap, isbns: list[str], fetch: Fetch) -> Enrichment:
+def enrich_one(gap: BookGap, isbns: list[str], fetch: Fetch, *,
+               use_google: bool = True) -> Enrichment:
     """Try ISBN lookups, then title searches; merge until the gaps close."""
     e = Enrichment(book_id=gap.book_id, title=gap.title)
     attempts: list[tuple[str, str, Callable[[], list[dict]]]] = []
@@ -233,6 +259,8 @@ def enrich_one(gap: BookGap, isbns: list[str], fetch: Fetch) -> Enrichment:
     attempts.append(("openlibrary", "title", lambda: from_openlibrary_search(gap.title, author, fetch)))
     gq = f'intitle:"{gap.title}"' + (f' inauthor:"{author}"' if author else "")
     attempts.append(("googlebooks", "title", lambda: from_googlebooks(gq, fetch)))
+    if not use_google:
+        attempts = [a for a in attempts if a[0] != "googlebooks"]
 
     for source, by, run in attempts:
         cands = [c for c in run() if _accept(c, gap, by == "isbn")]
@@ -348,7 +376,7 @@ def do_lookup(args: argparse.Namespace) -> int:
     results = []
     for i, gap in enumerate(gaps, 1):
         isbns = find_isbns(*epub_identifiers(gap.source_path), Path(gap.source_path).stem)
-        e = enrich_one(gap, isbns, fetch)
+        e = enrich_one(gap, isbns, fetch, use_google=not args.no_google)
         results.append(asdict(e))
         print(f"[{i}/{len(gaps)}] {gap.title[:60]!r}: "
               f"{e.source or '-'} ({e.matched_by or e.note}) "
@@ -407,6 +435,28 @@ def apply_enrichment(conn: duckdb.DuckDBPyConnection, rows: list[dict]) -> dict:
     return stats
 
 
+def clean_existing(conn: duckdb.DuckDBPyConnection, *, write: bool) -> list[tuple[int, str]]:
+    """book_subject rows that clean_subjects would now reject; deleted when write."""
+    rows = conn.execute("SELECT book_id, subject FROM book_subject ORDER BY book_id").fetchall()
+    bad = [(int(b), subj) for b, subj in rows if not clean_subjects([subj])]
+    if write and bad:
+        conn.executemany("DELETE FROM book_subject WHERE book_id = ? AND subject = ?", bad)
+    return bad
+
+
+def do_clean(args: argparse.Namespace) -> int:
+    conn = duckdb.connect(str(args.catalog), read_only=not args.write)
+    try:
+        bad = clean_existing(conn, write=args.write)
+    finally:
+        conn.close()
+    for b, subj in bad[:20]:
+        print(f"  {b}: {subj}")
+    print(f"{len(bad)} noisy subject row(s)"
+          + (" deleted" if args.write else " — dry run, re-run with --write to delete"))
+    return 0
+
+
 def do_apply(args: argparse.Namespace) -> int:
     rows = json.loads((args.output_dir / "enrichment.json").read_text())
     matched = [r for r in rows if r.get("source")]
@@ -433,12 +483,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--limit", type=int)
     p.add_argument("--delay", type=float, default=1.0, help="seconds between HTTP calls")
+    p.add_argument("--no-google", action="store_true",
+                   help="skip Google Books (e.g. when its anonymous quota is spent)")
     a = sub.add_parser("apply")
     a.add_argument("--output-dir", type=Path, required=True)
     a.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     a.add_argument("--write", action="store_true")
+    c = sub.add_parser("clean", help="remove book_subject rows the current filters reject")
+    c.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
+    c.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    return do_lookup(args) if args.cmd == "lookup" else do_apply(args)
+    return {"lookup": do_lookup, "apply": do_apply, "clean": do_clean}[args.cmd](args)
 
 
 if __name__ == "__main__":

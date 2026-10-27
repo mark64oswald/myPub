@@ -100,3 +100,37 @@ def test_apply_fills_only_empty_fields(tmp_path):
     gaps = {g.book_id: g for g in em.select_gaps(conn, None)}
     assert b1 not in gaps
     assert em.apply_enrichment(conn, rows)["subjects"] == 0   # idempotent
+
+
+def test_clean_subjects_drops_call_numbers_and_foreign_headings():
+    raw = ["Qa76.9.d26 s53 2001", "QA76.73.P98", "005.13", "005.74 SIM",
+           "Bases de données", "Programmierung und Software", "Informática",
+           "Data mining", "Database design", "Python (Computer program language)",
+           "C (Computer program language)", "Web 2.0"]
+    assert em.clean_subjects(raw) == [
+        "Data mining", "Database design", "Python (Computer program language)",
+        "C (Computer program language)", "Web 2.0"]
+
+
+def test_enrich_one_can_skip_google():
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return None
+
+    gap = em.BookGap(book_id=1, title="Some Book", source_path="/x.epub", authors=["A"],
+                     needs_subjects=True, needs_date=True, needs_publisher=True)
+    em.enrich_one(gap, ["9780000000002"], fetch, use_google=False)
+    assert calls and not any("googleapis" in u for u in calls)
+
+
+def test_clean_existing_removes_rejected_rows(tmp_path):
+    conn = duckdb.connect(str(tmp_path / "c.ddb"))
+    conn.execute("CREATE TABLE book_subject (book_id BIGINT, subject VARCHAR, source VARCHAR)")
+    conn.execute("INSERT INTO book_subject VALUES (1, 'Databases', 'openlibrary'), "
+                 "(1, 'Qa76.9.d26 s53 2001', 'openlibrary'), (2, 'Bases de données', 'openlibrary')")
+    assert len(em.clean_existing(conn, write=False)) == 2
+    assert conn.execute("SELECT COUNT(*) FROM book_subject").fetchone()[0] == 3
+    em.clean_existing(conn, write=True)
+    assert conn.execute("SELECT subject FROM book_subject").fetchall() == [("Databases",)]
