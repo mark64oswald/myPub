@@ -32,6 +32,7 @@ Output structure:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -120,6 +121,15 @@ TRANSACTION_SETS: dict[str, dict[str, Any]] = {
         "key_segments": ["AK1", "AK2", "IK3", "IK4", "IK5", "AK9"],
     },
 }
+
+
+_TXN_CODE_RE = re.compile(r"\b(\d{3})[pid]?\b", re.IGNORECASE)
+
+
+def _txn_codes_in(name: str) -> set[str]:
+    """Registered transaction-set codes a concept name mentions
+    ("X12 837P" -> {"837"}, "X12 270/271" -> {"270", "271"})."""
+    return {m for m in _TXN_CODE_RE.findall(name or "") if m in TRANSACTION_SETS}
 
 # Some signature-segment hints we use in the generated test as
 # "this segment must be present in the body". Picking the most
@@ -292,11 +302,13 @@ class EdiRoundTripDecomposer:
             concept_citations += standards.cite_concepts(
                 conn, x12_sources, limit=5, name_word=term)
 
-        # Dedupe by concept_id
+        # Dedupe by concept_id; drop concepts about another transaction set
+        # (the generic "X12" term also matches "X12 270/271 Eligibility").
+        allowed = {txn_code, paired} - {None}
         seen: set[int] = set()
         unique: list[tuple[int, str, int, str]] = []
         for c in concept_citations:
-            if c[0] not in seen:
+            if c[0] not in seen and not (_txn_codes_in(c[1]) - allowed):
                 seen.add(c[0])
                 unique.append(c)
 

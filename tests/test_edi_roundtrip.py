@@ -25,6 +25,13 @@ def test_transaction_sets_metadata_complete():
         assert "paired_response" in meta
 
 
+def test_txn_codes_in():
+    assert edi_roundtrip._txn_codes_in("X12 837P claim") == {"837"}
+    assert edi_roundtrip._txn_codes_in("X12 270/271 Eligibility Transactions") == {"270", "271"}
+    assert edi_roundtrip._txn_codes_in("CLM Segment") == set()
+    assert edi_roundtrip._txn_codes_in("Loop 2300 Claim Information") == set()
+
+
 def test_pair_metadata_consistency():
     """If A.paired_response = B, then B must also be a registered transaction."""
     for code, meta in edi_roundtrip.TRANSACTION_SETS.items():
