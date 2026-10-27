@@ -14,7 +14,8 @@
 #               metadata, no spec text fetched. Libraries and public
 #               companion guides that cover it may still be loaded.
 #
-# sources[].role: spec | guide | library | tool
+# sources[].role: spec | guide | library | tool. A guide is a secondary
+# companion such as HealthSim's format guides (scripts/seed_healthsim.py).
 # A source either pins an exact doc_source (source_type + identifier) or
 # gives `match`, an ILIKE pattern on doc_source.name for sources that
 # auto-discovery created. `planned: true` marks one not loaded yet.
@@ -43,6 +44,10 @@ standards:
       - {name: HL7 v2.5.1 structure reference, role: spec, source_type: hl7v2_spec, identifier: "hl7v2@2.5.1"}
       - {name: HL7 v2.8.2 structure reference, role: spec, source_type: hl7v2_spec, identifier: "hl7v2@2.8.2"}
       - {name: HL7 Europe v2 segment pages, role: spec, source_type: html_site, identifier: "https://www.hl7.eu/refactored/"}
+      - {name: HealthSim HL7 v2 ADT guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/hl7v2-adt.md"}
+      - {name: HealthSim HL7 v2 ORM guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/hl7v2-orm.md"}
+      - {name: HealthSim HL7 v2 ORU guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/hl7v2-oru.md"}
+      - {name: HealthSim HL7 v2 segments reference, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:references/hl7v2-segments.md"}
       - {name: HAPI HL7v2, role: library, match: "%HAPI%HL7%v2%"}
       - {name: hl7apy, role: library, match: "%hl7apy%"}
       - {name: python-hl7, role: library, source_type: deepwiki, identifier: "johnpaulett/python-hl7"}
@@ -72,6 +77,7 @@ standards:
     sources:
       - {name: FHIR R4 core, role: spec, source_type: fhir_package, identifier: "hl7.fhir.r4.core@4.0.1"}
       - {name: FHIR spec (Context7), role: spec, match: "%FHIR%Spec%"}
+      - {name: HealthSim FHIR R4 guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/fhir-r4.md"}
       - {name: HAPI FHIR, role: library, match: "%HAPI FHIR%"}
       - {name: Medplum, role: library, match: "%Medplum%"}
       - {name: Microsoft FHIR Server, role: tool, match: "%FHIR Server%"}
@@ -125,6 +131,7 @@ standards:
     sources:
       - {name: CDA Core 2.0, role: spec, match: "%CDA Core%"}
       - {name: C-CDA on FHIR, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.ccda@1.2.0"}
+      - {name: HealthSim C-CDA guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/ccda-format.md"}
 
   - key: x12-5010
     name: ASC X12 5010 HIPAA transactions
@@ -137,11 +144,34 @@ standards:
     generators: [edi_roundtrip, standards_translator, integration_channel]
     notes: >
       TR3s are licensed and Mark holds no X12 license (2026-10-27), so the
-      spec stays reference-only; the libraries carry the structure.
+      spec stays reference-only; the libraries carry the structure, and
+      HealthSim's format guides give loop layouts with worked examples.
+      edi_roundtrip fixtures can come from HealthSim output instead of
+      being invented here.
     sources:
+      - {name: HealthSim X12 837 guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/x12-837.md"}
+      - {name: HealthSim X12 835 guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/x12-835.md"}
+      - {name: HealthSim X12 834 guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/x12-834.md"}
+      - {name: HealthSim X12 270/271 guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/x12-270-271.md"}
       - {name: pyx12, role: library, match: "%pyx12%"}
       - {name: Ballerina EDI, role: library, match: "%Ballerina%"}
       - {name: Stedi, role: tool, match: "%Stedi%"}
+
+  - key: ncpdp-d0
+    name: NCPDP Telecommunication Standard D.0 (pharmacy claims)
+    family: ncpdp
+    market: payer
+    license_tier: licensed
+    official_url: https://standards.ncpdp.org/
+    versions: ["D.0"]
+    anchors: [NCPDP, D.0, pharmacy claim, B1 billing, B2 reversal, BIN, PCN, DUR]
+    generators: [standards_translator, integration_channel]
+    notes: >
+      Member-only and Mark holds no NCPDP license (2026-10-27), so the
+      spec stays reference-only. HealthSim's RxMemberSim guide is the
+      only structural text indexed.
+    sources:
+      - {name: HealthSim NCPDP D.0 guide, role: guide, source_type: github_raw, identifier: "mark64oswald/healthsim-workspace:main:formats/ncpdp-d0.md"}
 
   - key: dicom-deid
     name: DICOM (PS3.15 de-identification profiles)
