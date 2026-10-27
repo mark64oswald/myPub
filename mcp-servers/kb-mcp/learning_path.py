@@ -36,6 +36,7 @@ replace the heuristic with sub-agent naming.
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,6 +65,12 @@ DEFAULT_MAX_CONCEPTS = 30   # cap on total path length; densely-connected
 DEFAULT_STAGE_SIZE = 5      # target concepts per stage; min 3, max 7
 DEFAULT_MAX_CHAPTERS_PER_STAGE = 4
 DEFAULT_PREREQ_RELATIONS = ("REQUIRES", "EXTENDS")
+DEFAULT_MIN_SIMILARITY = 0.25  # cosine floor vs. the target's embedding.
+                               # Hub concepts (Machine Learning, Kubernetes,
+                               # Hive) are REQUIRES-reachable from almost
+                               # anything; without a topical gate they leak
+                               # into unrelated paths and anchor stage 1.
+                               # 0 disables the gate.
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +87,7 @@ class _PathConcept:
     depth: int                       # 0 = target, 1 = direct prereq, …
     chapter_count: int
     doc_section_count: int
+    similarity: Optional[float] = None  # cosine vs. target; None = no embedding
 
 
 @dataclass
@@ -122,6 +130,7 @@ class PrerequisiteDecomposer:
         max_depth: int = DEFAULT_MAX_DEPTH,
         max_concepts: int = DEFAULT_MAX_CONCEPTS,
         relation_filter: Optional[tuple[str, ...]] = None,
+        min_similarity: float = DEFAULT_MIN_SIMILARITY,
         **_: Any,
     ) -> _Decomposition:
         rels = tuple(relation_filter) if relation_filter else DEFAULT_PREREQ_RELATIONS
@@ -150,29 +159,50 @@ class PrerequisiteDecomposer:
                 # Don't fail; just note and proceed without clipping.
                 pass
 
-        # BFS over the prerequisite subgraph.
+        # BFS over the prerequisite subgraph. When the target has an
+        # embedding, each neighbour is scored against it and off-topic
+        # neighbours are neither kept nor expanded, so one hub edge
+        # can't pull in a whole unrelated subtree. Neighbours without
+        # an embedding pass through (no evidence either way).
+        gate = min_similarity > 0 and conn.execute(
+            "SELECT 1 FROM concept_embedding WHERE concept_id = ?", [target_id],
+        ).fetchone() is not None
         depth_map: dict[int, int] = {target_id: 0}
+        sim_map: dict[int, Optional[float]] = {target_id: 1.0 if gate else None}
+        off_topic: set[int] = set()
         frontier = deque([target_id])
+        ph = ",".join(["?"] * len(rels))
         while frontier:
             cid = frontier.popleft()
             d = depth_map[cid]
             if d >= max_depth:
                 continue
-            ph = ",".join(["?"] * len(rels))
             rows = conn.execute(
                 f"""
-                SELECT DISTINCT to_concept_id
-                  FROM concept_relation
-                 WHERE from_concept_id = ?
-                   AND relation_type IN ({ph})
+                SELECT DISTINCT cr.to_concept_id,
+                       array_cosine_similarity(
+                           e.embedding,
+                           (SELECT embedding FROM concept_embedding
+                             WHERE concept_id = ?)
+                       ) AS sim
+                  FROM concept_relation cr
+                  LEFT JOIN concept_embedding e
+                    ON e.concept_id = cr.to_concept_id
+                 WHERE cr.from_concept_id = ?
+                   AND cr.relation_type IN ({ph})
                 """,
-                [cid, *rels],
+                [target_id, cid, *rels],
             ).fetchall()
-            for (nb,) in rows:
+            for nb, sim in rows:
                 nb = int(nb)
-                if nb in depth_map:
+                if nb in depth_map or nb in off_topic:
+                    continue
+                sim = float(sim) if (gate and sim is not None) else None
+                if sim is not None and sim < min_similarity:
+                    off_topic.add(nb)
                     continue
                 depth_map[nb] = d + 1
+                sim_map[nb] = sim
                 frontier.append(nb)
 
         # If start was supplied & resolved, clip to concepts that lead
@@ -185,6 +215,11 @@ class PrerequisiteDecomposer:
             depth_map = {cid: d for cid, d in depth_map.items() if d <= cutoff}
 
         notes: list[str] = []
+        if off_topic:
+            notes.append(
+                f"dropped {len(off_topic)} prerequisite(s) with similarity "
+                f"< {min_similarity:.2f} to the target (off-topic)"
+            )
         if start and start_id is None:
             notes.append(
                 f"start concept {start!r} not found — path returned without clipping"
@@ -196,6 +231,8 @@ class PrerequisiteDecomposer:
             )
 
         concepts = self._enrich_concepts(conn, depth_map)
+        for c in concepts:
+            c.similarity = sim_map.get(c.concept_id)
 
         # Cap by max_concepts: prune by chapter coverage (lowest first)
         # while keeping the target itself. Densely-connected targets
@@ -208,16 +245,17 @@ class PrerequisiteDecomposer:
                  if c.concept_id == target_id), None,
             )
             target_concept = concepts.pop(target_idx) if target_idx is not None else None
-            # Rank by (chapter_count desc, depth desc, name)
-            concepts.sort(key=lambda c: (-c.chapter_count, -c.depth, c.name))
+            # Rank by topical relevance x coverage, then depth, name.
+            concepts.sort(key=lambda c: (-_relevance(c, min_similarity),
+                                         -c.depth, c.name))
             kept = concepts[: max(0, max_concepts - 1)]
             pruned_count = len(concepts) - len(kept)
             concepts = kept
             if target_concept is not None:
                 concepts.append(target_concept)
             notes.append(
-                f"pruned {pruned_count} prerequisites with low book-chapter "
-                f"coverage; max_concepts={max_concepts}"
+                f"pruned {pruned_count} prerequisites with low relevance "
+                f"(similarity x book-chapter coverage); max_concepts={max_concepts}"
             )
 
         # Order: deepest first (foundations) so stage 1 is foundational.
@@ -299,6 +337,17 @@ class PrerequisiteDecomposer:
         return out
 
 
+def _relevance(c: _PathConcept, floor: float = DEFAULT_MIN_SIMILARITY) -> float:
+    """Pruning score: similarity to target scaled by chapter coverage.
+
+    Concepts without an embedding are scored at the gate floor so they
+    neither win nor vanish purely for lacking one. With no embeddings
+    at all this reduces to ordering by chapter_count.
+    """
+    sim = c.similarity if c.similarity is not None else max(floor, 0.01)
+    return sim * math.log1p(c.chapter_count + 1)
+
+
 # ---------------------------------------------------------------------------
 # Stage grouping (deterministic heuristic)
 # ---------------------------------------------------------------------------
@@ -329,6 +378,13 @@ def _slugify(name: str) -> str:
     return "".join(c for c in s if c in keep).strip("-") or "stage"
 
 
+def _anchor_key(c: _PathConcept) -> tuple:
+    return (
+        -(c.similarity if c.similarity is not None else -1.0),
+        -c.chapter_count, c.name,
+    )
+
+
 def group_into_stages(
     concepts: list[_PathConcept],
     *,
@@ -345,7 +401,10 @@ def group_into_stages(
     * Order: deepest depth = stage 1 (foundations); shallowest = final stage.
 
     Pure deterministic — no LLM. Stage names are derived from each
-    stage's "anchor" (highest chapter_count concept).
+    stage's "anchor": the concept closest to the target, tie-broken by
+    chapter_count (so a well-covered hub like "Machine Learning" can't
+    name the first stage of a Delta Lake path). Without embeddings the
+    anchor is the highest chapter_count concept.
     """
     if not concepts:
         return []
@@ -353,10 +412,9 @@ def group_into_stages(
     by_depth: dict[int, list[_PathConcept]] = defaultdict(list)
     for c in concepts:
         by_depth[c.depth].append(c)
-    # Within each depth, sort by chapter_count desc (best-covered first
-    # so the anchor lands at index 0).
+    # Within each depth, most on-topic first, then best-covered.
     for d in by_depth:
-        by_depth[d].sort(key=lambda c: (-c.chapter_count, c.name))
+        by_depth[d].sort(key=_anchor_key)
 
     # Iterate depths deepest → shallowest.
     raw_stages: list[list[_PathConcept]] = []
@@ -389,7 +447,12 @@ def group_into_stages(
     # Build stage objects with names + slugs.
     out: list[_Stage] = []
     for i, items in enumerate(merged, start=1):
-        anchor = items[0]
+        # Merged stages span several depths; pick the anchor across the
+        # whole stage and move it to the front (Tutorial reads
+        # concepts[0] as the stage title).
+        anchor = min(items, key=_anchor_key)
+        items.remove(anchor)
+        items.insert(0, anchor)
         name = anchor.name
         # Disambiguate slug if multiple stages share an anchor (rare).
         slug = _slugify(name)

@@ -634,6 +634,112 @@ def _short(text: str, limit: int = 300) -> str:
     return cut.rstrip(",.;:") + "…"
 
 
+_CTX_STOPWORDS = {
+    "the", "and", "for", "with", "from", "into", "that", "this", "using", "use",
+    "build", "project", "app", "application", "service", "system", "data", "new",
+    "create", "make", "via", "over", "based",
+}
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9+#]+", (text or "").lower())
+            if len(w) >= 3 and w not in _CTX_STOPWORDS}
+
+
+def _coverage(conn: duckdb.DuckDBPyConnection, cid: int) -> int:
+    """Procedures + chapter / doc-section relations: how much the KB says."""
+    row = conn.execute(
+        """
+        SELECT (SELECT COUNT(*) FROM procedure_concept WHERE concept_id = ?)
+             + (SELECT COUNT(*) FROM concept_relation
+                 WHERE from_concept_id = ? OR to_concept_id = ?)
+        """, [cid, cid, cid]).fetchone()
+    return int(row[0] or 0)
+
+
+def _disambiguate(
+    conn: duckdb.DuckDBPyConnection, name: str, query: str, default_cid: Optional[int],
+) -> tuple[Optional[int], Optional[str]]:
+    """Pick the concept a short name means *in this request*.
+
+    ``resolve_lookup_only`` returns the most-connected concept with that
+    name, so "ADT" in an HL7 request resolved to a SAS date variable. The
+    default stands whenever it has *any* tie to the request's other words
+    (its description or graph neighbours): "Python" or "Kafka" keep their
+    well-covered concepts. Only a default with no tie at all (or none)
+    is replaced, by the candidate — same name, alias, or a name containing
+    it as a word ("HL7 V2 ADT messages") — that best matches the request,
+    ties going to the better-covered concept. Returns (concept_id, note).
+    """
+    token = name.strip().lower()
+    ctx = _words(query) - _words(name)
+    if not ctx:
+        return default_cid, None
+
+    def tie(cid: int, desc: str) -> int:
+        neigh = conn.execute(
+            """
+            SELECT n.name FROM concept_relation cr
+              JOIN concept n ON n.concept_id = CASE WHEN cr.from_concept_id = ?
+                                                     THEN cr.to_concept_id
+                                                     ELSE cr.from_concept_id END
+             WHERE cr.from_concept_id = ? OR cr.to_concept_id = ?
+             GROUP BY n.name ORDER BY COUNT(*) DESC LIMIT 40
+            """, [cid, cid, cid]).fetchall()
+        neigh_words = set().union(*(_words(r[0]) for r in neigh)) if neigh else set()
+        return len(ctx & _words(desc)) + min(3, len(ctx & neigh_words))
+
+    if default_cid is not None:
+        row = conn.execute("SELECT COALESCE(description, '') FROM concept "
+                           "WHERE concept_id = ?", [default_cid]).fetchone()
+        if row is None or tie(default_cid, row[0]) > 0:
+            return default_cid, None
+
+    rows = conn.execute(
+        """
+        SELECT DISTINCT c.concept_id, c.name, COALESCE(c.description, '')
+          FROM concept c
+          LEFT JOIN concept_alias a ON a.concept_id = c.concept_id
+         WHERE lower(c.name) = ? OR lower(a.alias) = ?
+            OR (regexp_matches(lower(c.name), '(^|[^a-z0-9])' || ? || '([^a-z0-9]|$)')
+                AND length(c.name) <= 60)
+         LIMIT 50
+        """,
+        [token, token, re.escape(token)],
+    ).fetchall()
+    # Words right next to the name in the request ("HL7 ADT feeds" → hl7,
+    # feeds). A candidate that merely *contains* the name must also contain
+    # one of these, or "Python" in a Kafka request becomes "kafka-python".
+    qwords = re.findall(r"[a-z0-9+#]+", (query or "").lower())
+    adjacent = {qwords[j] for i, w in enumerate(qwords) if w == token
+                for j in (i - 1, i + 1) if 0 <= j < len(qwords)} & ctx
+    scored = []
+    for cid, cname, desc in rows:
+        cid = int(cid)
+        if cid == default_cid:
+            continue
+        name_words = _words(cname) - _words(name)
+        same_sense = cname.strip().lower() == token or not name_words
+        if not same_sense and not (name_words & adjacent):
+            continue
+        sc = (2 * len(ctx & name_words) + tie(cid, desc)
+              - 0.5 * len(name_words - ctx))
+        scored.append((sc, _coverage(conn, cid), cid, cname))
+    if not scored:
+        return default_cid, None
+    best_score, _cov, best_cid, best_name = max(scored, key=lambda t: (t[0], t[1], -t[2]))
+    if best_score < 1.0:
+        return default_cid, None
+    # Same name, different type ("Python" Tool vs Framework): that's a
+    # duplicate more often than a different sense, so a much better-covered
+    # default keeps its place.
+    if (default_cid is not None and best_name.strip().lower() == token
+            and _coverage(conn, default_cid) >= 2 * _cov):
+        return default_cid, None
+    return best_cid, (f"{name!r} is ambiguous; picked {best_name!r} from the "
+                      f"request's context")
+
+
 class StackComposeDecomposer:
     """Resolve named technologies + patterns from the request and
     pull related procedures + doc_sections.
@@ -663,9 +769,13 @@ class StackComposeDecomposer:
         elements: list[_StackElement] = []
         notes: list[str] = []
         for name in all_named:
-            cid = resolver.resolve_lookup_only(name)
+            cid, why = _disambiguate(conn, name, query, resolver.resolve_lookup_only(name))
             if cid is None:
                 notes.append(f"named element {name!r} not found; skipped")
+                continue
+            if why:
+                notes.append(why)
+            if any(el.concept_id == cid for el in elements):
                 continue
             row = conn.execute(
                 "SELECT name, concept_type, description FROM concept "

@@ -201,6 +201,61 @@ def test_bootstrap_idempotent(catalog, bootstrap_corpus, tmp_path):
     assert pid1 == pid2
 
 
+def test_bootstrap_picks_the_sense_of_a_short_name_from_the_request(catalog):
+    """'ADT' in an HL7 request means the HL7 message, not the SAS date
+    variable that has more edges."""
+    sas = _seed_concept(catalog, "ADT", "Concept", "SAS analysis date variable in ADaM datasets.")
+    adam = _seed_concept(catalog, "ADaM", "Concept", "CDISC analysis datasets.")
+    for _ in range(5):
+        _add_rel(catalog, sas, adam, "RELATED_TO")
+    msg = _seed_concept(catalog, "HL7 ADT message", "Concept",
+                        "Admit, discharge and transfer events in HL7 v2.")
+    hl7 = _seed_concept(catalog, "HL7", "Concept", "Healthcare messaging standard.")
+    fhir = _seed_concept(catalog, "FHIR", "Concept", "Resource-based health API.")
+    _add_rel(catalog, msg, hl7, "PART_OF")
+    _add_rel(catalog, hl7, fhir, "RELATED_TO")
+    # A thin, well-named lookalike must not steal a well-tied default.
+    _seed_concept(catalog, "HL7 FHIR Encounter feeds tool", "Tool", "")
+    res = _resolver({"adt": sas, "hl7": hl7})
+    d = pb.StackComposeDecomposer().decompose(
+        catalog, res, "Consume HL7 ADT feeds and write FHIR Encounters in Python",
+        technologies=["ADT", "HL7"])
+    by_name = {el.name: el.concept_id for el in d.elements}
+    assert by_name.get("HL7 ADT message") == msg
+    assert sas not in by_name.values()
+    assert any("ambiguous" in n for n in d.notes)
+
+    # A default with any tie to the request keeps its slot: "HL7" stays HL7
+    # even though "HL7 ADT message" contains the word and names more context.
+    assert by_name.get("HL7") == hl7
+
+    # A same-named duplicate with less coverage doesn't displace the default,
+    # even when only the duplicate ties to the request.
+    py_tool = _seed_concept(catalog, "Python", "Tool", "")
+    lang = _seed_concept(catalog, "Programming language", "Concept", "")
+    for _ in range(4):
+        _add_rel(catalog, py_tool, lang, "IS_A")
+    py_fw = _seed_concept(catalog, "Python", "Framework", "Used for FHIR services.")
+    res3 = _resolver({"python": py_tool})
+    d3 = pb.StackComposeDecomposer().decompose(
+        catalog, res3, "Write FHIR Encounters from Python", technologies=["Python"])
+    assert [el.concept_id for el in d3.elements] == [py_tool]
+    assert py_fw != py_tool
+
+    # A concept that only contains the name ("kafka-python") needs a word
+    # that sits next to the name in the request.
+    _seed_concept(catalog, "kafka-python", "Tool", "Kafka client for Python.")
+    d4 = pb.StackComposeDecomposer().decompose(
+        catalog, res3, "A Python service that consumes Kafka topics",
+        technologies=["Python"])
+    assert [el.concept_id for el in d4.elements] == [py_tool]
+
+    # With no context words that point elsewhere, the resolver's pick stands.
+    d2 = pb.StackComposeDecomposer().decompose(
+        catalog, res, "ADT", technologies=["ADT"])
+    assert [el.concept_id for el in d2.elements] == [sas]
+
+
 # ---------------------------------------------------------------------------
 # Refactoring Playbook
 # ---------------------------------------------------------------------------
@@ -241,6 +296,48 @@ def test_refactor_attaches_target_procedures(catalog, refactor_corpus):
     d = rp.AntiPatternDecomposer().decompose(catalog, res, "Distributed Systems")
     f = next(f for f in d.findings if f.anti_name == "Tight-Loop Retry")
     assert "Implement exponential backoff" in f.refactor_procedure_names
+
+
+def test_refactor_skips_contrast_without_procedure_or_implements_path(catalog):
+    """'Database' vs 'Flat Files' contrast, no procedures either side:
+    not a refactor."""
+    domain = _seed_concept(catalog, "Storage")
+    db = _seed_concept(catalog, "Database", "Technique")
+    flat = _seed_concept(catalog, "Flat Files", "Technique")
+    _add_rel(catalog, domain, db, "REQUIRES")
+    _add_rel(catalog, db, flat, "CONTRASTS_WITH")
+    d = rp.AntiPatternDecomposer().decompose(
+        catalog, _resolver({"storage": domain}), "Storage")
+    assert d.findings == []
+    assert any("contrast alone" in n for n in d.notes)
+
+
+def test_refactor_direction_follows_anti_pattern_type(catalog):
+    """Edge stored target → anti still yields anti → target."""
+    domain = _seed_concept(catalog, "Messaging")
+    good = _seed_concept(catalog, "Outbox Pattern", "Pattern")
+    bad = _seed_concept(catalog, "Dual Write", "Anti-Pattern")
+    _add_rel(catalog, domain, good, "REQUIRES")
+    _add_rel(catalog, good, bad, "CONTRASTS_WITH")
+    _link_proc(catalog, _seed_procedure(catalog, "Add an outbox table"), good)
+    d = rp.AntiPatternDecomposer().decompose(
+        catalog, _resolver({"messaging": domain}), "Messaging")
+    assert [(f.anti_name, f.target_name) for f in d.findings] == [
+        ("Dual Write", "Outbox Pattern")]
+
+
+def test_refactor_accepts_implements_path_without_procedure(catalog):
+    domain = _seed_concept(catalog, "Caching")
+    a = _seed_concept(catalog, "Read-Through Cache", "Pattern")
+    b = _seed_concept(catalog, "Cache-Aside", "Pattern")
+    impl = _seed_concept(catalog, "Redis", "Technology")
+    _add_rel(catalog, domain, a, "REQUIRES")
+    _add_rel(catalog, a, b, "CONTRASTS_WITH")
+    _add_rel(catalog, impl, b, "IMPLEMENTS")
+    d = rp.AntiPatternDecomposer().decompose(
+        catalog, _resolver({"caching": domain}), "Caching")
+    assert [(f.anti_name, f.target_name) for f in d.findings] == [
+        ("Read-Through Cache", "Cache-Aside")]
 
 
 def test_refactor_topic_without_findings_emits_note(catalog):
