@@ -52,17 +52,20 @@ as UNRELATED. Every vote is kept in `alignment_vote`. After applying, re-run
 `/kb-migration-guide` and `/kb-currency-report` for the same topics as the
 stale packages.
 
-## 3. Prose layer for Dialog and Tutorial
+## 3. Prose layer for Dialog, Tutorial, Slides and Content Brief
 
 ```bash
 .venv/bin/python3 scripts/prose_pass.py prep --catalog /tmp/catalog-ro.ddb \
-    --generator dialog --package <name> --output-dir /tmp/mypub-prose/<name>
+    --generator dialog|tutorial|slide_deck|content_brief --package <name> --output-dir /tmp/mypub-prose/<name>
 # one Task sub-agent: read prompt.txt, write result.md
 .venv/bin/python3 scripts/prose_pass.py process --output-dir /tmp/mypub-prose/<name>
 ```
 
 `process` rejects a result that drops a heading or cites an excerpt it
 wasn't given. The deterministic file is kept as `_deterministic/<file>`.
+Slides rewrite `speaker-notes.md`. Content Brief sends all `sections/*.md`
+files as one draft with `<!-- file: ... -->` markers, and `process` splits
+the result back into the section files (a dropped marker is rejected).
 
 ## 4. Bootstrap v2 loop
 

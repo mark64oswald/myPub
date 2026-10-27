@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-prose_pass.py — Sub-agent prose layer for Dialog and Tutorial packages.
+prose_pass.py — Sub-agent prose layer for Dialog, Tutorial, Slide-deck
+and Content Brief packages.
 
 The deterministic generators get the structure right but the voice wrong:
 every Dialog beat gives the responder the same templated sentence, and
@@ -10,7 +11,8 @@ from the catalog (chapter and doc-section excerpts for every beat or
 stage concept) and asks for grounded prose — the same prep → sub-agent →
 process shape Bootstrap and extraction already use.
 
-    prep     --catalog <clone>.ddb --generator dialog|tutorial
+    prep     --catalog <clone>.ddb
+             --generator dialog|tutorial|slide_deck|content_brief
              --package <name> --output-dir <out>
              [--package-root data/generated-packages]
              Read-only. Writes <out>/prompt.txt + manifest.json.
@@ -43,10 +45,17 @@ EXCERPT_CHARS = 700
 EVIDENCE_PER_KIND = 2
 
 TARGETS = {
-    # generator_type: (main file, unit_type, how to read concept ids)
+    # generator_type: (main file or glob, unit_type, how to read concept ids)
     "dialog": ("dialogue.md", "dialog_beat", lambda m: [m.get("concept_id")]),
     "tutorial": ("tutorial.md", "tutorial_stage", lambda m: list(m.get("concept_ids") or [])[:3]),
+    "slide_deck": ("speaker-notes.md", "slide", lambda m: list(m.get("concept_ids") or [])[:3]),
+    "content_brief": ("sections/*.md", "content_section", lambda m: [m.get("anchor_concept_id")]),
 }
+
+# Multi-file targets (content_brief sections) travel as one draft with a
+# marker line before each file; process splits the result on the same markers.
+_FILE_MARK = "<!-- file: {} -->"
+_FILE_MARK_RE = re.compile(r"^<!-- file: (.+?) -->$", re.M)
 
 _CITE_RE = re.compile(r"\[(ch|ds):(\d+)\]")
 
@@ -71,6 +80,62 @@ For each stage, directly under its "## Stage" heading, write:
 
 Grounding: cite excerpts inline as [ch:ID] or [ds:ID], only from the ids listed for that stage. If a stage's concepts look unrelated to the target, say so in one sentence rather than inventing a connection.
 """
+
+SLIDES_BRIEF = """Rewrite these speaker notes so a presenter could deliver each slide from them.
+
+The current notes are template output or empty. Keep the title and every "## Slide N — <title>" heading exactly, in order. Under each heading write 3-6 sentences the presenter would actually say: the point of the slide, one concrete detail or example, and a one-line bridge to the next slide.
+
+Grounding:
+  * Every factual claim cites its excerpt inline as [ch:ID] or [ds:ID], using only the ids listed for that slide.
+  * A slide with no excerpts (title, agenda, Q&A) gets plain framing with no citations and no new claims.
+  * No new slides, no bullet lists, no closing summary beyond the existing slides.
+"""
+
+BRIEF_BRIEF = """Turn each content-brief section into a first draft a writer can edit.
+
+The draft below holds several files, each introduced by a "<!-- file: ... -->" line. Keep every marker line exactly, and keep each file's "# N. <title>" heading, its "**Thesis:**" line and its "## ..." headings and their lists.
+
+For each section, directly after the "**Thesis:**" line (and the anchor line if there is one), add "## Draft" with 2-3 paragraphs that argue the thesis. Where the section has angle hints, take a position on one rather than listing them.
+
+Grounding: cite excerpts inline as [ch:ID] or [ds:ID], only from the ids listed for that section. If the excerpts don't support the thesis, say so in one sentence instead of inventing support.
+"""
+
+BRIEFS = {"dialog": DIALOG_BRIEF, "tutorial": TUTORIAL_BRIEF,
+          "slide_deck": SLIDES_BRIEF, "content_brief": BRIEF_BRIEF}
+
+
+def _unit_heading(generator: str, ordinal: int, name: str) -> str:
+    if generator == "dialog":
+        return f"Beat {ordinal}: {name}"
+    if generator == "slide_deck":
+        return f"Slide {ordinal} — {name}"
+    if generator == "content_brief":
+        return f"{ordinal}. {name}"
+    return name
+
+
+def _target_files(pkg_dir: Path, pattern: str) -> list[Path]:
+    if "*" not in pattern:
+        return [pkg_dir / pattern]
+
+    def order(p: Path):
+        head = p.name.split("-", 1)[0]
+        return (int(head) if head.isdigit() else 10**9, p.name)
+    return sorted(pkg_dir.glob(pattern), key=order)
+
+
+def _join_files(pkg_dir: Path, files: list[Path]) -> str:
+    if len(files) == 1:
+        return files[0].read_text()
+    return "\n".join(_FILE_MARK.format(f.relative_to(pkg_dir).as_posix()) + "\n" + f.read_text()
+                     for f in files)
+
+
+def split_files(text: str) -> dict[str, str]:
+    """{relative path: content} from a marked multi-file result."""
+    marks = list(_FILE_MARK_RE.finditer(text))
+    return {m.group(1): text[m.end(): (marks[i + 1].start() if i + 1 < len(marks) else len(text))].strip("\n")
+            for i, m in enumerate(marks)}
 
 
 def _excerpt(text: str, concept: str) -> str:
@@ -114,8 +179,9 @@ def gather_evidence(conn: duckdb.DuckDBPyConnection, concept_id: int) -> dict:
 
 
 def build_prompt(generator: str, draft: str, units: list[dict], chars: tuple[str, str]) -> str:
-    brief = (DIALOG_BRIEF.format(char_a=chars[0], char_b=chars[1])
-             if generator == "dialog" else TUTORIAL_BRIEF)
+    brief = BRIEFS[generator]
+    if generator == "dialog":
+        brief = brief.format(char_a=chars[0], char_b=chars[1])
     parts = [brief, "", "=== EVIDENCE ==="]
     for u in units:
         parts.append(f"\n--- {u['heading']} ---")
@@ -150,17 +216,17 @@ def do_prep(args: argparse.Namespace) -> int:
     for name, ordinal, meta_json in rows:
         meta = json.loads(meta_json or "{}")
         evidence = [gather_evidence(conn, int(c)) for c in ids_of(meta) if c is not None]
-        heading = (f"Beat {ordinal}: {name}" if args.generator == "dialog" else name)
+        heading = _unit_heading(args.generator, ordinal, name)
         units.append({"heading": heading, "evidence": evidence})
         allowed += [x["id"] for ev in evidence for k in ("book", "doc") for x in ev[k]]
     conn.close()
 
     pkg_dir = args.package_root / args.package
-    target = pkg_dir / main_file
-    if not target.is_file():
-        print(f"{target} not found — materialize the package first", file=sys.stderr)
+    files = _target_files(pkg_dir, main_file)
+    if not files or not all(f.is_file() for f in files):
+        print(f"{pkg_dir / main_file} not found — materialize the package first", file=sys.stderr)
         return 2
-    draft = target.read_text()
+    draft = _join_files(pkg_dir, files)
     chars = (pkg_meta.get("char_a", "Architect"), pkg_meta.get("char_b", "Practitioner"))
 
     out: Path = args.output_dir
@@ -168,7 +234,9 @@ def do_prep(args: argparse.Namespace) -> int:
     (out / "prompt.txt").write_text(build_prompt(args.generator, draft, units, chars))
     (out / "manifest.json").write_text(json.dumps({
         "generator": args.generator, "package": args.package,
-        "target_file": str(target), "result_path": str(out / "result.md"),
+        "package_dir": str(pkg_dir),
+        "target_files": [f.relative_to(pkg_dir).as_posix() for f in files],
+        "result_path": str(out / "result.md"),
         "headings": re.findall(r"^#{1,3} .+$", draft, flags=re.M),
         "allowed_citations": sorted(set(allowed)),
     }, indent=2))
@@ -190,6 +258,11 @@ def check_result(text: str, manifest: dict) -> list[str]:
         problems.append("citations not in the evidence: " + ", ".join(bad))
     if text.lstrip().startswith("```"):
         problems.append("result is wrapped in a code fence")
+    files = manifest.get("target_files") or []
+    if len(files) > 1:
+        missing = [f for f in files if f not in split_files(text)]
+        if missing:
+            problems.append("missing file marker(s): " + ", ".join(missing))
     return problems
 
 
@@ -205,14 +278,25 @@ def do_process(args: argparse.Namespace) -> int:
     if problems and not args.force:
         print("result rejected:\n  " + "\n  ".join(problems), file=sys.stderr)
         return 1
-    target = Path(manifest["target_file"])
-    backup = target.parent / "_deterministic" / target.name
-    backup.parent.mkdir(exist_ok=True)
-    if not backup.exists():
-        shutil.copy2(target, backup)
-    target.write_text(text.rstrip() + "\n")
+    if "target_file" in manifest:  # manifests written before multi-file support
+        t = Path(manifest["target_file"])
+        pkg_dir, files = t.parent, [t.name]
+    else:
+        pkg_dir, files = Path(manifest["package_dir"]), manifest["target_files"]
+    parts = split_files(text) if len(files) > 1 else {files[0]: text}
+    for rel in files:
+        if rel not in parts:  # only reachable with --force
+            print(f"skipped {rel}: no section for it in the result", file=sys.stderr)
+            continue
+        target = pkg_dir / rel
+        backup = pkg_dir / "_deterministic" / rel
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if not backup.exists():
+            shutil.copy2(target, backup)
+        target.write_text(parts[rel].rstrip() + "\n")
     cites = len(_CITE_RE.findall(text))
-    print(f"wrote {target} ({cites} citation(s)); deterministic copy at {backup}")
+    print(f"wrote {len(files)} file(s) under {pkg_dir} ({cites} citation(s)); "
+          f"deterministic copies under {pkg_dir / '_deterministic'}")
     return 0
 
 
