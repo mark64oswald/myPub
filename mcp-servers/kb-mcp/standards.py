@@ -15,6 +15,7 @@ still gets a row):
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -170,6 +171,11 @@ ORDER BY s.standard_key, ss.role, ss.name, d.doc_source_id
 """
 
 
+_RESOLVE_COLS = ("standard_key", "license_tier", "name", "role", "planned",
+                 "doc_source_id", "doc_source_name", "source_type", "identifier",
+                 "authority_score", "n_sections")
+
+
 def standard_sources(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -202,9 +208,8 @@ def standard_sources(
         params += roles
     if loaded_only:
         where.append("d.doc_source_id IS NOT NULL AND COALESCE(x.n_sections, 0) > 0")
-    cur = conn.execute(_RESOLVE_SQL.format(where=" AND ".join(where)), params)
-    cols = [c[0] for c in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    rows = conn.execute(_RESOLVE_SQL.format(where=" AND ".join(where)), params).fetchall()
+    return [dict(zip(_RESOLVE_COLS, row)) for row in rows]
 
 
 def status(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
@@ -218,3 +223,98 @@ def status(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
         else:
             r["state"] = "loaded"
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Generator helpers
+# ---------------------------------------------------------------------------
+
+# Which registry standards a generator request touches, from the words in
+# its source / target / purpose. Deliberately coarse: it only widens the
+# set of doc sources a generator cites beyond its hard-coded tools_cited.
+_KEY_PATTERNS: list[tuple[str, str]] = [
+    ("hl7v2", r"\bhl7\s?v2|\badt\b|\boru\b|\borm\b|\bmsh\b|\bpid\b"),
+    ("fhir-r4", r"\bfhir\b"),
+    ("us-core", r"\bus core\b|\buscdi\b"),
+    ("x12-5010", r"\bx12\b|\bedi\b|\b(270|271|276|277|278|834|835|837)[pi]?\b"),
+    ("davinci-pas", r"prior auth|\bpas\b|\b278\b"),
+    ("carin-bb", r"explanationofbenefit|explanation of benefit|\beob\b|\bcarin\b|blue button"),
+    ("cda", r"\bc-?cda\b|\bccd\b"),
+    ("dicom-deid", r"\bdicom\b"),
+]
+
+
+def infer_standard_keys(text: str) -> list[str]:
+    t = (text or "").lower()
+    keys = [k for k, pat in _KEY_PATTERNS if re.search(pat, t)]
+    if "hl7v2" in keys and "fhir-r4" in keys:
+        keys.append("hl7v2-to-fhir")
+    return keys
+
+
+def cited_source_names(
+    conn: duckdb.DuckDBPyConnection,
+    tools_cited: Iterable[str],
+    text: str = "",
+) -> list[str]:
+    """``tools_cited`` plus the loaded registry sources for the standards
+    that ``text`` names. Falls back to ``tools_cited`` alone when the
+    registry tables are absent (catalog not migrated yet)."""
+    names = list(dict.fromkeys(tools_cited))
+    keys = infer_standard_keys(text)
+    if not keys:
+        return names
+    try:
+        rows = standard_sources(conn, keys=keys)
+    except duckdb.Error:
+        return names
+    for r in rows:
+        if r["doc_source_name"] not in names:
+            names.append(r["doc_source_name"])
+    return names
+
+
+def cite_concepts(
+    conn: duckdb.DuckDBPyConnection,
+    source_names: Iterable[str],
+    *,
+    limit: int = 30,
+    name_like: Optional[str] = None,
+) -> list[tuple[int, str, int, str]]:
+    """(concept_id, concept name, doc_section_id, source name) citations
+    drawn round-robin across ``source_names``, so one alphabetically early
+    source can't fill the whole limit."""
+    names = list(dict.fromkeys(source_names))
+    if not names:
+        return []
+    params: list[Any] = list(names)
+    extra = ""
+    if name_like:
+        extra = "AND LOWER(c.name) LIKE LOWER(?)"
+        params.append(name_like)
+    rows = conn.execute(
+        f"""
+        WITH hits AS (
+            SELECT DISTINCT c.concept_id, c.name, ds.doc_section_id, src.name AS src_name
+              FROM concept c
+              JOIN concept_relation cr ON cr.from_concept_id = c.concept_id
+                                       OR cr.to_concept_id = c.concept_id
+              JOIN doc_section ds ON cr.source_id = ds.doc_section_id
+                                  AND cr.source_type = 'doc_section'
+              JOIN doc_snapshot sn USING (snapshot_id)
+              JOIN doc_source src ON sn.doc_source_id = src.doc_source_id
+             WHERE src.name IN ({', '.join('?' * len(names))}) {extra}
+        ), one_per_concept AS (
+            SELECT * FROM hits
+            QUALIFY row_number() OVER (PARTITION BY concept_id, src_name
+                                       ORDER BY doc_section_id) = 1
+        )
+        SELECT concept_id, name, doc_section_id, src_name,
+               row_number() OVER (PARTITION BY src_name ORDER BY concept_id) AS rn
+          FROM one_per_concept
+         QUALIFY rn <= ?
+         ORDER BY rn, src_name
+        """,
+        params + [limit],
+    ).fetchall()
+    return [(int(r[0]), r[1], int(r[2]), r[3]) for r in rows[:limit]]

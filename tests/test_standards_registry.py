@@ -97,3 +97,43 @@ def test_cli_check_and_dry_run(capsys):
     assert standards_registry.main(["check"]) == 0
     assert standards_registry.main(["load"]) == 0
     assert "dry run" in capsys.readouterr().out
+
+
+def test_infer_standard_keys():
+    assert standards.infer_standard_keys("HL7v2 ADT^A01 to FHIR Patient") == [
+        "hl7v2", "fhir-r4", "hl7v2-to-fhir"]
+    assert standards.infer_standard_keys("X12 837P to FHIR Claim") == ["fhir-r4", "x12-5010"]
+    assert standards.infer_standard_keys("dicom series") == ["dicom-deid"]
+    assert standards.infer_standard_keys("event sourcing") == []
+
+
+def test_cited_source_names_adds_loaded_registry_sources(conn):
+    # No registry tables yet → tools_cited unchanged.
+    assert standards.cited_source_names(conn, ["Stedi"], "x12 835") == ["Stedi"]
+    standards.load(conn, {"standards": [
+        {"key": "x12-5010", "name": "X12", "license_tier": "licensed",
+         "sources": [{"name": "pyx12", "role": "library", "match": "%pyx12%"}]}]})
+    assert standards.cited_source_names(conn, ["Stedi"], "x12 835") == ["Stedi", "pyx12 docs"]
+    assert standards.cited_source_names(conn, ["Stedi"], "fhir only") == ["Stedi"]
+
+
+def test_cite_concepts_round_robins_across_sources(conn):
+    ids = dict(conn.execute("SELECT name, doc_source_id FROM doc_source").fetchall())
+    sec = {}
+    for name, sid in ids.items():
+        snap = conn.execute("INSERT INTO doc_snapshot (doc_source_id) VALUES (?) "
+                            "RETURNING snapshot_id", [sid]).fetchone()[0]
+        sec[name] = conn.execute("INSERT INTO doc_section (snapshot_id, ordinal) "
+                                 "VALUES (?, 0) RETURNING doc_section_id", [snap]).fetchone()[0]
+    hub = conn.execute("INSERT INTO concept (name) VALUES ('hub') RETURNING concept_id").fetchone()[0]
+    for name, n in (("FHIR R4 core", 5), ("pyx12 docs", 5)):
+        for i in range(n):
+            cid = conn.execute("INSERT INTO concept (name) VALUES (?) RETURNING concept_id",
+                               [f"{name} c{i}"]).fetchone()[0]
+            conn.execute("INSERT INTO concept_relation VALUES (?, ?, 'RELATED_TO', 1.0, "
+                         "'doc_section', ?, now())", [cid, hub, sec[name]])
+    cites = standards.cite_concepts(conn, ["pyx12 docs", "FHIR R4 core"], limit=4)
+    assert len(cites) == 4
+    assert {c[3] for c in cites} == {"pyx12 docs", "FHIR R4 core"}
+    only = standards.cite_concepts(conn, ["pyx12 docs"], limit=10, name_like="%c1%")
+    assert [c[1] for c in only] == ["pyx12 docs c1"]
