@@ -68,12 +68,15 @@ def _section_churn(conn, newer: "_SnapshotEvent", older: "_SnapshotEvent") -> fl
     """Share of sections that differ between two snapshots (0..1)."""
     if newer.content_hash == older.content_hash:
         return 0.0
+    # Hash the body only, with heading/Source/Title lines and whitespace
+    # normalised away: a fetcher change that renames every heading (e.g.
+    # Context7 headings turning into source URLs) is not doc churn.
+    norm = ("md5(regexp_replace(regexp_replace(COALESCE(content, ''), "
+            "'(?m)^\\s*(#+ .*|Source:.*|Title:.*)$', '', 'g'), '\\s+', ' ', 'g'))")
     row = conn.execute(
-        """
-        WITH a AS (SELECT DISTINCT md5(COALESCE(heading_text, '') || '\x1f' || COALESCE(content, '')) h
-                     FROM doc_section WHERE snapshot_id = ?),
-             b AS (SELECT DISTINCT md5(COALESCE(heading_text, '') || '\x1f' || COALESCE(content, '')) h
-                     FROM doc_section WHERE snapshot_id = ?)
+        f"""
+        WITH a AS (SELECT DISTINCT {norm} h FROM doc_section WHERE snapshot_id = ?),
+             b AS (SELECT DISTINCT {norm} h FROM doc_section WHERE snapshot_id = ?)
         SELECT (SELECT COUNT(*) FROM a JOIN b USING (h)),
                (SELECT COUNT(*) FROM (SELECT h FROM a UNION SELECT h FROM b))
         """, [newer.snapshot_id, older.snapshot_id]).fetchone()

@@ -116,12 +116,16 @@ class ContradictsDecomposer:
             f"""
             SELECT ae.concept_id, c.name,
                    ae.from_doc_section_id, ae.to_chapter_id, ae.to_doc_section_id,
-                   COALESCE(ae.explanation, '')
+                   COALESCE(ae.explanation, ''),
+                   sn.doc_source_id, s.heading_text
               FROM alignment_edge ae
               JOIN concept c ON c.concept_id = ae.concept_id
+              LEFT JOIN doc_section s   ON s.doc_section_id = ae.from_doc_section_id
+              LEFT JOIN doc_snapshot sn ON sn.snapshot_id = s.snapshot_id
              WHERE ae.relation_type = 'CONTRADICTS'
                AND ae.concept_id IN ({ph})
-             ORDER BY ae.confidence DESC NULLS LAST, ae.concept_id
+             ORDER BY sn.retrieved_at DESC NULLS LAST,
+                      ae.confidence DESC NULLS LAST, ae.concept_id
             """,
             list(seen),
         ).fetchall()
@@ -132,9 +136,13 @@ class ContradictsDecomposer:
             cid, cname, from_sec, to_ch, to_sec, expl = (
                 int(r[0]), r[1], r[2], r[3], r[4], r[5],
             )
-            # One diff per (doc section, book chapter) pair: the same
-            # disagreement is often recorded under two neighbouring concepts.
-            pair = (from_sec, to_ch, to_sec)
+            # One diff per (doc passage, book chapter) pair. The same
+            # disagreement is often recorded under two neighbouring concepts,
+            # or against the same heading in two snapshots of one source
+            # (newest snapshot wins via the ORDER BY).
+            src_id, heading = r[6], r[7]
+            passage = (src_id, (heading or "").strip().lower()) if src_id is not None else from_sec
+            pair = (passage, to_ch, to_sec)
             if pair in seen_pairs:
                 continue
             seen_pairs.add(pair)
