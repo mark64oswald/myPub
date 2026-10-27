@@ -152,6 +152,22 @@ def test_cite_concepts_round_robins_across_sources(conn):
     assert [c[1] for c in only] == ["pyx12 docs c1"]
 
 
+
+def test_cite_concepts_counts_procedure_concepts(conn):
+    sid = conn.execute("SELECT doc_source_id FROM doc_source "
+                       "WHERE name = 'pyx12 docs'").fetchone()[0]
+    sec = conn.execute("SELECT doc_section_id FROM doc_section JOIN doc_snapshot "
+                       "USING (snapshot_id) WHERE doc_source_id = ? LIMIT 1",
+                       [sid]).fetchone()[0]
+    cid = conn.execute("INSERT INTO concept (name) VALUES ('Loop 2300 Claim') "
+                       "RETURNING concept_id").fetchone()[0]
+    pid = conn.execute("INSERT INTO procedure (name, source_type, source_id) "
+                       "VALUES ('build 837', 'doc_section', ?) RETURNING procedure_id",
+                       [sec]).fetchone()[0]
+    conn.execute("INSERT INTO procedure_concept VALUES (?, ?)", [pid, cid])
+    assert standards.cite_concepts(conn, ["pyx12 docs"]) == [
+        (cid, "Loop 2300 Claim", sec, "pyx12 docs")]
+
 def test_infer_us_core_with_hyphen():
     assert "us-core" in standards.infer_standard_keys("base_ig us-core + davinci-pas")
     assert "davinci-pas" in standards.infer_standard_keys("base_ig us-core + davinci-pas")
