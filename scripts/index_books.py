@@ -24,8 +24,13 @@ import argparse
 import hashlib
 import logging
 import os
+import re
 import sys
+import tempfile
 import time
+import xml.etree.ElementTree as ET
+import zipfile
+from xml.sax.saxutils import escape
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -513,10 +518,84 @@ def _finalize_book(
 # Top-level per-book driver
 # ----------------------------------------------------------------------------
 
+def _spine_ncx(zf: zipfile.ZipFile) -> Optional[tuple[str, bytes]]:
+    """Build a replacement NCX (path, bytes) from the OPF spine.
+
+    Some store downloads ship a toc.ncx that isn't a TOC at all — e.g.
+    "Big Data and Health Analytics" carries a CDN "Access Denied" HTML
+    page under that name — and ebooklib crashes on it even with
+    ignore_ncx. The spine still lists every content document in reading
+    order, so one navPoint per spine item is a faithful fallback.
+    """
+    container = ET.fromstring(zf.read("META-INF/container.xml"))
+    rootfile = next((e for e in container.iter() if e.tag.endswith("rootfile")), None)
+    if rootfile is None:
+        return None
+    opf_path = rootfile.get("full-path", "")
+    base = opf_path.rsplit("/", 1)[0] + "/" if "/" in opf_path else ""
+    opf = ET.fromstring(zf.read(opf_path))
+    manifest = {e.get("id"): e for e in opf.iter() if e.tag.endswith("}item")}
+    spine = next((e for e in opf.iter() if e.tag.endswith("}spine")), None)
+    if spine is None or spine.get("toc") not in manifest:
+        return None
+    ncx_path = base + manifest[spine.get("toc")].get("href", "")
+    points = []
+    for n, ref in enumerate((e for e in spine if e.tag.endswith("itemref")), 1):
+        item = manifest.get(ref.get("idref"))
+        if item is None or "html" not in (item.get("media-type") or ""):
+            continue
+        href = item.get("href", "")
+        try:
+            head = zf.read(base + href)[:4000].decode("utf-8", "replace")
+        except KeyError:
+            continue
+        m = re.search(r"<title[^>]*>(.*?)</title>", head, re.S | re.I)
+        title = re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+        title = title or f"Section {n}"
+        points.append(
+            f'<navPoint id="np{n}" playOrder="{n}"><navLabel><text>{escape(title)}</text>'
+            f'</navLabel><content src="{escape(href)}"/></navPoint>'
+        )
+    if not points:
+        return None
+    ncx = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
+           '<head/><docTitle><text>toc</text></docTitle><navMap>'
+           + "".join(points) + "</navMap></ncx>")
+    return ncx_path, ncx.encode("utf-8")
+
+
+def _read_epub(filepath: Path) -> epub.EpubBook:
+    """read_epub, retrying once with a spine-built NCX if the NCX is broken."""
+    try:
+        return epub.read_epub(str(filepath))
+    except Exception as first:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        try:
+            with zipfile.ZipFile(filepath) as zf:
+                built = _spine_ncx(zf)
+                if built is None:
+                    raise first
+                ncx_path, ncx_bytes = built
+                fd, tmp = tempfile.mkstemp(suffix=".epub")
+                os.close(fd)
+                with zipfile.ZipFile(tmp, "w") as out:
+                    for info in zf.infolist():
+                        data = ncx_bytes if info.filename == ncx_path else zf.read(info)
+                        out.writestr(info, data)
+        except (zipfile.BadZipFile, KeyError, ET.ParseError):
+            raise first from None
+        LOG.warning("%s: unreadable NCX (%s); indexing from a spine-built TOC",
+                    filepath.name, first)
+        try:
+            return epub.read_epub(tmp)
+        finally:
+            os.unlink(tmp)
+
+
 def index_book(conn: duckdb.DuckDBPyConnection, filepath: Path) -> bool:
     """Index one ePub file. Returns True on success."""
     try:
-        book = epub.read_epub(str(filepath))
+        book = _read_epub(filepath)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
         LOG.error("cannot read %s: %s", filepath, exc)
         return False
