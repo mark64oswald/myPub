@@ -88,3 +88,31 @@ def test_fetcher_output_sectionizes_one_section_per_resource(tmp_path):
     roots = sectionize({"source_type": fetched.source_type, "content": fetched.content})
     headings = [c.heading_text for r in roots for c in (r.children or [])]
     assert headings == ["Patient", "USCorePatientProfile"]
+
+
+PID_MAP = {
+    "resourceType": "ConceptMap", "name": "SegmentPIDToPatient",
+    "title": "Segment PID to Patient Map",
+    "sourceCanonical": "http://hl7.org/v2/PID", "targetCanonical": "http://hl7.org/fhir/Patient",
+    "group": [{"element": [
+        {"code": "PID-3", "display": "Patient Identifier List",
+         "target": [{"code": "Patient.identifier", "relationship": "equivalent",
+                     "dependsOn": [{"property": "PID-3.4", "value": "MR"}]}]},
+        {"code": "PID-8", "display": "Administrative Sex",
+         "target": [{"code": "Patient.gender", "equivalence": "equivalent",
+                     "comment": "via v2-0001 map"}]},
+    ]}],
+}
+
+
+def test_conceptmaps_render_only_when_asked(tmp_path):
+    tgz = _package(tmp_path, {"package.json": {"name": "hl7.fhir.uv.v2mappings", "version": "1.0.0"},
+                              "ConceptMap-pid.json": PID_MAP})
+    _, md = fs.package_markdown(tgz)
+    assert "PID-3" not in md
+    _, md = fs.package_markdown(tgz, include_conceptmaps=True)
+    assert "## Segment PID to Patient Map" in md
+    assert "**Maps:** `PID` → `Patient`" in md
+    assert "| `PID-3` | Patient Identifier List | `Patient.identifier` | equivalent | PID-3.4=MR |" in md
+    assert "via v2-0001 map" in md
+    assert "1 ConceptMap(s)." in md

@@ -42,3 +42,12 @@ def test_site_markdown_from_files(tmp_path):
     md = html_doc.site_markdown(html_doc._read_pages([], [f]), "DICOM PS3.15")
     assert md.startswith("# DICOM PS3.15")
     assert f"Source: {f.as_uri()}" in md
+
+
+def test_decode_ignores_the_latin1_default():
+    raw = "<html><body><h1>E.1 Profile</h1></body></html>".encode()
+    assert "Â" not in html_doc._decode(raw, "text/html")
+    assert " " in html_doc._decode(raw, "text/html")
+    latin = "<meta charset=\"iso-8859-1\"><p>café</p>".encode("latin-1")
+    assert "café" in html_doc._decode(latin, "text/html")
+    assert "café" in html_doc._decode(latin, "text/html; charset=ISO-8859-1")

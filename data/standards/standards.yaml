@@ -31,13 +31,15 @@ standards:
     anchors: [HL7 v2, ADT, ORM, ORU, MSH segment, PID segment, PV1 segment, OBR segment, OBX segment, ACK]
     generators: [standards_translator, integration_channel, deid_bundle, bootstrap, quickstart]
     notes: >
-      HL7 gives the v2 spec away only after sign-in, so a browsable
-      segment/field reference site stands in for it.
+      HL7 gives the v2 spec away only after sign-in. The Caristix segment
+      site is JavaScript-only (html_doc.py can't read it), so the planned
+      segment reference stays unloaded; the v2-to-FHIR ConceptMaps and the
+      library docs carry the segment/field detail for now.
     sources:
       - {name: HL7 v2 segment reference, role: spec, source_type: html_site, identifier: "https://hl7-definition.caristix.com/v2/", planned: true}
       - {name: HAPI HL7v2, role: library, match: "%HAPI%HL7%v2%"}
       - {name: hl7apy, role: library, match: "%hl7apy%"}
-      - {name: python-hl7, role: library, source_type: deepwiki, identifier: "johnpaulett/python-hl7", planned: true}
+      - {name: python-hl7, role: library, source_type: deepwiki, identifier: "johnpaulett/python-hl7"}
       - {name: Mirth / NextGen Connect, role: tool, match: "%Mirth%"}
 
   - key: hl7v2-to-fhir
@@ -79,7 +81,7 @@ standards:
     generators: [fhir_ig_scaffold, standards_translator]
     sources:
       - {name: US Core 6.1, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.core@6.1.0"}
-      - {name: US Core (Context7), role: spec, match: "%US Core%"}
+      - {name: US Core (Context7), role: spec, match: "US Core Implementation Guide%"}
 
   - key: davinci-pas
     name: Da Vinci Prior Authorization Support
@@ -91,7 +93,7 @@ standards:
     anchors: [prior authorization, PAS]
     generators: [fhir_ig_scaffold, standards_translator]
     sources:
-      - {name: Da Vinci PAS, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.davinci-pas@2.0.1", planned: true}
+      - {name: Da Vinci PAS, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.davinci-pas@2.0.1"}
 
   - key: carin-bb
     name: CARIN Blue Button (consumer payer data)
@@ -103,7 +105,7 @@ standards:
     anchors: [ExplanationOfBenefit, Blue Button]
     generators: [standards_translator, fhir_ig_scaffold]
     sources:
-      - {name: CARIN BB, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.carin-bb@2.0.0", planned: true}
+      - {name: CARIN BB, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.carin-bb@2.0.0"}
 
   - key: cda
     name: CDA R2 / C-CDA
@@ -115,8 +117,8 @@ standards:
     anchors: [CDA, C-CDA, Continuity of Care Document, templateId]
     generators: [standards_translator]
     sources:
-      - {name: CDA Core 2.0, role: spec, match: "%CDA%"}
-      - {name: C-CDA on FHIR, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.ccda@1.2.0", planned: true}
+      - {name: CDA Core 2.0, role: spec, match: "%CDA Core%"}
+      - {name: C-CDA on FHIR, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.ccda@1.2.0"}
 
   - key: x12-5010
     name: ASC X12 5010 HIPAA transactions
@@ -144,7 +146,7 @@ standards:
     anchors: [DICOM, DICOM tag, Basic Application Level Confidentiality Profile]
     generators: [deid_bundle, standards_translator]
     sources:
-      - {name: DICOM PS3.15, role: spec, source_type: html_site, identifier: "https://dicom.nema.org/medical/dicom/current/output/html/part15.html", planned: true}
+      - {name: DICOM PS3.15, role: spec, source_type: html_site, identifier: "https://dicom.nema.org/medical/dicom/current/output/html/part15.html"}
       - {name: pydicom, role: library, match: "%pydicom%"}
 
 relations:
