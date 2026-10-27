@@ -235,7 +235,7 @@ def status(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
 _KEY_PATTERNS: list[tuple[str, str]] = [
     ("hl7v2", r"\bhl7\s?v2|\badt\b|\boru\b|\borm\b|\bmsh\b|\bpid\b"),
     ("fhir-r4", r"\bfhir\b"),
-    ("us-core", r"\bus core\b|\buscdi\b"),
+    ("us-core", r"\bus[\s-]?core\b|\buscdi\b"),
     ("x12-5010", r"\bx12\b|\bedi\b|\b(270|271|276|277|278|834|835|837)[pi]?\b"),
     ("davinci-pas", r"prior auth|\bpas\b|\b278\b"),
     ("carin-bb", r"explanationofbenefit|explanation of benefit|\beob\b|\bcarin\b|blue button"),
