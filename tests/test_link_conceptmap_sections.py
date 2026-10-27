@@ -37,19 +37,24 @@ def _world():
 
     v2, v2snap = source("v2-to-FHIR", "hl7.fhir.uv.v2mappings@1.0.0")
     r4, r4snap = source("FHIR R4 core", "hl7.fhir.r4.core@4.0.1")
-    for i, h in enumerate(["Segment PID to Patient Map", "Segment ED to Encounter Map"]):
+    for i, h in enumerate(["Segment PID to Patient Map", "Segment ED to Encounter Map",
+                           "Segment PID to Appointment Map"]):
         c.execute("INSERT INTO doc_section (snapshot_id, heading_text, ordinal) VALUES (?, ?, ?)",
                   [v2snap, h, i])
     r4sec = c.execute("INSERT INTO doc_section (snapshot_id, ordinal) VALUES (?, 0) "
                       "RETURNING doc_section_id", [r4snap]).fetchone()[0]
     ids = {}
-    for n in ("PID segment", "Patient", "ED", "Encounter", "Resource"):
-        ids[n] = c.execute("INSERT INTO concept (name) VALUES (?) RETURNING concept_id",
-                           [n]).fetchone()[0]
-    # "Patient" is tied to FHIR docs; "Encounter" and "ED" (the editor) aren't.
-    c.execute("INSERT INTO concept_relation (from_concept_id, to_concept_id, relation_type, "
-              "source_type, source_id) VALUES (?, ?, 'EXTENDS', 'doc_section', ?)",
-              [ids["Patient"], ids["Resource"], r4sec])
+    for n, d in (("PID segment", ""), ("Patient", "FHIR resource for a person receiving care"),
+                 ("ED", "UNIX line editor"), ("Encounter", ""), ("Resource", ""),
+                 ("Appointment", "a type of accountability")):
+        ids[n] = c.execute("INSERT INTO concept (name, description) VALUES (?, ?) "
+                           "RETURNING concept_id", [n, d]).fetchone()[0]
+    # "Patient" is tied to FHIR docs and described as FHIR; "Appointment" is tied
+    # to FHIR docs but in another sense; "Encounter" and "ED" aren't tied at all.
+    for n in ("Patient", "Appointment"):
+        c.execute("INSERT INTO concept_relation (from_concept_id, to_concept_id, relation_type, "
+                  "source_type, source_id) VALUES (?, ?, 'EXTENDS', 'doc_section', ?)",
+                  [ids[n], ids["Resource"], r4sec])
     standards.load(c, {"standards": [
         {"key": "fhir-r4", "name": "R4", "license_tier": "open",
          "sources": [{"name": "core", "role": "spec", "source_type": "fhir_package",

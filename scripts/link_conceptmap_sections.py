@@ -46,6 +46,10 @@ _HEADING = re.compile(
 # Registry standards whose doc sections define the HL7 v2 / FHIR sense of
 # a bare name ("PID", "Patient").
 SCOPE_STANDARDS = ("hl7v2", "hl7v2-to-fhir", "fhir-r4", "us-core")
+# A bare name must also describe itself in HL7 / FHIR terms: "Appointment",
+# "Condition" and "Account" exist in analysis-pattern senses that do turn up
+# in FHIR doc sections.
+_SENSE_RE = r"\b(fhir|hl7|resource|segment|interoperab|clinical|patient|healthcare)"
 
 
 def parse_heading(heading: str) -> Optional[tuple[list[tuple[str, bool]], list[tuple[str, bool]]]]:
@@ -84,6 +88,7 @@ def _resolve(conn, names: list[tuple[str, bool]], scope_ids: list[int]) -> Optio
                 f"""
                 SELECT c.concept_id FROM concept c
                  WHERE lower(c.name) = lower(?)
+                   AND regexp_matches(coalesce(c.description, ''), ?, 'i')
                    AND EXISTS (
                      SELECT 1 FROM concept_relation cr
                        JOIN doc_section ds ON cr.source_type = 'doc_section'
@@ -92,7 +97,7 @@ def _resolve(conn, names: list[tuple[str, bool]], scope_ids: list[int]) -> Optio
                       WHERE (cr.from_concept_id = c.concept_id OR cr.to_concept_id = c.concept_id)
                         AND sn.doc_source_id IN ({', '.join('?' * len(scope_ids))}))
                  ORDER BY c.concept_id LIMIT 1
-                """, [n, *scope_ids]).fetchone()
+                """, [n, _SENSE_RE, *scope_ids]).fetchone()
         else:
             row = None
         if row:
@@ -144,12 +149,20 @@ def main(argv=None) -> int:
     p.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     p.add_argument("--source-id", type=int, required=True)
     p.add_argument("--write", action="store_true")
+    p.add_argument("--skip", action="append", default=[], metavar="HEADING",
+                   help="leave out the edge(s) from this section heading; repeatable")
     args = p.parse_args(argv)
     conn = duckdb.connect(str(args.catalog), read_only=not args.write)
     try:
         edges = plan_edges(conn, args.source_id)
-        for a, b, sec, heading in edges[:20]:
-            print(f"  {heading!r}: {a} MAPS_TO {b} (section {sec})")
+        skip = {h.strip().lower() for h in args.skip}
+        edges = [e for e in edges if e[3].strip().lower() not in skip]
+        names = dict(conn.execute(
+            "SELECT concept_id, name FROM concept WHERE concept_id IN "
+            f"({', '.join(str(i) for e in edges for i in e[:2]) or 'NULL'})").fetchall())
+        for a, b, sec, heading in edges:
+            print(f"  {heading!r}: #{a} {names.get(a)!r} MAPS_TO #{b} {names.get(b)!r} "
+                  f"(section {sec})")
         print(f"{len(edges)} edge(s) planned")
         if args.write:
             print(f"{write_edges(conn, edges)} inserted")
