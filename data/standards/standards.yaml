@@ -1,0 +1,158 @@
+# Healthcare standards registry — scoped to the generators that scaffold
+# or translate solutions: standards_translator, integration_channel,
+# fhir_ig_scaffold, deid_bundle, edi_roundtrip, and bootstrap / quickstart
+# when a request names one of these standards.
+#
+# Standards are live-doc references for those generators, not corpus,
+# and myPub does not generate synthetic data (HealthSim does that). Add an
+# entry only when a generator use case needs it.
+#
+# license_tier:
+#   open        spec text is free to fetch and index
+#   free_reg    free, but behind a sign-in / click-through
+#   licensed    paid or member-only (X12 TR3). Reference-only: url and
+#               metadata, no spec text fetched. Libraries and public
+#               companion guides that cover it may still be loaded.
+#
+# sources[].role: spec | guide | library | tool
+# A source either pins an exact doc_source (source_type + identifier) or
+# gives `match`, an ILIKE pattern on doc_source.name for sources that
+# auto-discovery created. `planned: true` marks one not loaded yet.
+
+standards:
+
+  - key: hl7v2
+    name: HL7 Version 2.x Messaging
+    family: hl7v2
+    market: provider
+    license_tier: free_reg
+    official_url: https://www.hl7.org/implement/standards/product_brief.cfm?product_id=185
+    versions: ["2.3", "2.5.1", "2.8"]
+    anchors: [HL7 v2, ADT, ORM, ORU, MSH segment, PID segment, PV1 segment, OBR segment, OBX segment, ACK]
+    generators: [standards_translator, integration_channel, deid_bundle, bootstrap, quickstart]
+    notes: >
+      HL7 gives the v2 spec away only after sign-in, so a browsable
+      segment/field reference site stands in for it.
+    sources:
+      - {name: HL7 v2 segment reference, role: spec, source_type: html_site, identifier: "https://hl7-definition.caristix.com/v2/", planned: true}
+      - {name: HAPI HL7v2, role: library, match: "%HAPI%HL7%v2%"}
+      - {name: hl7apy, role: library, match: "%hl7apy%"}
+      - {name: python-hl7, role: library, source_type: deepwiki, identifier: "johnpaulett/python-hl7", planned: true}
+      - {name: Mirth / NextGen Connect, role: tool, match: "%Mirth%"}
+
+  - key: hl7v2-to-fhir
+    name: HL7 Version 2 to FHIR IG
+    family: fhir
+    market: provider
+    license_tier: open
+    official_url: https://build.fhir.org/ig/HL7/v2-to-fhir/
+    versions: ["1.0.0"]
+    anchors: [v2-to-FHIR mapping, ConceptMap]
+    generators: [standards_translator, integration_channel]
+    sources:
+      - {name: HL7 v2-to-FHIR IG, role: spec, source_type: fhir_package, identifier: "hl7.fhir.uv.v2mappings@1.0.0", planned: true}
+
+  - key: fhir-r4
+    name: FHIR Release 4
+    family: fhir
+    market: provider
+    license_tier: open
+    official_url: https://hl7.org/fhir/R4/
+    versions: ["4.0.1"]
+    anchors: [FHIR, FHIR resource, Patient resource, Encounter resource, Observation resource, Claim resource, Bundle, StructureDefinition]
+    generators: [standards_translator, fhir_ig_scaffold, integration_channel, deid_bundle, bootstrap, quickstart]
+    sources:
+      - {name: FHIR R4 core, role: spec, source_type: fhir_package, identifier: "hl7.fhir.r4.core@4.0.1"}
+      - {name: FHIR spec (Context7), role: spec, match: "%FHIR%Spec%"}
+      - {name: HAPI FHIR, role: library, match: "%HAPI FHIR%"}
+      - {name: Medplum, role: library, match: "%Medplum%"}
+      - {name: Microsoft FHIR Server, role: tool, match: "%FHIR Server%"}
+
+  - key: us-core
+    name: US Core Implementation Guide
+    family: fhir
+    market: provider
+    license_tier: open
+    official_url: https://hl7.org/fhir/us/core/
+    versions: ["6.1.0"]
+    anchors: [US Core, USCDI, Must Support]
+    generators: [fhir_ig_scaffold, standards_translator]
+    sources:
+      - {name: US Core 6.1, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.core@6.1.0"}
+      - {name: US Core (Context7), role: spec, match: "%US Core%"}
+
+  - key: davinci-pas
+    name: Da Vinci Prior Authorization Support
+    family: fhir
+    market: payer
+    license_tier: open
+    official_url: https://hl7.org/fhir/us/davinci-pas/
+    versions: ["2.0.1"]
+    anchors: [prior authorization, PAS]
+    generators: [fhir_ig_scaffold, standards_translator]
+    sources:
+      - {name: Da Vinci PAS, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.davinci-pas@2.0.1", planned: true}
+
+  - key: carin-bb
+    name: CARIN Blue Button (consumer payer data)
+    family: fhir
+    market: payer
+    license_tier: open
+    official_url: https://hl7.org/fhir/us/carin-bb/
+    versions: ["2.0.0"]
+    anchors: [ExplanationOfBenefit, Blue Button]
+    generators: [standards_translator, fhir_ig_scaffold]
+    sources:
+      - {name: CARIN BB, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.carin-bb@2.0.0", planned: true}
+
+  - key: cda
+    name: CDA R2 / C-CDA
+    family: cda
+    market: provider
+    license_tier: free_reg
+    official_url: https://www.hl7.org/implement/standards/product_brief.cfm?product_id=492
+    versions: ["CDA 2.0", "C-CDA 2.1"]
+    anchors: [CDA, C-CDA, Continuity of Care Document, templateId]
+    generators: [standards_translator]
+    sources:
+      - {name: CDA Core 2.0, role: spec, match: "%CDA%"}
+      - {name: C-CDA on FHIR, role: spec, source_type: fhir_package, identifier: "hl7.fhir.us.ccda@1.2.0", planned: true}
+
+  - key: x12-5010
+    name: ASC X12 5010 HIPAA transactions
+    family: x12
+    market: payer
+    license_tier: licensed
+    official_url: https://x12.org/products/transaction-sets
+    versions: ["005010"]
+    anchors: [X12, EDI, ISA segment, GS segment, loop, 270, 271, 834, 835, 837, 997, 999]
+    generators: [edi_roundtrip, standards_translator, integration_channel]
+    notes: >
+      TR3s are licensed and Mark holds no X12 license (2026-10-27), so the
+      spec stays reference-only; the libraries carry the structure.
+    sources:
+      - {name: pyx12, role: library, match: "%pyx12%"}
+      - {name: Ballerina EDI, role: library, match: "%Ballerina%"}
+      - {name: Stedi, role: tool, match: "%Stedi%"}
+
+  - key: dicom-deid
+    name: DICOM (PS3.15 de-identification profiles)
+    family: dicom
+    market: provider
+    license_tier: open
+    official_url: https://dicom.nema.org/medical/dicom/current/output/html/part15.html
+    anchors: [DICOM, DICOM tag, Basic Application Level Confidentiality Profile]
+    generators: [deid_bundle, standards_translator]
+    sources:
+      - {name: DICOM PS3.15, role: spec, source_type: html_site, identifier: "https://dicom.nema.org/medical/dicom/current/output/html/part15.html", planned: true}
+      - {name: pydicom, role: library, match: "%pydicom%"}
+
+relations:
+  - {from: hl7v2-to-fhir, to: hl7v2, relation: MAPS_TO}
+  - {from: hl7v2-to-fhir, to: fhir-r4, relation: MAPS_TO}
+  - {from: us-core, to: fhir-r4, relation: PROFILES}
+  - {from: davinci-pas, to: us-core, relation: PROFILES}
+  - {from: davinci-pas, to: x12-5010, relation: MAPS_TO}
+  - {from: carin-bb, to: fhir-r4, relation: PROFILES}
+  - {from: carin-bb, to: x12-5010, relation: MAPS_TO}
+  - {from: cda, to: fhir-r4, relation: MAPS_TO}
