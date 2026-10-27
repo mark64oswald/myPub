@@ -79,7 +79,12 @@ with `{"expect_stdout": "..."}` to check the output too. Each failure writes
 a retry prompt to `_sub_agent_prompts/retry/`, and the next `status` lists
 those prompts first. Repeat until the package passes.
 
-## 5. Generator fixes that apply on the next run
+## 5. Healthcare corpora (PubMed Central, FHIR specs)
+
+See `docs/healthcare-corpora-design.md`. `ingest_pmc.py index` and
+`fhir_spec.py register` are writer steps.
+
+## 6. Generator fixes that apply on the next run
 
 - Learning Path and Tutorial: prerequisites below 0.25 cosine similarity to
   the target are dropped and not expanded (`min_similarity`, 0 turns this
