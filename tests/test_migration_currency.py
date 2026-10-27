@@ -265,8 +265,8 @@ def test_currency_filtered_to_one_source(catalog, tmp_path):
 
 
 def test_currency_volatility_higher_for_hash_churn(catalog, tmp_path):
-    ds1 = _seed_doc_source(catalog, "Stable")
-    ds2 = _seed_doc_source(catalog, "Churning")
+    ds1 = _seed_doc_source(catalog, "Stable", "deepwiki")
+    ds2 = _seed_doc_source(catalog, "Churning", "deepwiki")
     # Stable: same hash repeated
     _seed_snapshot(catalog, ds1, "h_same",
                     retrieved_at=datetime(2026, 1, 1))
@@ -288,7 +288,7 @@ def test_currency_volatility_tracks_how_much_content_changed(catalog, tmp_path):
     """Two sources with one hash change each: the one that rewrote more sections ranks higher."""
     t0, t1 = datetime(2026, 5, 1), datetime(2026, 10, 26)
     for name, changed in (("Small", 1), ("Big", 4)):
-        ds = _seed_doc_source(catalog, name)
+        ds = _seed_doc_source(catalog, name, "deepwiki")
         old = _seed_snapshot(catalog, ds, f"{name}-old", t0)
         new = _seed_snapshot(catalog, ds, f"{name}-new", t1)
         for i in range(4):
@@ -303,7 +303,7 @@ def test_currency_volatility_tracks_how_much_content_changed(catalog, tmp_path):
 
 def test_currency_ignores_heading_only_rewrites(catalog, tmp_path):
     """A fetcher change that renames every heading isn't doc churn."""
-    ds = _seed_doc_source(catalog, "Kafka")
+    ds = _seed_doc_source(catalog, "Kafka", "deepwiki")
     old = _seed_snapshot(catalog, ds, "k-old", datetime(2026, 5, 1))
     new = _seed_snapshot(catalog, ds, "k-new", datetime(2026, 10, 26))
     for snap, head in ((old, "POST /connectors"), (new, "https://github.com/apache/kafka/blob/trunk/docs/x")):
@@ -311,6 +311,21 @@ def test_currency_ignores_heading_only_rewrites(catalog, tmp_path):
                         "VALUES (?, 0, ?, ?)", [snap, f"### {head}\nCreate a connector.", head])
     d = cr.make_currency_report_generator().decomposer.decompose(catalog, _resolver({}), "all")
     assert d.sources[0].volatility_score == 0.0
+
+
+def test_currency_does_not_score_sampled_context7_sources(catalog, tmp_path):
+    """Context7 snapshots are query samples; churn between them isn't doc change."""
+    for name, stype in (("Kafka", "context7"), ("Repo", "deepwiki")):
+        ds = _seed_doc_source(catalog, name, stype)
+        for h, t, body in (("a", datetime(2026, 5, 1), "old"), ("b", datetime(2026, 10, 26), "new")):
+            snap = _seed_snapshot(catalog, ds, f"{name}-{h}", t)
+            catalog.execute("INSERT INTO doc_section (snapshot_id, ordinal, content, heading_text) "
+                            "VALUES (?, 0, ?, 'H')", [snap, body])
+    d = cr.make_currency_report_generator().decomposer.decompose(catalog, _resolver({}), "all")
+    assert [(r.name, r.measurable) for r in d.sources] == [("Repo", True), ("Kafka", False)]
+    assert d.sources[1].volatility_score == 0.0 and any("Context7" in n for n in d.notes)
+    text = cr._render_report(d)
+    assert "n/a (sampled)" in text
 
 
 def test_currency_renders_per_source_timeline(catalog, tmp_path):

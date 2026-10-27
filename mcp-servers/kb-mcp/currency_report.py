@@ -55,6 +55,12 @@ class _SourceRow:
     section_count: int
     volatility_score: float            # higher = more volatile
     snapshots: list[_SnapshotEvent] = field(default_factory=list)
+    measurable: bool = True            # False for sampled sources (Context7)
+
+
+# Context7 answers queries with a sample of snippets, so two snapshots of
+# one library rarely share a section even when the docs didn't change.
+SAMPLED_SOURCE_TYPES = {"context7"}
 
 
 @dataclass
@@ -156,6 +162,9 @@ class SnapshotHistoryDecomposer:
             churn = sum(_section_churn(conn, newer, older)
                         for newer, older in zip(snapshots, snapshots[1:]))
             volatility = churn * math.log(len(snapshots) + 1) if snapshots else 0.0
+            measurable = stype not in SAMPLED_SOURCE_TYPES
+            if not measurable:
+                volatility = 0.0
             rows.append(_SourceRow(
                 doc_source_id=ds_id, name=name, source_type=stype,
                 identifier=ident,
@@ -165,8 +174,9 @@ class SnapshotHistoryDecomposer:
                 section_count=section_count,
                 volatility_score=float(volatility),
                 snapshots=snapshots,
+                measurable=measurable,
             ))
-        rows.sort(key=lambda r: -r.volatility_score)
+        rows.sort(key=lambda r: (not r.measurable, -r.volatility_score, r.name))
 
         notes: list[str] = []
         all_single = all(r.snapshot_count <= 1 for r in rows)
@@ -177,7 +187,20 @@ class SnapshotHistoryDecomposer:
                 "refresh runs accumulate snapshot history."
             )
 
+        n_sampled = sum(not r.measurable for r in rows)
+        if n_sampled:
+            notes.append(
+                f"{n_sampled} Context7 source(s) are listed without a volatility "
+                "score: each Context7 fetch returns a different sample of "
+                "snippets, so comparing snapshots measures the sample, not "
+                "doc change. Their snapshot and hash history is still shown."
+            )
+
         return _Decomposition(scope_name=scope_name, sources=rows, notes=notes)
+
+
+def _fmt_volatility(r: _SourceRow) -> str:
+    return f"{r.volatility_score:.2f}" if r.measurable else "n/a (sampled)"
 
 
 def _render_report(d: _Decomposition) -> str:
@@ -195,7 +218,7 @@ def _render_report(d: _Decomposition) -> str:
         ts = r.last_retrieved.strftime("%Y-%m-%d") if r.last_retrieved else "—"
         lines.append(
             f"| **{r.name}** | {r.source_type} | {r.snapshot_count} | "
-            f"{r.distinct_hashes} | {r.volatility_score:.2f} | {ts} |"
+            f"{r.distinct_hashes} | {_fmt_volatility(r)} | {ts} |"
         )
     lines.append("")
     lines.append("_Volatility = (distinct hashes − 1) × log(snapshot_count + 1). "
@@ -217,7 +240,7 @@ def _render_source(r: _SourceRow) -> str:
         "",
         f"**Snapshots:** {r.snapshot_count}  |  **Distinct hashes:** {r.distinct_hashes}  |  "
         f"**Sections (latest):** {r.section_count}  |  "
-        f"**Volatility:** {r.volatility_score:.2f}",
+        f"**Volatility:** {_fmt_volatility(r)}",
         "",
         "## Timeline",
         "",
@@ -253,6 +276,7 @@ class CurrencyReportPlanner:
                 "n_sources": len(d.sources),
                 "n_snapshots": sum(r.snapshot_count for r in d.sources),
                 "max_volatility": max((r.volatility_score for r in d.sources), default=0.0),
+                "n_unmeasured_sampled": sum(not r.measurable for r in d.sources),
             },
             notes=list(d.notes),
         )
@@ -266,6 +290,7 @@ class CurrencyReportPlanner:
                     "snapshot_count": r.snapshot_count,
                     "distinct_hashes": r.distinct_hashes,
                     "volatility_score": r.volatility_score,
+                    "volatility_measurable": r.measurable,
                 },
                 logical_key=f"source_{r.doc_source_id}",
                 content_markdown="",
