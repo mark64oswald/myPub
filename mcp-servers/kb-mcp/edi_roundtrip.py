@@ -304,17 +304,25 @@ class EdiRoundTripDecomposer:
 
         # Drop concepts about another transaction set (the generic "X12"
         # term also matches "X12 834") before taking each term's top 5, so
-        # they don't use up its slots.
+        # they don't use up its slots. Loop ids only mean something inside
+        # one transaction (837 2000A is Billing Provider, 270 2000A is
+        # Information Source), so a loop counts only from a source named for
+        # this transaction or its paired response.
         allowed = {txn_code, paired} - {None}
         seen: set[int] = set()
         unique: list[tuple[int, str, int, str]] = []
         for term in candidate_terms:
-            hits = [c for c in standards.cite_concepts(
-                        conn, x12_sources, limit=25, name_word=term)
-                    if c[0] not in seen and not (_txn_codes_in(c[1]) - allowed)]
-            for c in hits[:5]:
+            taken = 0
+            for c in standards.cite_concepts(conn, x12_sources, limit=25, name_word=term):
+                if taken == 5:
+                    break
+                if c[0] in seen or _txn_codes_in(c[1]) - allowed:
+                    continue
+                if term in loop_ids and not (_txn_codes_in(c[3]) & allowed):
+                    continue
                 seen.add(c[0])
                 unique.append(c)
+                taken += 1
 
         notes: list[str] = []
         if not unique:
