@@ -150,6 +150,13 @@ def test_cite_concepts_round_robins_across_sources(conn):
     assert first[0][3] == "FHIR R4 core"
     only = standards.cite_concepts(conn, ["pyx12 docs"], limit=10, name_like="%c1%")
     assert [c[1] for c in only] == ["pyx12 docs c1"]
+    for name in ("Higher-order functions", "HI Segment"):
+        cid = conn.execute("INSERT INTO concept (name) VALUES (?) RETURNING concept_id",
+                           [name]).fetchone()[0]
+        conn.execute("INSERT INTO concept_relation VALUES (?, ?, 'RELATED_TO', 1.0, "
+                     "'doc_section', ?, now())", [cid, hub, sec["pyx12 docs"]])
+    hi = standards.cite_concepts(conn, ["pyx12 docs"], limit=10, name_word="HI")
+    assert [c[1] for c in hi] == ["HI Segment"]
 
 
 

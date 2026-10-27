@@ -285,21 +285,29 @@ def cite_concepts(
     *,
     limit: int = 30,
     name_like: Optional[str] = None,
+    name_word: Optional[str] = None,
 ) -> list[tuple[int, str, int, str]]:
     """(concept_id, concept name, doc_section_id, source name) citations
     drawn round-robin across ``source_names`` in the order given, so one
     alphabetically early source can't fill the whole limit and the first
     sources lead every round. A concept counts for a section when one of
     its relations or procedures was extracted from it; segment-table
-    guides often yield procedures but no relations."""
+    guides often yield procedures but no relations.
+
+    ``name_word`` keeps concepts whose name holds the term as a whole word
+    (case-insensitive). Use it for short codes: ``name_like='%HI%'`` would
+    match "Higher-order functions" for the X12 HI segment."""
     names = list(dict.fromkeys(source_names))
     if not names:
         return []
     params: list[Any] = list(names)
     extra = ""
     if name_like:
-        extra = "AND LOWER(c.name) LIKE LOWER(?)"
+        extra += " AND LOWER(c.name) LIKE LOWER(?)"
         params.append(name_like)
+    if name_word:
+        extra += " AND regexp_matches(c.name, ?, 'i')"
+        params.append(r"\b" + re.escape(name_word) + r"\b")
     rows = conn.execute(
         f"""
         WITH section_concepts AS (
