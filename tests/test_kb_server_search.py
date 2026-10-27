@@ -908,7 +908,9 @@ def test_disambiguate_discovery_ingests_user_pick(server_state, monkeypatch):
     assert isinstance(result["doc_source_id"], int)
     assert result["section_count"] >= 1
     assert stub.calls == [("context7", "/duckdb/duckdb", "DuckDB")]
-    # A discovery_log row was written.
+    # A discovery_log row was written. The tool closed the catalog on
+    # return (see server._release_catalog), so reopen it to inspect.
+    server._bootstrap()
     log_count = server._CONN.execute(
         "SELECT COUNT(*) FROM discovery_log WHERE query_term = 'duckdb'"
     ).fetchone()[0]
@@ -930,6 +932,7 @@ def test_disambiguate_discovery_idempotent_on_repeat(server_state, monkeypatch):
     )
     assert second["status"] == "already_present"
     assert second["doc_source_id"] == first["doc_source_id"]
+    server._bootstrap()  # the tool released the catalog on return
     count = server._CONN.execute(
         "SELECT COUNT(*) FROM doc_source "
         " WHERE source_type='deepwiki' AND identifier='owner/repo'"
