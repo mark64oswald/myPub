@@ -290,7 +290,7 @@ class EdiRoundTripDecomposer:
             conn, self.X12_SOURCES, f"x12 {txn_code}")
         for term in candidate_terms:
             concept_citations += standards.cite_concepts(
-                conn, x12_sources, limit=5, name_like=f"%{term}%")
+                conn, x12_sources, limit=5, name_word=term)
 
         # Dedupe by concept_id
         seen: set[int] = set()
