@@ -257,21 +257,22 @@ def cited_source_names(
     tools_cited: Iterable[str],
     text: str = "",
 ) -> list[str]:
-    """``tools_cited`` plus the loaded registry sources for the standards
-    that ``text`` names. Falls back to ``tools_cited`` alone when the
-    registry tables are absent (catalog not migrated yet)."""
-    names = list(dict.fromkeys(tools_cited))
+    """The loaded registry spec/guide sources for the standards ``text``
+    names, then ``tools_cited``, then the registry's library/tool sources.
+    The order is citation priority (see ``cite_concepts``): generators keep
+    only their first ~10 citations as provenance, so specs go first. Falls
+    back to ``tools_cited`` alone when the registry tables are absent."""
+    cited = list(dict.fromkeys(tools_cited))
     keys = infer_standard_keys(text)
     if not keys:
-        return names
+        return cited
     try:
         rows = standard_sources(conn, keys=keys)
     except duckdb.Error:
-        return names
-    for r in rows:
-        if r["doc_source_name"] not in names:
-            names.append(r["doc_source_name"])
-    return names
+        return cited
+    specs = [r["doc_source_name"] for r in rows if r["role"] in ("spec", "guide")]
+    others = [r["doc_source_name"] for r in rows if r["role"] not in ("spec", "guide")]
+    return list(dict.fromkeys(specs + cited + others))
 
 
 def cite_concepts(
@@ -282,8 +283,9 @@ def cite_concepts(
     name_like: Optional[str] = None,
 ) -> list[tuple[int, str, int, str]]:
     """(concept_id, concept name, doc_section_id, source name) citations
-    drawn round-robin across ``source_names``, so one alphabetically early
-    source can't fill the whole limit."""
+    drawn round-robin across ``source_names`` in the order given, so one
+    alphabetically early source can't fill the whole limit and the first
+    sources lead every round."""
     names = list(dict.fromkeys(source_names))
     if not names:
         return []
@@ -310,11 +312,12 @@ def cite_concepts(
                                        ORDER BY doc_section_id) = 1
         )
         SELECT concept_id, name, doc_section_id, src_name,
-               row_number() OVER (PARTITION BY src_name ORDER BY concept_id) AS rn
+               row_number() OVER (PARTITION BY src_name ORDER BY concept_id) AS rn,
+               list_position(?, src_name) AS priority
           FROM one_per_concept
          QUALIFY rn <= ?
-         ORDER BY rn, src_name
+         ORDER BY rn, priority, src_name
         """,
-        params + [limit],
+        params + [names, limit],
     ).fetchall()
     return [(int(r[0]), r[1], int(r[2]), r[3]) for r in rows[:limit]]
