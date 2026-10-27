@@ -66,6 +66,13 @@ _PAREN = re.compile(r"^(.+?)\s*\(([^()]+)\)\s*$")
 # ---------------------------------------------------------------------------
 
 
+def expansion_key(name: str) -> str:
+    """Spelling key without filler words: 'Extract, Transform, and Load'
+    and 'Extract-Transform-Load' are one expansion."""
+    words = [w for w in re.split(r"[\s\-/,]+", name.strip()) if w and w.lower() not in _INITIAL_SKIP]
+    return spelling_key(" ".join(words))
+
+
 def spelling_key(name: str) -> str:
     k = "".join(ch for ch in name.lower() if ch.isalnum())
     return k[:-1] if len(k) > 4 and k.endswith("s") else k
@@ -139,7 +146,7 @@ def candidate_pairs(rows: list[tuple]) -> list[tuple[int, int, str]]:
         m = _PAREN.match(name or "")
         if m and _parenthetical_consistent(*m.groups()):
             for part in m.groups():
-                for other in by_lower.get(part.strip().lower(), []):
+                for other in by_spelling.get(spelling_key(part), []):
                     add(cid, other, "parenthetical")
     for ids in by_spelling.values():
         if 1 < len(ids) <= 6:
@@ -178,6 +185,10 @@ def _coverage(conn: duckdb.DuckDBPyConnection, ids: list[int]) -> dict[int, int]
 
 
 def _evidence(conn, a: int, b: int, rule: str, min_sim: float) -> Optional[dict]:
+    na, da, nb, db = conn.execute(
+        "SELECT a.name, COALESCE(a.description, ''), b.name, COALESCE(b.description, '') "
+        "FROM concept a, concept b WHERE a.concept_id = ? AND b.concept_id = ?",
+        [a, b]).fetchone()
     row = conn.execute(
         """
         SELECT array_cosine_similarity(ea.embedding, eb.embedding)
@@ -185,14 +196,13 @@ def _evidence(conn, a: int, b: int, rule: str, min_sim: float) -> Optional[dict]
          WHERE ea.concept_id = ? AND eb.concept_id = ?
         """, [a, b]).fetchone()
     threshold = ACRONYM_MIN_SIM if rule.startswith("acronym") else min_sim
+    short = min(len(acronym_key(n) or "~~~") for n in (na, nb))
+    if rule == "acronym" and short < 3:
+        threshold = max(threshold, min_sim)  # 'DC', 'ML': two letters say little
     if row is not None and row[0] is not None:
         sim = float(row[0])
         return {"cosine": round(sim, 3)} if sim >= threshold else None
     # No embedding on one side: fall back to a description cross-mention.
-    na, da, nb, db = conn.execute(
-        "SELECT a.name, COALESCE(a.description, ''), b.name, COALESCE(b.description, '') "
-        "FROM concept a, concept b WHERE a.concept_id = ? AND b.concept_id = ?",
-        [a, b]).fetchone()
     if _mentions(na, db) or _mentions(nb, da):
         return {"description_mentions": True}
     return None
@@ -218,7 +228,7 @@ def _one_expansion_per_acronym(confirmed: list, names: dict[int, str]) -> list:
         if rule != "acronym":
             continue
         acr, exp = split(a, b)
-        key, exp_key = acronym_key(names[acr]), spelling_key(names[exp])
+        key, exp_key = acronym_key(names[acr]), expansion_key(names[exp])
         score = ev.get("cosine", 0.0)
         if key not in best or score > best[key][0]:
             best[key] = (score, exp_key)
@@ -226,7 +236,7 @@ def _one_expansion_per_acronym(confirmed: list, names: dict[int, str]) -> list:
     for a, b, rule, ev in confirmed:
         if rule == "acronym":
             acr, exp = split(a, b)
-            if best[acronym_key(names[acr])][1] != spelling_key(names[exp]):
+            if best[acronym_key(names[acr])][1] != expansion_key(names[exp]):
                 continue
         kept.append((a, b, rule, ev))
     return kept

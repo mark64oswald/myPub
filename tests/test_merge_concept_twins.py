@@ -130,3 +130,9 @@ def test_acronym_variants_and_expansion_spellings_stay_together():
                  (1, 5, "acronym", {"cosine": 0.62}), (1, 2, "acronym-variant", {"cosine": 0.95})]
     kept = {(a, b) for a, b, *_ in mct._one_expansion_per_acronym(confirmed, names)}
     assert kept == {(1, 3), (2, 4), (1, 2)}
+
+
+def test_expansion_key_ignores_filler_and_punctuation():
+    assert mct.expansion_key("Extract, Transform, and Load") == mct.expansion_key("Extract-Transform-Load")
+    rows = [(1, "ETL (Extract, Transform, Load)"), (2, "Extract Transform Load")]
+    assert (1, 2, "parenthetical") in set(mct.candidate_pairs(rows))
