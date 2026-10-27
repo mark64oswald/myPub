@@ -45,6 +45,8 @@ from learning_path import (
 )
 
 
+from topic_gate import DEFAULT_MIN_SIMILARITY, procedure_similarities
+
 LOG = logging.getLogger("mypub-tutorial")
 
 
@@ -111,6 +113,7 @@ class ProcedureBackedDecomposer:
         max_concepts: int = PREREQ_DEFAULT_MAX,
         max_stages: int = DEFAULT_MAX_STAGES,
         target_size: int = DEFAULT_STAGE_SIZE,
+        min_similarity: float = DEFAULT_MIN_SIMILARITY,
         **_: Any,
     ) -> _Decomposition:
         # Reuse Phase 8 prereq decomposer
@@ -145,7 +148,9 @@ class ProcedureBackedDecomposer:
         for ps in prereq_stages:
             cids = [c.concept_id for c in ps.concepts]
             anchor = ps.concepts[0]
-            proc = self._best_procedure_for_stage(conn, cids)
+            proc = self._best_procedure_for_stage(
+                conn, cids, topic_id=prereq.target_concept_id,
+                min_similarity=min_similarity)
             stages.append(_TutorialStage(
                 ordinal=ps.ordinal,
                 slug=_slugify(anchor.name),
@@ -174,7 +179,16 @@ class ProcedureBackedDecomposer:
     @staticmethod
     def _best_procedure_for_stage(
         conn: duckdb.DuckDBPyConnection, concept_ids: list[int],
+        *, topic_id: Optional[int] = None,
+        min_similarity: float = DEFAULT_MIN_SIMILARITY,
     ) -> Optional[_StageProcedure]:
+        """Procedure covering the most stage concepts, on-topic first.
+
+        A procedure's topic similarity is the mean cosine of its linked
+        concepts to the tutorial's target; below ``min_similarity`` it is
+        skipped (a Kafka-setup procedure doesn't belong in a Delta Lake
+        stage just because it also touches "Data Pipeline").
+        """
         if not concept_ids:
             return None
         ph = ",".join(["?"] * len(concept_ids))
@@ -194,12 +208,20 @@ class ProcedureBackedDecomposer:
              GROUP BY p.procedure_id, p.name, p.preconditions, p.steps,
                       p.postconditions, p.failure_modes
              ORDER BY hits DESC, step_len ASC
-             LIMIT 1
+             LIMIT 25
             """,
             concept_ids,
-        ).fetchone()
+        ).fetchall()
         if not rows:
             return None
+        if topic_id is not None and min_similarity > 0:
+            sims = procedure_similarities(conn, topic_id, [r[0] for r in rows])
+            rows = [r for r in rows
+                    if sims.get(int(r[0])) is None or sims[int(r[0])] >= min_similarity]
+            rows.sort(key=lambda r: (-r[6], -(sims.get(int(r[0])) or 0.0), r[7]))
+        if not rows:
+            return None
+        rows = rows[0]
         return _StageProcedure(
             procedure_id=int(rows[0]), name=rows[1] or "(unnamed)",
             preconditions=rows[2], steps_raw=rows[3],
