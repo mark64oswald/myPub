@@ -320,7 +320,9 @@ def _explanation(decision: dict) -> str:
     return " | ".join(p for p in parts if p)
 
 
-def apply_decisions(conn: duckdb.DuckDBPyConnection, decided: list[dict]) -> Counter:
+def apply_decisions(conn: duckdb.DuckDBPyConnection, decided: list[dict], *,
+                    keep_unrelated: bool = False,
+                    backup_table: Optional[str] = None) -> Counter:
     conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_alignment_vote_id START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS alignment_vote (
@@ -335,6 +337,12 @@ def apply_decisions(conn: duckdb.DuckDBPyConnection, decided: list[dict]) -> Cou
             note              VARCHAR,
             created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""")
+    if backup_table:
+        # A plain copy (no constraints): one INSERT … SELECT restores it.
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", backup_table):
+            raise ValueError(f"bad backup table name {backup_table!r}")
+        conn.execute(f"CREATE TABLE IF NOT EXISTS {backup_table} AS "
+                     "SELECT * FROM alignment_edge")
     stats: Counter = Counter()
     conn.execute("BEGIN")
     try:
@@ -356,6 +364,8 @@ def apply_decisions(conn: duckdb.DuckDBPyConnection, decided: list[dict]) -> Cou
                 )
                 was = item["current_relation"]
                 stats[f"{was}->{relation}"] += 1
+            elif action == "delete" and keep_unrelated:
+                stats["kept_unrelated"] += 1
             elif action == "delete":
                 conn.execute("DELETE FROM alignment_edge WHERE alignment_edge_id = ?", [eid])
                 stats["deleted_unrelated"] += 1
@@ -410,7 +420,8 @@ def do_process(args: argparse.Namespace) -> int:
 
     if args.apply:
         conn = duckdb.connect(str(args.catalog))
-        stats = apply_decisions(conn, decided)
+        stats = apply_decisions(conn, decided, keep_unrelated=args.keep_unrelated,
+                                backup_table=args.backup_table)
         conn.close()
         print("applied:", dict(stats))
     else:
@@ -433,6 +444,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     q.add_argument("--output-dir", type=Path, required=True)
     q.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     q.add_argument("--apply", action="store_true")
+    q.add_argument("--keep-unrelated", action="store_true",
+                   help="relabel only: leave edges voted UNRELATED in place")
+    q.add_argument("--backup-table", default="alignment_edge_pre_revote",
+                   help="copy alignment_edge here before applying ('' to skip)")
     args = parser.parse_args(argv)
     return do_prep(args) if args.cmd == "prep" else do_process(args)
 

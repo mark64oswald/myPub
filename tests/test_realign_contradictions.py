@@ -114,3 +114,45 @@ def test_batches_never_mix_sample_indexes_of_one_pair():
     for b in batches:
         assert len({j["prompt_path"].split("_s")[1] for j in b}) == 1
         assert len({j["prompt_path"].split("_s")[0] for j in b}) == len(b)
+
+
+def _edge_world(tmp_path):
+    root = Path(__file__).resolve().parent.parent
+    conn = duckdb.connect(str(tmp_path / "c.ddb"))
+    conn.execute((root / "schemas" / "catalog.sql").read_text())
+    b = conn.execute("INSERT INTO book (title, source_path) VALUES ('B','/b') RETURNING book_id").fetchone()[0]
+    ch = conn.execute("INSERT INTO chapter (book_id, title) VALUES (?, 'c') RETURNING chapter_id", [b]).fetchone()[0]
+    src = conn.execute("INSERT INTO doc_source (name, source_type, mcp_server, identifier) "
+                       "VALUES ('S','markdown','x','s') RETURNING doc_source_id").fetchone()[0]
+    sn = conn.execute("INSERT INTO doc_snapshot (doc_source_id) VALUES (?) RETURNING snapshot_id", [src]).fetchone()[0]
+    sec = conn.execute("INSERT INTO doc_section (snapshot_id, content) VALUES (?, 'x') "
+                       "RETURNING doc_section_id", [sn]).fetchone()[0]
+    cid = conn.execute("INSERT INTO concept (name) VALUES ('K') RETURNING concept_id").fetchone()[0]
+    ids = [conn.execute("INSERT INTO alignment_edge (from_doc_section_id, to_chapter_id, concept_id, "
+                        "relation_type, confidence) VALUES (?, ?, ?, 'CONTRADICTS', 0.1) "
+                        "RETURNING alignment_edge_id", [sec, ch, cid]).fetchone()[0] for _ in range(2)]
+    decided = [
+        {"alignment_edge_id": ids[0], "current_relation": "CONTRADICTS", "votes": [],
+         "decision": {"decision": "UNRELATED", "confidence": 0.9}},
+        {"alignment_edge_id": ids[1], "current_relation": "CONTRADICTS", "votes": [],
+         "decision": {"decision": "SUPERSEDED", "confidence": 0.8, "explanation": "dated"}},
+    ]
+    return conn, ids, decided
+
+
+def test_apply_backs_up_then_deletes_unrelated(tmp_path):
+    conn, ids, decided = _edge_world(tmp_path)
+    stats = rc.apply_decisions(conn, decided, backup_table="alignment_edge_pre_revote")
+    assert stats["deleted_unrelated"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM alignment_edge").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM alignment_edge_pre_revote").fetchone()[0] == 2
+
+
+def test_apply_keep_unrelated_only_relabels(tmp_path):
+    conn, ids, decided = _edge_world(tmp_path)
+    stats = rc.apply_decisions(conn, decided, keep_unrelated=True)
+    assert stats["kept_unrelated"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM alignment_edge").fetchone()[0] == 2
+    expl = conn.execute("SELECT explanation FROM alignment_edge WHERE alignment_edge_id = ?",
+                        [ids[1]]).fetchone()[0]
+    assert expl.startswith("[superseded]")
