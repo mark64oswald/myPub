@@ -136,3 +136,14 @@ def test_expansion_key_ignores_filler_and_punctuation():
     assert mct.expansion_key("Extract, Transform, and Load") == mct.expansion_key("Extract-Transform-Load")
     rows = [(1, "ETL (Extract, Transform, Load)"), (2, "Extract Transform Load")]
     assert (1, 2, "parenthetical") in set(mct.candidate_pairs(rows))
+
+
+def test_merge_skip_concepts_leaves_flagged_groups(world, tmp_path):
+    conn, ids = world
+    plan = tmp_path / "twins.json"
+    plan.write_text(json.dumps(mct.find_groups(conn)))
+    conn.close()
+    assert mct.main(["merge", "--plan", str(plan), "--catalog", str(tmp_path / "c.ddb"),
+                     "--skip-concepts", str(ids["rag"]), "--write"]) == 0
+    conn = duckdb.connect(str(tmp_path / "c.ddb"))
+    assert conn.execute("SELECT COUNT(*) FROM concept WHERE concept_id = ?", [ids["rag"]]).fetchone()[0] == 1

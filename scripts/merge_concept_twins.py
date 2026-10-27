@@ -366,6 +366,12 @@ def do_merge(args: argparse.Namespace) -> int:
     if args.only:
         keep = {int(x) for x in args.only.split(",")}
         groups = [g for i, g in enumerate(groups) if i in keep]
+    if args.skip_concepts:
+        skip = {int(x) for x in args.skip_concepts.split(",")}
+        before = len(groups)
+        groups = [g for g in groups
+                  if not ({g["canonical"]["concept_id"]} | {t["concept_id"] for t in g["twins"]}) & skip]
+        print(f"skipped {before - len(groups)} group(s) holding a --skip-concepts id")
     work = [(t["concept_id"], g["canonical"]["concept_id"]) for g in groups for t in g["twins"]]
     print(f"{len(work)} twin(s) in {len(groups)} group(s)")
     if not args.write:
@@ -420,7 +426,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     m = sub.add_parser("merge")
     m.add_argument("--plan", type=Path, required=True)
     m.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
-    m.add_argument("--only")
+    m.add_argument("--only", help="comma-separated group indices from the plan")
+    m.add_argument("--skip-concepts",
+                   help="comma-separated concept ids; any group containing one is left alone")
     m.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     return do_find(args) if args.cmd == "find" else do_merge(args)
