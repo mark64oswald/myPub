@@ -104,17 +104,31 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     return title, md
 
 
+def _decode(raw: bytes, content_type: str = "") -> str:
+    """Decode a page by its header charset, else its <meta charset>, else
+    UTF-8. requests falls back to ISO-8859-1 for text/html with no
+    charset, which turns every UTF-8 NBSP into "Â "."""
+    m = re.search(r"charset=([\w-]+)", content_type, re.I) or re.search(
+        rb"<meta[^>]+charset=[\"']?([\w-]+)", raw[:4096], re.I)
+    enc = m.group(1) if m else "utf-8"
+    if isinstance(enc, bytes):
+        enc = enc.decode("ascii")
+    try:
+        return raw.decode(enc, errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
 def _read_pages(urls: Iterable[str], files: Iterable[Path]) -> list[tuple[str, str]]:
     pages = []
     for f in files:
-        pages.append((f.as_uri(), f.read_text(errors="replace")))
+        pages.append((f.as_uri(), _decode(f.read_bytes())))
     if urls:
         import requests
         for u in urls:
             r = requests.get(u, timeout=60, headers={"User-Agent": "myPub html_doc"})
             r.raise_for_status()
-            r.encoding = r.encoding or r.apparent_encoding
-            pages.append((u, r.text))
+            pages.append((u, _decode(r.content, r.headers.get("Content-Type", ""))))
     return pages
 
 
