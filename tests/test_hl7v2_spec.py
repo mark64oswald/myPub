@@ -42,3 +42,9 @@ def test_fetcher_output_sectionizes_one_section_per_heading():
     headings = {c.heading_text for r in roots for c in (r.children or [])}
     assert "PID segment — Patient Identification" in headings
     assert "ADT_A01 message structure" in headings
+
+
+def test_labels_restore_apostrophes():
+    assert hs._label("MOTHER_S_MAIDEN_NAME") == "Mother's Maiden Name"
+    assert hs._label("DRIVER_S_LICENSE_NUMBER_PATIENT") == "Driver's License Number Patient"
+    assert hs._label("PATIENT_IDENTIFIER_LIST") == "Patient Identifier List"

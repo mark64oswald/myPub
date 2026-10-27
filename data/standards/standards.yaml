@@ -27,17 +27,20 @@ standards:
     market: provider
     license_tier: free_reg
     official_url: https://www.hl7.org/implement/standards/product_brief.cfm?product_id=185
-    versions: ["2.3", "2.5.1", "2.8"]
+    versions: ["2.3", "2.5.1", "2.8.2"]
     anchors: [HL7 v2, ADT, ORM, ORU, MSH segment, PID segment, PV1 segment, OBR segment, OBX segment, ACK]
     generators: [standards_translator, integration_channel, deid_bundle, bootstrap, quickstart]
     notes: >
       HL7 gives the v2 spec away only after sign-in, and the Caristix site
       is JavaScript-only. Two stand-ins: hl7v2_spec.py renders the full
-      2.5.1 structure (segments, messages, data types) from hl7apy, and
+      structure of 2.3 (legacy), 2.5.1 (most US interfaces) and 2.8.2
+      (latest); hl7apy has 2.1–2.8.2 if another version is needed (segments, messages, data types) from hl7apy, and
       HL7 Europe's static "refactored" pages give field definitions for the
       segments the generators use. Local cache only; don't redistribute.
     sources:
+      - {name: HL7 v2.3 structure reference, role: spec, source_type: hl7v2_spec, identifier: "hl7v2@2.3", planned: true}
       - {name: HL7 v2.5.1 structure reference, role: spec, source_type: hl7v2_spec, identifier: "hl7v2@2.5.1", planned: true}
+      - {name: HL7 v2.8.2 structure reference, role: spec, source_type: hl7v2_spec, identifier: "hl7v2@2.8.2", planned: true}
       - {name: HL7 Europe v2 segment pages, role: spec, source_type: html_site, identifier: "https://www.hl7.eu/refactored/", planned: true}
       - {name: HAPI HL7v2, role: library, match: "%HAPI%HL7%v2%"}
       - {name: hl7apy, role: library, match: "%hl7apy%"}

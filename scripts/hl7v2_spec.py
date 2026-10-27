@@ -24,6 +24,7 @@ structure.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,7 +71,9 @@ class FetchResultLike:
 
 
 def _label(long_name: Optional[str]) -> str:
-    return (long_name or "").replace("_", " ").title()
+    # hl7apy drops apostrophes ("MOTHER_S_MAIDEN_NAME"); put them back.
+    text = (long_name or "").replace("_", " ").title()
+    return re.sub(r"\b(\w+) S\b", r"\1's", text)
 
 
 def _card(rng: tuple[int, int]) -> str:
