@@ -45,6 +45,8 @@ from generator import (
     ValidationIssue,
 )
 
+from topic_gate import DEFAULT_MIN_SIMILARITY, gate_concepts
+
 LOG = logging.getLogger("mypub-content-brief")
 
 
@@ -160,6 +162,7 @@ class RhetoricalContentDecomposer:
         angle: Optional[str] = None,
         max_sources: int = DEFAULT_MAX_SOURCES_PER_SECTION,
         max_related: int = DEFAULT_MAX_RELATED_PER_SECTION,
+        min_similarity: float = DEFAULT_MIN_SIMILARITY,
         **_: Any,
     ) -> _Decomposition:
         topic_id = resolver.resolve_lookup_only(query)
@@ -184,7 +187,12 @@ class RhetoricalContentDecomposer:
         # Pre-compute the topic's top related concepts; sections grab
         # successive anchors from this list, with the topic itself
         # serving as the opener/closer anchor.
-        related = self._top_related(conn, topic_id, limit=20)
+        related = self._top_related(conn, topic_id, limit=50)
+        # Section anchors and their siblings must stay on the topic.
+        kept, dropped, _ = gate_concepts(conn, topic_id, [r[0] for r in related],
+                                         min_similarity)
+        keep = set(kept)
+        related = [r for r in related if r[0] in keep][:20]
 
         sections: list[_Section] = []
         related_iter = iter(related)
@@ -202,8 +210,12 @@ class RhetoricalContentDecomposer:
                     anchor_id, anchor_name = topic_id, topic_name
 
             # Section's related concepts (siblings of the anchor)
-            siblings = self._top_related(conn, anchor_id, limit=max_related,
+            siblings = self._top_related(conn, anchor_id, limit=max_related * 3,
                                           exclude_ids={topic_id, anchor_id})
+            ok, _d, _s = gate_concepts(conn, topic_id, [r[0] for r in siblings],
+                                       min_similarity)
+            ok_set = set(ok)
+            siblings = [r for r in siblings if r[0] in ok_set][:max_related]
             # Sources
             sources = self._gather_sources(
                 conn, anchor_id, max_sources=max_sources,
@@ -223,6 +235,9 @@ class RhetoricalContentDecomposer:
             ))
 
         notes: list[str] = []
+        if dropped:
+            notes.append(f"{len(dropped)} related concept(s) below {min_similarity:.2f} "
+                         f"similarity to {topic_name!r} skipped as section anchors")
         if not related:
             notes.append(
                 f"topic {topic_name!r} has no graph neighbors; sections "

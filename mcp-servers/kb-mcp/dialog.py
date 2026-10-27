@@ -27,6 +27,7 @@ from generator import (
     MaterializeReport,
     ValidationIssue,
 )
+from topic_gate import DEFAULT_MIN_SIMILARITY, gate_concepts
 from character import (
     Character,
     ARCHITECT,
@@ -81,6 +82,7 @@ class DivergenceDecomposer:
         char_b: Optional[Character] = None,
         max_beats: int = DEFAULT_MAX_BEATS,
         neighbor_limit: int = DEFAULT_NEIGHBOR_LIMIT,
+        min_similarity: float = DEFAULT_MIN_SIMILARITY,
         **_: Any,
     ) -> _Decomposition:
         a = char_a or ARCHITECT
@@ -107,7 +109,12 @@ class DivergenceDecomposer:
             """,
             [topic_id, topic_id],
         ).fetchall()
-        neighbors = [int(r[0]) for r in rows if int(r[0]) != topic_id][:neighbor_limit]
+        neighbors = [int(r[0]) for r in rows if int(r[0]) != topic_id]
+        # Off-topic neighbours (hubs like "Machine Learning") make beats
+        # about something else; gate them, then take the most on-topic.
+        neighbors, dropped, sims = gate_concepts(conn, topic_id, neighbors, min_similarity)
+        neighbors.sort(key=lambda c: -(sims.get(c) if sims.get(c) is not None else 0.0))
+        neighbors = neighbors[:neighbor_limit]
 
         # Score each by both characters
         beats: list[_Beat] = []
@@ -134,6 +141,9 @@ class DivergenceDecomposer:
             beat.ordinal = i
 
         notes: list[str] = []
+        if dropped:
+            notes.append(f"{len(dropped)} neighbour(s) below {min_similarity:.2f} "
+                         f"similarity to {topic_name!r} skipped as off-topic")
         if not beats:
             notes.append(
                 f"no divergent concepts found — both characters rank the "
