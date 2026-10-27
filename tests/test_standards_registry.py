@@ -137,3 +137,8 @@ def test_cite_concepts_round_robins_across_sources(conn):
     assert {c[3] for c in cites} == {"pyx12 docs", "FHIR R4 core"}
     only = standards.cite_concepts(conn, ["pyx12 docs"], limit=10, name_like="%c1%")
     assert [c[1] for c in only] == ["pyx12 docs c1"]
+
+
+def test_infer_us_core_with_hyphen():
+    assert "us-core" in standards.infer_standard_keys("base_ig us-core + davinci-pas")
+    assert "davinci-pas" in standards.infer_standard_keys("base_ig us-core + davinci-pas")
