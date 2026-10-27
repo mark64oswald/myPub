@@ -84,3 +84,11 @@ def test_name_keys_cover_common_package_spellings():
     assert qs._installs_library(qs._CodeBlock("bash", "cargo add polars", 1), "pola-rs/polars")
     assert not qs._installs_library(qs._CodeBlock("bash", "pip install apache-airflow", 1),
                                     "Apache Kafka")
+
+
+def test_hello_block_must_use_the_library():
+    other = qs._CodeBlock("python", "import pandas as pd\nprint(pd.DataFrame())", 1)
+    own = qs._CodeBlock("python", "import polars as pl\n\ndf = pl.DataFrame({'a': [1]})\nprint(df)", 2)
+    assert qs._pick_primary_block([other, own], "python", library_name="Polars") is own
+    # With nothing that uses the library, still pick something.
+    assert qs._pick_primary_block([other], "python", library_name="Polars") is other

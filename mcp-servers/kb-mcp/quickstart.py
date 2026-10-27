@@ -319,7 +319,8 @@ def _name_keys(library_name: str) -> set[str]:
 
 
 def _installs_library(b: _CodeBlock, library_name: Optional[str]) -> bool:
-    """True if the block's package-manager command names the library.
+    """True if the block names the library in its first lines: the
+    package of an install command, or the module of an import.
 
     A library's docs often carry install lines for *other* packages
     (Polars' BigQuery page: ``pip install google-cloud-bigquery``).
@@ -799,7 +800,11 @@ def _intent_score(
         score -= max(0, n_lines - 4) * 0.25
     else:
         if any(tok in head for tok in _IMPORT_TOKENS):
-            score += 3.0
+            # An import of *this* library is the point of a hello world;
+            # importing only something else is a different library's demo.
+            score += 3.0 if (library_name is None or _installs_library(b, library_name)) else -1.0
+        elif library_name and _installs_library(b, library_name):
+            score += 1.0
         if any(tok in b.code.lower() for tok in _OUTPUT_TOKENS):
             score += 1.0
         if _has_package_manager_command([b]):
@@ -814,7 +819,7 @@ def _intent_score(
 
 def _pick_primary_block(
     blocks: list[_CodeBlock], language_hint: Optional[str],
-    intent: str = "hello",
+    intent: str = "hello", library_name: Optional[str] = None,
 ) -> Optional[_CodeBlock]:
     """Pick the canonical block for an artifact by intent score.
 
@@ -826,9 +831,12 @@ def _pick_primary_block(
     if not blocks:
         return None
     clean = [b for b in blocks if not _is_noise_block(b)] or blocks
+    if library_name and intent != "install":
+        # Only blocks that use the library, whenever there are any.
+        clean = [b for b in clean if _installs_library(b, library_name)] or clean
     return max(
         clean,
-        key=lambda b: (_intent_score(b, intent, language_hint), -len(b.code)),
+        key=lambda b: (_intent_score(b, intent, language_hint, library_name), -len(b.code)),
     )
 
 
@@ -836,9 +844,11 @@ def _pick_hello_block(d: "_Decomposition") -> Optional[_CodeBlock]:
     """Hello-world block, falling back to install sections (often the
     first install example is also a hello world) — but never an install
     command or a noise block."""
-    block = _pick_primary_block(d.hello_blocks, d.language_hint)
+    block = _pick_primary_block(d.hello_blocks, d.language_hint,
+                                library_name=d.library_name)
     if block is None:
-        block = _pick_primary_block(d.install_blocks, d.language_hint)
+        block = _pick_primary_block(d.install_blocks, d.language_hint,
+                                    library_name=d.library_name)
         if block is not None and (
             _is_noise_block(block) or _has_package_manager_command([block])
         ):
@@ -917,7 +927,8 @@ def _render_hello(d: _Decomposition) -> str:
 
 def _render_verify(d: _Decomposition) -> str:
     lines = ["## Verify it works", ""]
-    block = _pick_primary_block(d.verify_blocks, d.language_hint, intent="verify")
+    block = _pick_primary_block(d.verify_blocks, d.language_hint, intent="verify",
+                                library_name=d.library_name)
     if block:
         fence_lang = block.language or (d.language_hint or "")
         lines.append(f"```{fence_lang}")
