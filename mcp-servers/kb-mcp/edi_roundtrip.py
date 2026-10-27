@@ -38,6 +38,8 @@ from typing import Any, Optional
 
 import duckdb
 
+import standards
+
 from generator import (
     GenFile,
     GenPlan,
@@ -284,25 +286,11 @@ class EdiRoundTripDecomposer:
             ["X12", "EDI", "HIPAA"] + [f"{txn_code} transaction"]
         )
         concept_citations: list[tuple[int, str, int, str]] = []
+        x12_sources = standards.cited_source_names(
+            conn, self.X12_SOURCES, f"x12 {txn_code}")
         for term in candidate_terms:
-            rows = conn.execute(
-                f"""
-                SELECT DISTINCT c.concept_id, c.name, ds.doc_section_id, src.name
-                  FROM concept c
-                  JOIN concept_relation cr ON cr.from_concept_id = c.concept_id
-                                           OR cr.to_concept_id = c.concept_id
-                  JOIN doc_section ds ON cr.source_id = ds.doc_section_id
-                                      AND cr.source_type = 'doc_section'
-                  JOIN doc_snapshot sn USING (snapshot_id)
-                  JOIN doc_source src ON sn.doc_source_id = src.doc_source_id
-                 WHERE LOWER(c.name) LIKE LOWER(?)
-                   AND src.name IN ({','.join(['?'] * len(self.X12_SOURCES))})
-                 LIMIT 5
-                """,
-                [f"%{term}%"] + list(self.X12_SOURCES),
-            ).fetchall()
-            for r in rows:
-                concept_citations.append((int(r[0]), r[1], int(r[2]), r[3]))
+            concept_citations += standards.cite_concepts(
+                conn, x12_sources, limit=5, name_like=f"%{term}%")
 
         # Dedupe by concept_id
         seen: set[int] = set()

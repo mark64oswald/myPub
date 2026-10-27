@@ -34,6 +34,8 @@ from typing import Any, Optional
 
 import duckdb
 
+import standards
+
 from generator import (
     GenFile,
     GenPlan,
@@ -340,27 +342,11 @@ class DeidDecomposer:
             elements.append((category, location, technique, rationale, tech_meta))
 
         # Citations from healthcare doc sources covering the cited tools
-        cited_source_names = meta["tools_cited"]
-        citations: list[tuple[int, str, int, str]] = []
-        if cited_source_names:
-            placeholders = ",".join(["?"] * len(cited_source_names))
-            rows = conn.execute(
-                f"""
-                SELECT DISTINCT c.concept_id, c.name, ds.doc_section_id, src.name
-                  FROM concept c
-                  JOIN concept_relation cr ON cr.from_concept_id = c.concept_id
-                                           OR cr.to_concept_id = c.concept_id
-                  JOIN doc_section ds ON cr.source_id = ds.doc_section_id
-                                      AND cr.source_type = 'doc_section'
-                  JOIN doc_snapshot sn USING (snapshot_id)
-                  JOIN doc_source src ON sn.doc_source_id = src.doc_source_id
-                 WHERE src.name IN ({placeholders})
-                 ORDER BY src.name
-                 LIMIT 30
-                """,
-                list(cited_source_names),
-            ).fetchall()
-            citations = [(int(r[0]), r[1], int(r[2]), r[3]) for r in rows]
+        cited_source_names = standards.cited_source_names(
+            conn, meta.get("tools_cited", []),
+            " ".join([ds_type] + [v for v in meta.values() if isinstance(v, str)]),
+        )
+        citations = standards.cite_concepts(conn, cited_source_names, limit=30)
 
         notes: list[str] = []
         if not citations:
