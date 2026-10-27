@@ -291,24 +291,28 @@ class EdiRoundTripDecomposer:
 
         # Find concepts in the corpus that name X12 segments / loops / related
         # concepts for this txn — pull from doc_sources we ingested for X12.
-        candidate_terms = (
-            meta.get("key_segments", []) + meta.get("key_loops", []) +
-            ["X12", "EDI", "HIPAA"] + [f"{txn_code} transaction"]
-        )
-        concept_citations: list[tuple[int, str, int, str]] = []
+        # Loops are matched by their id ("2000A"), not the full label, and the
+        # paired response's segments count too (EB for a 270/271 pair).
+        loop_ids = [loop.split()[0] for loop in meta.get("key_loops", [])]
+        paired_segments = (paired_meta or {}).get("key_segments", [])
+        candidate_terms = list(dict.fromkeys(
+            meta.get("key_segments", []) + paired_segments + loop_ids +
+            [txn_code] + ([paired] if paired else []) + ["X12", "EDI", "HIPAA"]
+        ))
         x12_sources = standards.cited_source_names(
             conn, self.X12_SOURCES, f"x12 {txn_code}")
-        for term in candidate_terms:
-            concept_citations += standards.cite_concepts(
-                conn, x12_sources, limit=5, name_word=term)
 
-        # Dedupe by concept_id; drop concepts about another transaction set
-        # (the generic "X12" term also matches "X12 270/271 Eligibility").
+        # Drop concepts about another transaction set (the generic "X12"
+        # term also matches "X12 834") before taking each term's top 5, so
+        # they don't use up its slots.
         allowed = {txn_code, paired} - {None}
         seen: set[int] = set()
         unique: list[tuple[int, str, int, str]] = []
-        for c in concept_citations:
-            if c[0] not in seen and not (_txn_codes_in(c[1]) - allowed):
+        for term in candidate_terms:
+            hits = [c for c in standards.cite_concepts(
+                        conn, x12_sources, limit=25, name_word=term)
+                    if c[0] not in seen and not (_txn_codes_in(c[1]) - allowed)]
+            for c in hits[:5]:
                 seen.add(c[0])
                 unique.append(c)
 
