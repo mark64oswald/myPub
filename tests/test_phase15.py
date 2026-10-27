@@ -211,7 +211,11 @@ def test_bootstrap_picks_the_sense_of_a_short_name_from_the_request(catalog):
     msg = _seed_concept(catalog, "HL7 ADT message", "Concept",
                         "Admit, discharge and transfer events in HL7 v2.")
     hl7 = _seed_concept(catalog, "HL7", "Concept", "Healthcare messaging standard.")
+    fhir = _seed_concept(catalog, "FHIR", "Concept", "Resource-based health API.")
     _add_rel(catalog, msg, hl7, "PART_OF")
+    _add_rel(catalog, hl7, fhir, "RELATED_TO")
+    # A thin, well-named lookalike must not steal a well-tied default.
+    _seed_concept(catalog, "HL7 FHIR Encounter feeds tool", "Tool", "")
     res = _resolver({"adt": sas, "hl7": hl7})
     d = pb.StackComposeDecomposer().decompose(
         catalog, res, "Consume HL7 ADT feeds and write FHIR Encounters in Python",
@@ -220,6 +224,10 @@ def test_bootstrap_picks_the_sense_of_a_short_name_from_the_request(catalog):
     assert by_name.get("HL7 ADT message") == msg
     assert sas not in by_name.values()
     assert any("ambiguous" in n for n in d.notes)
+
+    # A default with any tie to the request keeps its slot: "HL7" stays HL7
+    # even though "HL7 ADT message" contains the word and names more context.
+    assert by_name.get("HL7") == hl7
 
     # With no context words that point elsewhere, the resolver's pick stands.
     d2 = pb.StackComposeDecomposer().decompose(

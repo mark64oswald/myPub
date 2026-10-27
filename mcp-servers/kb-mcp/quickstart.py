@@ -518,6 +518,10 @@ class QuickstartDecomposer:
         own_install = [b for b in install_blocks
                        if _has_package_manager_command([b])
                        and _installs_library(b, library_name)]
+        # Commands for other packages go entirely; prose / config blocks stay.
+        install_blocks = [b for b in install_blocks
+                          if not _has_package_manager_command([b])
+                          or _installs_library(b, library_name)]
         if own_install:
             install_blocks = own_install + [b for b in install_blocks
                                             if b not in own_install]
