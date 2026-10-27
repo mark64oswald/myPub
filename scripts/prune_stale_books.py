@@ -62,11 +62,28 @@ def _chapter_signature(conn, book_id: int) -> list[tuple]:
     ).fetchall()
 
 
-def find_plan(conn) -> tuple[list[tuple], dict[int, int], list[tuple]]:
-    """Return (stale books, stale→twin book map, stale→twin chapter pairs)."""
+# source_path prefixes for books that aren't files (scripts/ingest_pmc.py
+# stores PubMed Central articles as "pmc:PMC<id>"). Never stale.
+NON_FILE_PREFIXES = ("pmc:",)
+
+
+def _is_file_book(path: str) -> bool:
+    return not (path or "").startswith(NON_FILE_PREFIXES)
+
+
+def find_plan(conn, book_ids: list[int] | None = None,
+              ) -> tuple[list[tuple], dict[int, int], list[tuple]]:
+    """Return (stale books, stale→twin book map, stale→twin chapter pairs).
+
+    With ``book_ids``, exactly those books are the ones to remove (no file
+    check, no twin remapping) — for dropping rows ingested by mistake.
+    """
     books = conn.execute("SELECT book_id, source_path FROM book").fetchall()
-    stale = [(b, p) for b, p in books if not os.path.exists(p)]
-    live = [b for b, p in books if os.path.exists(p)]
+    if book_ids:
+        wanted = set(book_ids)
+        return [(b, p) for b, p in books if b in wanted], {}, []
+    stale = [(b, p) for b, p in books if _is_file_book(p) and not os.path.exists(p)]
+    live = [b for b, p in books if _is_file_book(p) and os.path.exists(p)]
 
     # Index live books by chapter-title sequence for twin lookup.
     by_sig: dict[tuple, int] = {}
@@ -155,11 +172,19 @@ def delete_books(conn, book_ids: list[int]) -> None:
     # Deleting from an HNSW-indexed table crawls (one stale-book run sat
     # in this DELETE for 40+ minutes), so drop the index, delete, and
     # rebuild it the way build_vss_index.py does.
-    conn.execute("LOAD vss")
-    conn.execute("SET hnsw_enable_experimental_persistence = true")
-    conn.execute(f"DROP INDEX IF EXISTS {HNSW_INDEX}")
+    try:
+        conn.execute("LOAD vss")
+        conn.execute("SET hnsw_enable_experimental_persistence = true")
+    except duckdb.Error:
+        pass  # no vss available (tests, fresh catalogs): no HNSW index either
+    has_index = conn.execute(
+        "SELECT 1 FROM duckdb_indexes() WHERE index_name = ?", [HNSW_INDEX]).fetchone()
+    if has_index:
+        conn.execute(f"DROP INDEX IF EXISTS {HNSW_INDEX}")
     conn.execute("DELETE FROM chapter_embedding WHERE chapter_id IN (SELECT chapter_id FROM sc)")
-    conn.execute(f"CREATE INDEX {HNSW_INDEX} ON chapter_embedding USING HNSW (embedding) WITH (metric = 'cosine')")
+    if has_index:
+        conn.execute(f"CREATE INDEX {HNSW_INDEX} ON chapter_embedding USING HNSW (embedding) "
+                     "WITH (metric = 'cosine')")
     conn.execute("DELETE FROM chapter WHERE chapter_id IN (SELECT chapter_id FROM sc)")
     conn.execute("DELETE FROM book_author WHERE book_id IN (SELECT unnest(?))", [book_ids])
     conn.execute("DELETE FROM book WHERE book_id IN (SELECT unnest(?))", [book_ids])
@@ -169,11 +194,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--commit", action="store_true", help="write changes (default: dry run)")
+    parser.add_argument("--book-ids", help="remove exactly these books (comma list or a-b ranges), "
+                                           "e.g. 728-767; skips the stale-file check")
     args = parser.parse_args()
+    ids: list[int] = []
+    for part in (args.book_ids or "").split(","):
+        if "-" in part:
+            a, b = part.split("-", 1)
+            ids += list(range(int(a), int(b) + 1))
+        elif part.strip():
+            ids.append(int(part))
 
     conn = duckdb.connect(str(args.catalog), read_only=not args.commit)
     try:
-        stale, twins, pairs = find_plan(conn)
+        stale, twins, pairs = find_plan(conn, ids or None)
         print(f"stale books: {len(stale)}  (with twin: {len(twins)}, chapter pairs: {len(pairs)})")
         for b, p in stale:
             print(f"  {b:>5}  {'twin ' + str(twins[b]) if b in twins else 'no twin':>10}  {Path(p).name}")
@@ -186,7 +220,8 @@ def main() -> int:
             remap_to_twins(conn, pairs)
         delete_books(conn, [b for b, _ in stale])
         books, missing = conn.execute("SELECT count(*) FROM book").fetchone()[0], sum(
-            not os.path.exists(p) for (p,) in conn.execute("SELECT source_path FROM book").fetchall()
+            _is_file_book(p) and not os.path.exists(p)
+            for (p,) in conn.execute("SELECT source_path FROM book").fetchall()
         )
         print(f"books now {books}, missing paths {missing}")
     finally:

@@ -136,14 +136,11 @@ def _upsert_author(conn: duckdb.DuckDBPyConnection, name: str) -> int:
 
 
 def _delete_article(conn: duckdb.DuckDBPyConnection, book_id: int) -> None:
-    # Children first; chapter_embedding / concept_relation rows for these
-    # chapters must go before the chapters (see prune_stale_books.py for
-    # the HNSW caveat on large deletes).
-    conn.execute("DELETE FROM chapter_embedding WHERE chapter_id IN "
-                 "(SELECT chapter_id FROM chapter WHERE book_id = ?)", [book_id])
-    conn.execute("DELETE FROM chapter WHERE book_id = ?", [book_id])
-    conn.execute("DELETE FROM book_author WHERE book_id = ?", [book_id])
-    conn.execute("DELETE FROM book WHERE book_id = ?", [book_id])
+    # prune_stale_books handles the chapter-sourced rows and drops / rebuilds
+    # the chapter_embedding HNSW index around the delete, which otherwise
+    # crawls for tens of minutes.
+    from prune_stale_books import delete_books  # noqa: PLC0415
+    delete_books(conn, [book_id])
 
 
 def index_article(conn: duckdb.DuckDBPyConnection, art: JatsArticle) -> int:
