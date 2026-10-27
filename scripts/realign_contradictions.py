@@ -29,7 +29,8 @@ the paid API, Batch API or ``claude -p``)::
                 writes <out>/prompts/<edge>_s<k>.txt + manifest.json.
                 Reads only — point it at an APFS clone (cp -c).
     2. Claude Code dispatches Task sub-agents over manifest["batches"];
-       each writes <out>/results/<edge>_s<k>.json
+       each writes <out>/results/<edge>_s<k>.json. A batch holds one
+       sample index only, so a pair's votes come from different agents.
     3. process  --output-dir <out> [--catalog data/catalog.ddb --apply]
                 verifies quotes, votes, writes <out>/votes.json and a
                 summary. With --apply (needs the single writer slot) it
@@ -166,6 +167,20 @@ def build_prompt(p: PairEntry, framing: str) -> str:
     )
 
 
+def batch_by_sample(pairs: list[PairEntry], samples: int, per_batch: int) -> list[list[dict]]:
+    """Batches that each hold a single sample index (all s0, all s1, …).
+
+    A sub-agent that sees one pair's three framings in a row mostly copies
+    its first answer, which makes the vote meaningless. Batching by sample
+    index means each of a pair's votes comes from a different sub-agent.
+    """
+    batches: list[list[dict]] = []
+    for k in range(samples):
+        jobs = [p.samples[k] for p in pairs if len(p.samples) > k]
+        batches += [jobs[i: i + per_batch] for i in range(0, len(jobs), per_batch)]
+    return batches
+
+
 def do_prep(args: argparse.Namespace) -> int:
     out: Path = args.output_dir
     (out / "prompts").mkdir(parents=True, exist_ok=True)
@@ -194,7 +209,7 @@ def do_prep(args: argparse.Namespace) -> int:
         pairs.append(p)
 
     jobs = [s for p in pairs for s in p.samples]
-    batches = [jobs[i: i + args.per_batch] for i in range(0, len(jobs), args.per_batch)]
+    batches = batch_by_sample(pairs, args.samples, args.per_batch)
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "catalog": str(args.catalog),
