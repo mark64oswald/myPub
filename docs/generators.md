@@ -33,7 +33,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 
 ---
 
-## The nineteen, by category
+## The generators, by category
 
 ### Skills & curriculum
 
@@ -80,6 +80,15 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 | Refactoring Playbook | `/kb-refactoring <pattern>` | [`refactoring_playbook.py`](../mcp-servers/kb-mcp/refactoring_playbook.py) | Targeted refactor with before/after snippets |
 
 ★ User's #1 motivating example. See [Project Bootstrap](#project-bootstrap) below for the canonical CQRS+Kafka+HL7 walkthrough.
+
+### Agent Skills, MCP & plugins
+
+| Generator | Slash command | Source file | What it does |
+|---|---|---|---|
+| Agent Skill | `/kb-skill-from-kb <topic>` | [`agent_skill_gen.py`](../mcp-servers/kb-mcp/agent_skill_gen.py) | One spec-valid Agent Skill (SKILL.md + references/) built from a KB concept |
+| MCP Server | `/kb-mcp-server <purpose>` | [`mcp_server_gen.py`](../mcp-servers/kb-mcp/mcp_server_gen.py) | MCP server skeleton for MCP 2026-07-28: Python or TypeScript, optional MCP Apps view and skills, server.json |
+| Plugin Scaffold | `/kb-plugin-scaffold <purpose>` | [`plugin_scaffold.py`](../mcp-servers/kb-mcp/plugin_scaffold.py) | Claude Code plugin (as a local marketplace) with KB skills, workflow commands, hooks and an optional MCP server |
+
 
 ---
 
@@ -454,6 +463,47 @@ This is the most composite generator — it calls into Learning Path, Tutorial, 
 The Skills Factory predates the generic Phase 7 framework and uses its own tables (`skill`, `skill_package`, `skill_file`, `skill_source`, `skill_relation`).
 
 ---
+
+## Agent Skills, MCP servers and plugins
+
+Three deterministic scaffolds (2026-11) built on the Live Docs added for Agent
+Skills, MCP, MCP Apps and Claude Code plugins. Each package has a
+`_provenance.md` that cites the spec and SDK sections it follows, pulled from
+the catalog, and a `_validation.md` with the checks to run next. Shared code:
+[`agent_skills.py`](../mcp-servers/kb-mcp/agent_skills.py) (spec rules for
+`SKILL.md`, also used by the Skills Factory) and
+[`kb_scaffold.py`](../mcp-servers/kb-mcp/kb_scaffold.py) (KB topic material,
+citations, nested-tree materializer).
+
+**`/kb-skill-from-kb <topic>`** writes one skill:
+
+```text
+<package>/
+├── <skill-name>/
+│   ├── SKILL.md                  name = folder slug, what-and-when description, short body
+│   └── references/               procedures.md, concepts.md, sources.md
+├── _provenance.md  _validation.md
+└── _prompts/refine-skill.md      optional subagent pass that rewrites the body as instructions
+```
+
+**`/kb-mcp-server <purpose>`** writes a server whose tools are stubs: named by
+`--tools`, or one per procedure of a `--domain` concept. Python targets the v2
+SDK (`MCPServer`, stdio or Streamable HTTP); `--ui` makes the first tool an
+MCP App (`mcp.server.apps`), and `--skills` serves KB-built skills as
+`skill://` resources, adding the MCP Skills extension (SEP-2640) when the
+installed SDK has it. TypeScript targets `@modelcontextprotocol/server` v2 with
+zod v4 over stdio, and `--ui` adds an `@modelcontextprotocol/ext-apps` view
+built with vite. Also `server.json` (MCP Registry), `.mcp.json`, a smoke test
+and a README. Checked against mcp 2.3.0 and @modelcontextprotocol/server 2.4.0
+(2026-11-08): generated servers start, list tools and serve their resources.
+
+**`/kb-plugin-scaffold <purpose>`** composes the two into a plugin, packaged as
+a one-plugin marketplace so `/plugin marketplace add <package>` works at once.
+Skills come from `--skills` topics; `--workflows` adds command-style skills with
+`disable-model-invocation: true` (current Claude Code prefers skills to
+`commands/`); `--hooks` adds a PostToolUse example; `--mcp` adds
+`servers/<name>-server/` wired in through `.mcp.json` and
+`${CLAUDE_PLUGIN_ROOT}`. Output passes `claude plugin validate`.
 
 ## Common patterns across generators
 
