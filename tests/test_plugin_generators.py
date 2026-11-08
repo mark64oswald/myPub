@@ -46,11 +46,12 @@ def _concept(conn, name, description=None):
     ).fetchone()[0]
 
 
-def _procedure(conn, name, steps, concept_id, *, failure_modes=None, preconditions=None):
+def _procedure(conn, name, steps, concept_id, *, failure_modes=None, preconditions=None,
+               source_id=1):
     pid = conn.execute(
         "INSERT INTO procedure (name, preconditions, steps, failure_modes, source_type, source_id) "
-        "VALUES (?, ?, ?, ?, 'chapter', 1) RETURNING procedure_id",
-        [name, preconditions, steps, failure_modes],
+        "VALUES (?, ?, ?, ?, 'chapter', ?) RETURNING procedure_id",
+        [name, preconditions, steps, failure_modes, source_id],
     ).fetchone()[0]
     conn.execute("INSERT INTO procedure_concept (procedure_id, concept_id) VALUES (?, ?)",
                  [pid, concept_id])
@@ -305,7 +306,7 @@ def test_topic_material_pools_same_name_concepts(corpus):
     twin = conn.execute(
         "INSERT INTO concept (name, concept_type) VALUES ('event sourcing', 'Tool') "
         "RETURNING concept_id").fetchone()[0]
-    _procedure(conn, "Snapshot an aggregate", "1. Save state.", twin)
+    _procedure(conn, "Snapshot an aggregate", "1. Save state.", twin, source_id=2)
     tm = ks.topic_material(conn, resolver, "Event Sourcing")
     assert "Snapshot an aggregate" in {p.name for p in tm.procedures}
 
@@ -323,3 +324,40 @@ def test_plugin_warns_on_placeholder_author(corpus, tmp_path):
         output_root=str(tmp_path))
     assert pid != -1
     assert any(i.severity == "warning" and "Your Name" in i.message for i in issues)
+
+
+def test_rank_procedures_prefers_substance_and_spreads_sources():
+    rows = [
+        (1, "Display FastMCP version information", None, "Run fastmcp version", None, "doc_section", 7),
+        (2, "Copy version information to clipboard", None, "Click copy", None, "doc_section", 7),
+        (3, "Build an MCP server with tools", None, "1. Create server\n2. Add tool\n3. Run", None,
+         "doc_section", 7),
+        (4, "Add a tool to an MCP server", None, "1. Decorate\n2. Return content", None,
+         "doc_section", 7),
+        (5, "Connect an MCP client", None, "1. Start\n2. Initialize", None, "chapter", 9),
+    ]
+    out = ks.rank_procedures(rows, "Model Context Protocol", limit=3)
+    ids = [r[0] for r in out]
+    assert ids[:2] == [3, 4] and 5 in ids          # "mcp" acronym match, 2-per-source cap
+    assert 1 not in ids and 2 not in ids             # housekeeping ranked out
+
+
+def test_tool_match_uses_procedure_names_only(corpus):
+    conn, resolver = corpus
+    # "Publish" appears only in the steps of "Append an event to the store".
+    tools, notes = mcp_server_gen.tools_from_request(
+        conn, resolver, domain="Event Sourcing", purpose="Publish things")
+    assert [t.name for t in tools] == ["publish_things"]
+
+
+def test_rerun_removes_stale_files(corpus, tmp_path):
+    conn, resolver = corpus
+    gen = mcp_server_gen.make_mcp_server_generator()
+    gen.run_deterministic(conn, resolver, "Notes", tools=["old_tool"], ui=True,
+                          server_name="notes", output_root=str(tmp_path))
+    assert (tmp_path / "notes/ui/old_tool.html").exists()
+    _pid, report, _ = gen.run_deterministic(conn, resolver, "Notes", tools=["new_tool"], ui=True,
+                                            server_name="notes", output_root=str(tmp_path))
+    assert not (tmp_path / "notes/ui/old_tool.html").exists()
+    assert (tmp_path / "notes/ui/new_tool.html").exists()
+    assert any("removed stale ui/old_tool.html" in n for n in report.notes)

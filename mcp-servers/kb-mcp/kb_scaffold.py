@@ -206,6 +206,57 @@ class TopicMaterial:
     sources: list[Citation] = field(default_factory=list)
 
 
+_STOP = {"a", "an", "and", "the", "of", "to", "for", "in", "on", "with", "my", "our", "your",
+         "from", "by", "it", "is", "this", "that", "using", "use", "how"}
+# Housekeeping procedures that say little about the topic itself.
+_TRIVIAL = {"version", "clipboard", "copy", "display", "view", "open", "close", "uninstall",
+            "upgrade", "update", "changelog", "license", "contribute", "contributing"}
+
+
+def tokens(text: Optional[str]) -> set[str]:
+    """Content words, lower-cased and crudely singularised."""
+    return {w[:-1] if w.endswith("s") and len(w) > 4 else w
+            for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if w not in _STOP and len(w) > 2}
+
+
+def topic_tokens(name: str) -> set[str]:
+    words = re.findall(r"[A-Za-z0-9]+", name or "")
+    out = tokens(name)
+    if len(words) >= 2:
+        out.add("".join(w[0] for w in words).lower())  # "Model Context Protocol" -> "mcp"
+    return out
+
+
+def rank_procedures(rows: Sequence[tuple], topic: str, *, purpose: Optional[str] = None,
+                    limit: int = 8, per_source: int = 2) -> list[tuple]:
+    """Order procedure rows (id, name, pre, steps, failure, source_type, source_id) by how
+    much they say about ``topic`` (and ``purpose``), with at most ``per_source`` from any
+    one chapter or doc section so a single page can't fill the list."""
+    want = topic_tokens(topic) | tokens(purpose)
+
+    def score(r: tuple) -> float:
+        name_t, steps = tokens(r[1]), (r[3] or "")
+        s = 3.0 * len(want & name_t) + 1.0 * min(len(want & tokens(steps[:800])), 3)
+        s += min(len(re.findall(r"(?m)^\s*(?:\d+[.)]|[-*])\s", steps)), 6) * 0.5
+        s -= 4.0 * len(_TRIVIAL & name_t)
+        s += 0.5 if r[5] == "doc_section" else 0.0
+        return s
+
+    ranked = sorted(rows, key=lambda r: (-score(r), r[0]))
+    out: list[tuple] = []
+    per: Counter = Counter()
+    for r in ranked:
+        key = (r[5], r[6])
+        if per[key] >= per_source:
+            continue
+        per[key] += 1
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def topic_material(
     conn: duckdb.DuckDBPyConnection,
     resolver: Any,
@@ -214,6 +265,7 @@ def topic_material(
     max_procedures: int = 8,
     max_related: int = 12,
     max_sources: int = 10,
+    purpose: Optional[str] = None,
 ) -> Optional[TopicMaterial]:
     """Gather what the KB knows about ``topic``; None when it doesn't resolve."""
     cid = resolver.resolve_lookup_only(topic)
@@ -271,9 +323,8 @@ def topic_material(
         """.format(q=q),
         ids * 2,
     ).fetchall()
-    # Prefer live docs (current), then shorter, more instruction-like steps.
-    proc_rows = sorted(proc_rows, key=lambda r: (r[5] != "doc_section", len(r[3] or ""), r[0]))
-    for r in proc_rows[:max_procedures]:
+    proc_rows = rank_procedures(proc_rows, row[0], purpose=purpose, limit=max_procedures)
+    for r in proc_rows:
         label = source_label(conn, r[5], r[6])
         tm.procedures.append(Procedure(
             procedure_id=int(r[0]), name=r[1] or "(unnamed procedure)",
@@ -334,6 +385,7 @@ def identifier(text: str, *, style: str = "snake") -> str:
 
 
 EXECUTABLE_HINTS = ("scripts/", "bin/")
+MANIFEST = ".mypub-files"  # files this package wrote last time, for stale-file cleanup
 
 
 class TreeMaterializer:
@@ -355,6 +407,9 @@ class TreeMaterializer:
         out_dir.mkdir(parents=True, exist_ok=True)
         written: list[str] = []
         notes: list[str] = []
+        manifest = out_dir / MANIFEST
+        previous = set(manifest.read_text().splitlines()) if manifest.exists() else set()
+        current: set[str] = set()
         for filename, content in conn.execute(
             "SELECT filename, content FROM generated_file WHERE package_id = ? ORDER BY file_id",
             [package_id],
@@ -366,10 +421,22 @@ class TreeMaterializer:
             if target.exists() and not overwrite:
                 notes.append(f"kept existing {filename}")
                 continue
+            current.add(filename)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content)
             if filename.endswith(".sh") or any(h in filename for h in EXECUTABLE_HINTS):
                 target.chmod(0o755)
             written.append(str(target))
+        # Remove files an earlier run of this package wrote that this run didn't (a renamed
+        # tool's ui/*.html, a dropped skill). Only paths in our own manifest are touched.
+        if overwrite:
+            for stale in sorted(previous - current):
+                target = (out_dir / stale).resolve()
+                if out_dir in target.parents and target.is_file():
+                    target.unlink()
+                    notes.append(f"removed stale {stale}")
+        else:
+            current |= previous
+        manifest.write_text("\n".join(sorted(current)) + "\n")
         return MaterializeReport(package_id=package_id, package_name=row[0],
                                  output_root=output_root, file_paths=written, notes=notes)

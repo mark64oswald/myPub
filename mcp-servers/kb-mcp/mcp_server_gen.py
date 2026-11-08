@@ -25,7 +25,6 @@ Registry, an ``.mcp.json`` snippet for Claude Code, a smoke test, and
 from __future__ import annotations
 
 import json
-import re
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
@@ -67,13 +66,8 @@ class ServerSpec:
         return ks.identifier(self.name, style="snake")
 
 
-_STOP = {"a", "an", "and", "the", "of", "to", "for", "in", "on", "with", "my", "our", "your",
-         "from", "by", "it", "is", "this", "that", "server", "mcp", "tool", "tools", "using", "use"}
-
-
 def _tokens(text: str) -> set[str]:
-    return {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", (text or "").lower())
-            if w not in _STOP and len(w) > 2}
+    return ks.tokens(text) - {"server", "mcp", "tool"}
 
 
 def _purpose_tool(purpose: str) -> ToolStub:
@@ -95,11 +89,13 @@ def tools_from_request(
         return [ToolStub(ks.identifier(t), f"TODO: describe what {t} does and when to call it.")
                 for t in tool_names[:12]], notes
     if domain:
-        tm = ks.topic_material(conn, resolver, domain, max_procedures=max_tools * 8)
+        tm = ks.topic_material(conn, resolver, domain, purpose=purpose or None,
+                               max_procedures=max_tools * 25)
         procs = tm.procedures if tm else []
         want = _tokens(purpose)
         if want and procs:
-            scored = [(len(want & _tokens(p.name + " " + p.steps)), i, p) for i, p in enumerate(procs)]
+            # Match on the procedure's name: steps mention too much to be a signal.
+            scored = [(len(want & _tokens(p.name)), i, p) for i, p in enumerate(procs)]
             procs = [p for sc, _i, p in sorted(scored, key=lambda x: (-x[0], x[1])) if sc > 0]
             if not procs:
                 notes.append(f"none of the {len(tm.procedures)} procedures of {domain!r} match the "
