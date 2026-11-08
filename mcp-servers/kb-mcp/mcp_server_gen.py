@@ -25,6 +25,7 @@ Registry, an ``.mcp.json`` snippet for Claude Code, a smoke test, and
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
@@ -66,26 +67,54 @@ class ServerSpec:
         return ks.identifier(self.name, style="snake")
 
 
+_STOP = {"a", "an", "and", "the", "of", "to", "for", "in", "on", "with", "my", "our", "your",
+         "from", "by", "it", "is", "this", "that", "server", "mcp", "tool", "tools", "using", "use"}
+
+
+def _tokens(text: str) -> set[str]:
+    return {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if w not in _STOP and len(w) > 2}
+
+
+def _purpose_tool(purpose: str) -> ToolStub:
+    name = ks.identifier(" ".join((purpose or "").split()[:5])) if purpose else "echo"
+    return ToolStub(name, f"TODO: describe when to call this. Purpose: {purpose}" if purpose
+                    else "Echo the input back. Replace with a real tool.",
+                    todo="Replace this example with the server's first real tool.")
+
+
 def tools_from_request(
     conn: duckdb.DuckDBPyConnection, resolver: Any, *,
     tool_names: Sequence[str] = (), domain: Optional[str] = None, max_tools: int = 4,
+    purpose: str = "",
 ) -> tuple[list[ToolStub], list[str]]:
+    """Tool stubs: named ones; else the domain's procedures that fit ``purpose``; else one
+    tool named after the purpose."""
     notes: list[str] = []
     if tool_names:
         return [ToolStub(ks.identifier(t), f"TODO: describe what {t} does and when to call it.")
                 for t in tool_names[:12]], notes
     if domain:
-        tm = ks.topic_material(conn, resolver, domain, max_procedures=max_tools)
-        if tm and tm.procedures:
+        tm = ks.topic_material(conn, resolver, domain, max_procedures=max_tools * 8)
+        procs = tm.procedures if tm else []
+        want = _tokens(purpose)
+        if want and procs:
+            scored = [(len(want & _tokens(p.name + " " + p.steps)), i, p) for i, p in enumerate(procs)]
+            procs = [p for sc, _i, p in sorted(scored, key=lambda x: (-x[0], x[1])) if sc > 0]
+            if not procs:
+                notes.append(f"none of the {len(tm.procedures)} procedures of {domain!r} match the "
+                             "purpose; stubbed one tool named after it (pass tools=[...] to name them)")
+        elif not procs:
+            notes.append(f"domain {domain!r} has no procedures in the KB")
+        if procs:
             out = []
-            for p in tm.procedures:
+            for p in procs[:max_tools]:
                 desc = p.name.rstrip(".")
                 if (p.preconditions or "").strip():
                     desc += f". Requires: {ks.first_sentence(p.preconditions, 160)}"
                 out.append(ToolStub(ks.identifier(p.name), desc,
                                     todo=" ".join(p.steps.split())[:400],
                                     procedure_id=p.procedure_id))
-            # De-duplicate names.
             seen: set[str] = set()
             for t in out:
                 base, i = t.name, 2
@@ -93,9 +122,7 @@ def tools_from_request(
                     t.name, i = f"{base}_{i}", i + 1
                 seen.add(t.name)
             return out, notes
-        notes.append(f"domain {domain!r} has no procedures in the KB; using an example tool")
-    return [ToolStub("echo", "Echo the input back. Replace with a real tool.",
-                     todo="Replace this example with the server's first real tool.")], notes
+    return [_purpose_tool(purpose)], notes
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +606,7 @@ def validation_checklist(s: ServerSpec, problems: Sequence[str]) -> str:
 class ServerDecomposer:
     def decompose(self, conn: duckdb.DuckDBPyConnection, resolver: Any, query: str, **kw: Any):
         tools, notes = tools_from_request(conn, resolver, tool_names=kw.get("tools") or (),
+                                          purpose=query,
                                           domain=kw.get("domain"))
         skills, missing = [], []
         for topic in kw.get("skill_topics") or ():
