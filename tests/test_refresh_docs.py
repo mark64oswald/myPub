@@ -957,7 +957,8 @@ def _seed_snapshot_with_sections(conn, doc_source_id, content):
         embedder=_FakeEmbedder(),
     )
     snap_id = conn.execute(
-        "SELECT snapshot_id FROM doc_snapshot WHERE doc_source_id = ?",
+        "SELECT snapshot_id FROM doc_snapshot WHERE doc_source_id = ? "
+        "ORDER BY snapshot_id DESC LIMIT 1",
         [doc_source_id]).fetchone()[0]
     return int(snap_id)
 

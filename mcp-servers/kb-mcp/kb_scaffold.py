@@ -225,24 +225,36 @@ def topic_material(
     if not row:
         return None
     tm = TopicMaterial(concept_id=int(cid), name=row[0], concept_type=row[1], description=row[2])
+    # Same-name rows split by concept_type (e.g. "Agent Skills" as Concept and as Tool)
+    # are one topic here: pool their relations, procedures and sources.
+    ids = [int(r[0]) for r in conn.execute(
+        "SELECT concept_id FROM concept WHERE lower(name) = lower(?) ORDER BY concept_id",
+        [row[0]]).fetchall()] or [int(cid)]
+    if not tm.description:
+        d = conn.execute(
+            "SELECT description FROM concept WHERE lower(name) = lower(?) AND description IS NOT NULL "
+            "AND length(trim(description)) > 0 ORDER BY length(description) DESC LIMIT 1",
+            [row[0]]).fetchone()
+        tm.description = d[0] if d else None
+    q = ", ".join("?" * len(ids))
 
     rel_rows = conn.execute(
         """
         SELECT rel, name, max(conf) AS conf FROM (
             SELECT r.relation_type AS rel, c.name AS name, r.confidence AS conf
               FROM concept_relation r JOIN concept c ON c.concept_id = r.to_concept_id
-             WHERE r.from_concept_id = ? AND r.to_concept_id <> ?
+             WHERE r.from_concept_id IN ({q}) AND r.to_concept_id NOT IN ({q})
             UNION ALL
             SELECT 'IS_REQUIRED_BY', c.name, r.confidence
               FROM concept_relation r JOIN concept c ON c.concept_id = r.from_concept_id
-             WHERE r.to_concept_id = ? AND r.from_concept_id <> ? AND r.relation_type = 'REQUIRES'
+             WHERE r.to_concept_id IN ({q}) AND r.from_concept_id NOT IN ({q}) AND r.relation_type = 'REQUIRES'
             UNION ALL
             SELECT 'SPECIALIZED_BY', c.name, r.confidence
               FROM concept_relation r JOIN concept c ON c.concept_id = r.from_concept_id
-             WHERE r.to_concept_id = ? AND r.from_concept_id <> ? AND r.relation_type = 'EXTENDS'
+             WHERE r.to_concept_id IN ({q}) AND r.from_concept_id NOT IN ({q}) AND r.relation_type = 'EXTENDS'
         ) GROUP BY rel, name ORDER BY conf DESC, name LIMIT ?
-        """,
-        [cid, cid, cid, cid, cid, cid, max_related],
+        """.format(q=q),
+        ids * 6 + [max_related],
     ).fetchall()
     tm.related = [(r[0], r[1], float(r[2] or 0.0)) for r in rel_rows]
 
@@ -252,12 +264,12 @@ def topic_material(
         SELECT DISTINCT p.procedure_id, p.name, p.preconditions, p.steps,
                         p.failure_modes, p.source_type, p.source_id
           FROM procedure p JOIN procedure_concept pc ON pc.procedure_id = p.procedure_id
-         WHERE (pc.concept_id = ? OR pc.concept_id IN (
+         WHERE (pc.concept_id IN ({q}) OR pc.concept_id IN (
                    SELECT from_concept_id FROM concept_relation
-                    WHERE to_concept_id = ? AND relation_type = 'EXTENDS'))
+                    WHERE to_concept_id IN ({q}) AND relation_type = 'EXTENDS'))
            AND p.steps IS NOT NULL AND length(trim(p.steps)) > 0
-        """,
-        [cid, cid],
+        """.format(q=q),
+        ids * 2,
     ).fetchall()
     # Prefer live docs (current), then shorter, more instruction-like steps.
     proc_rows = sorted(proc_rows, key=lambda r: (r[5] != "doc_section", len(r[3] or ""), r[0]))
@@ -274,9 +286,9 @@ def topic_material(
     for st, sid in conn.execute(
         """
         SELECT source_type, source_id FROM concept_relation
-         WHERE (from_concept_id = ? OR to_concept_id = ?)
+         WHERE (from_concept_id IN ({q}) OR to_concept_id IN ({q}))
            AND source_type IN ('chapter', 'doc_section')
-        """, [cid, cid],
+        """.format(q=q), ids * 2,
     ).fetchall():
         counts[(st, int(sid))] += 1
     for p in tm.procedures:
@@ -304,7 +316,11 @@ def identifier(text: str, *, style: str = "snake") -> str:
     """'Search the catalog' → 'search_the_catalog' (snake) or 'search-the-catalog' (kebab)."""
     words = re.findall(r"[a-z0-9]+", (text or "").lower())
     sep = "_" if style == "snake" else "-"
-    s = sep.join(words)[:48].strip(sep)
+    s = sep.join(words)
+    if len(s) > 48:
+        s = s[:49]
+        s = s[: s.rfind(sep)] if sep in s else s[:48]
+    s = s.strip(sep)
     if not s or s[0].isdigit():
         s = f"x{sep}{s}" if s else "item"
     if style == "snake" and keyword.iskeyword(s):

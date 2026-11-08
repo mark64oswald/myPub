@@ -282,3 +282,44 @@ def test_identifiers_are_valid_python():
         ident = ks.identifier(text)
         assert re.match(r"^[a-z_][a-z0-9_]*$", ident), ident
         assert ident.isidentifier() and not keyword.iskeyword(ident), ident
+
+
+# ---------------------------------------------------------------------------
+# Follow-ups from the first real-catalog run (2026-11-08)
+# ---------------------------------------------------------------------------
+
+
+def test_domain_procedures_filtered_by_purpose(corpus):
+    conn, resolver = corpus
+    tools, notes = mcp_server_gen.tools_from_request(
+        conn, resolver, domain="Event Sourcing", purpose="Rebuild projections")
+    assert [t.name for t in tools] == ["rebuild_a_projection"]
+    tools, notes = mcp_server_gen.tools_from_request(
+        conn, resolver, domain="Event Sourcing", purpose="Search my notes")
+    assert [t.name for t in tools] == ["search_my_notes"]
+    assert any("match the purpose" in n for n in notes)
+
+
+def test_topic_material_pools_same_name_concepts(corpus):
+    conn, resolver = corpus
+    twin = conn.execute(
+        "INSERT INTO concept (name, concept_type) VALUES ('event sourcing', 'Tool') "
+        "RETURNING concept_id").fetchone()[0]
+    _procedure(conn, "Snapshot an aggregate", "1. Save state.", twin)
+    tm = ks.topic_material(conn, resolver, "Event Sourcing")
+    assert "Snapshot an aggregate" in {p.name for p in tm.procedures}
+
+
+def test_identifier_cuts_at_word_boundary():
+    ident = ks.identifier("Install the MCP Apps skills with the Vercel skills command line tool")
+    assert len(ident) <= 48 and not ident.endswith("_skil")
+    assert ident.split("_")[-1] in {"skills", "vercel", "the", "with", "command"}
+
+
+def test_plugin_warns_on_placeholder_author(corpus, tmp_path):
+    conn, resolver = corpus
+    pid, _r, issues = plugin_scaffold.make_plugin_scaffold_generator().run_deterministic(
+        conn, resolver, "Helpers", plugin_name="helpers", workflows=["Do it"],
+        output_root=str(tmp_path))
+    assert pid != -1
+    assert any(i.severity == "warning" and "Your Name" in i.message for i in issues)
