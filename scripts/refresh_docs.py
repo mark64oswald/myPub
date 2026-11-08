@@ -324,6 +324,50 @@ class GitHubFetcher:
         return response.text
 
 
+class WebMarkdownFetcher:
+    """Fetch a docs page that the publisher serves as Markdown at a URL.
+
+    Identifier: the full ``https://`` URL of the ``.md`` page, e.g.
+    ``https://code.claude.com/docs/en/plugins.md``. Mintlify sites (Claude
+    Code, the Claude platform docs, modelcontextprotocol.io) serve every
+    page this way, so the vendor's own text can be indexed page by page
+    instead of through Context7's sampled snippets.
+
+    Mintlify prefixes each page with a ``> ## Documentation Index`` note
+    pointing at llms.txt; that blockquote is dropped. A page that comes
+    back as HTML means the URL isn't a Markdown endpoint, so it fails
+    rather than storing a rendered page as the doc.
+    """
+
+    HTTP_TIMEOUT_S = 30.0
+    _INDEX_NOTE = re.compile(
+        r"\A(?:>[^\n]*\n)*?>\s*##\s*Documentation Index[^\n]*\n(?:>[^\n]*\n)*\s*",
+    )
+
+    def fetch(self, identifier: str) -> FetchResult:
+        url = identifier.strip()
+        if not url.startswith("https://"):
+            raise FetchError(f"web_md identifier must be an https:// URL, got {identifier!r}")
+        try:
+            response = httpx.get(url, timeout=self.HTTP_TIMEOUT_S, follow_redirects=True)
+        except httpx.HTTPError as e:
+            raise FetchError(f"transport error fetching {url}: {e}") from e
+        if response.status_code >= 400:
+            raise FetchError(f"HTTP {response.status_code} fetching {url}")
+        ctype = (getattr(response, "headers", {}) or {}).get("content-type", "")
+        text = response.text
+        if "html" in ctype.lower() or text.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
+            raise FetchError(f"{url} returned HTML, not Markdown")
+        text = self.strip_index_note(text)
+        if not text.strip():
+            raise FetchError(f"{url} returned an empty page")
+        return FetchResult(url=url, content=text, source_type="github_md")
+
+    @classmethod
+    def strip_index_note(cls, text: str) -> str:
+        return cls._INDEX_NOTE.sub("", text, count=1)
+
+
 # ---- MCP-SDK-based fetchers (Context7, DeepWiki) -------------------------
 
 
@@ -606,6 +650,8 @@ def get_fetcher(source_type: str):
         return Context7Fetcher()
     if st == "deepwiki":
         return DeepWikiFetcher()
+    if st == "web_md":
+        return WebMarkdownFetcher()
     raise FetchError(f"no fetcher registered for source_type={source_type!r}")
 
 
