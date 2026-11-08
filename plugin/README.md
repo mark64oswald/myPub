@@ -1,7 +1,7 @@
 # myPub plugin
 
 Makes the myPub knowledge base usable from any Claude Code project on
-this Mac: the `mypub-kb` MCP server, the 24 `/kb-*` generator commands
+this Mac: the `mypub-kb` MCP server, the 27 `/kb-*` generator commands
 (as `/mypub:kb-*`), and a `kb-usage` skill that teaches Claude which
 search tool to call.
 

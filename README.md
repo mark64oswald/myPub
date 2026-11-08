@@ -488,7 +488,7 @@ This is the value prop — when you write a new generator, you don't write any o
 | **Idempotent re-runs** | Re-running a generator produces a new timestamped directory; old runs aren't clobbered. Good for diff-vs-prior-run audits |
 | **Persistence schema** | `generated_package` (one row per run), `generated_unit` (concept clusters), `generated_file` (every materialized file), `generated_source` (provenance per file). All managed by the framework base class |
 
-### The nineteen generators today
+### The generators today
 
 Outputs land under `data/generated-packages/<name>_<timestamp>/`. Each entry below links to the full walkthrough in [docs/generators.md](docs/generators.md).
 
@@ -513,6 +513,9 @@ Outputs land under `data/generated-packages/<name>_<timestamp>/`. Each entry bel
 | | [Author Panel](docs/generators.md#author-panel) | `/kb-author-panel` | Multi-author roundtable |
 | Bootstrap & refactor | [**Project Bootstrap**](docs/generators.md#project-bootstrap) ★ | `/kb-bootstrap` | Runnable project scaffold for any of 8 language stacks (python / rust / node / typescript / java / go / csharp / ruby) — detected from request keywords or set via the `stack` parameter |
 | | [Refactoring Playbook](docs/generators.md#refactoring-playbook) | `/kb-refactoring` | Targeted refactor with before/after |
+| Agent Skills, MCP & plugins | [Agent Skill](docs/generators.md#agent-skills-mcp-servers-and-plugins) | `/kb-skill-from-kb` | One spec-valid Agent Skill from a KB concept |
+| | [MCP Server](docs/generators.md#agent-skills-mcp-servers-and-plugins) | `/kb-mcp-server` | MCP server skeleton (Python or TypeScript, optional MCP Apps and skills) |
+| | [Plugin Scaffold](docs/generators.md#agent-skills-mcp-servers-and-plugins) | `/kb-plugin-scaffold` | Claude Code plugin with KB skills, commands, hooks and an optional MCP server |
 | Healthcare interop | [EDI Round-Trip](docs/generators.md#edi-round-trip-test) | `/kb-edi-roundtrip` | X12 transaction-set fixtures + parse/round-trip tests (270/271, 834, 835, 837, 997, 999) |
 | | [De-identification Bundle](docs/generators.md#de-identification-procedure-bundle) | `/kb-deid-bundle` | HIPAA Safe-Harbor de-id pipeline scaffold + audit trail (FHIR / DICOM / HL7v2 / clinical trial) |
 | | [Standards Translator](docs/generators.md#standards-translator) | `/kb-standards-translator` | Cross-standard mapping package (HL7v2↔FHIR, X12↔FHIR, DICOM→FHIR) — table + transformer + tests |

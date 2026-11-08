@@ -96,6 +96,9 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-curriculum` | Curriculum (16) | Multi-week composite |
 | `/kb-landscape` | Library Landscape (17) | Multi-job × multi-candidate orientation; rarity-weighted scoring, keyword + vector job seeding |
 | `/kb-quickstart` | Quickstart (18) | First-contact for one library: install + hello-world + verify |
+| `/kb-skill-from-kb` | Agent Skill (2026-11) | One spec-valid Agent Skill (SKILL.md + references/) from a KB concept |
+| `/kb-mcp-server` | MCP Server (2026-11) | MCP 2026-07-28 server skeleton; python or typescript; `ui` adds an MCP App, `skill_topics` serves skills |
+| `/kb-plugin-scaffold` | Plugin Scaffold (2026-11) | Claude Code plugin as a local marketplace: KB skills, workflow skills, hooks, optional MCP server |
 
 ## Other MCP servers
 

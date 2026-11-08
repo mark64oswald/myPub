@@ -25,6 +25,7 @@ KB_MCP = PROJECT_ROOT / "mcp-servers" / "kb-mcp"
 if str(KB_MCP) not in sys.path:
     sys.path.insert(0, str(KB_MCP))
 
+import agent_skills  # noqa: E402
 import skills_factory as sf  # noqa: E402
 import skill_generation as sg  # noqa: E402
 
@@ -120,7 +121,8 @@ def test_build_skill_md_has_frontmatter_and_body():
         body="# Content\n\nDetails here.",
     )
     assert out.startswith("---\n")
-    assert 'name: "My Skill"' in out
+    # Agent Skills spec: name is the folder slug; the title stays as the body H1.
+    assert "name: my-skill\n" in out
     assert 'description: "When user asks about X"' in out
     assert "# Content\n\nDetails here.\n" in out
     # Frontmatter closes with --- on its own line
@@ -135,6 +137,12 @@ def test_build_skill_md_collapses_description_whitespace():
     )
     # frontmatter description is collapsed
     assert 'description: "Line 1 Line 2 Line 3"' in out
+
+
+def test_build_skill_md_adds_title_h1_when_body_has_none():
+    out = sf._build_skill_md(name="Event Sourcing: Basics", description="d", body="Some text.")
+    assert "name: event-sourcing-basics\n" in out
+    assert out.split("---", 2)[2].lstrip().startswith("# Event Sourcing: Basics\n\nSome text.")
 
 
 def test_build_skill_md_handles_empty_description():
@@ -214,7 +222,10 @@ def test_materialize_package_writes_skill_md_per_skill(catalog, package_with_ski
         assert path.exists()
         content = path.read_text()
         assert content.startswith("---\n")
-        assert 'name: "' in content
+        # Spec-valid: frontmatter name equals the folder name.
+        assert f"name: {path.parent.name}\n" in content
+        assert agent_skills.errors(agent_skills.validate(
+            path.parent.name, "x", folder=path.parent.name)) == []
 
 
 def test_materialize_package_writes_provenance(catalog, package_with_skills, tmp_path):
