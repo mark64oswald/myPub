@@ -111,13 +111,13 @@ The DeepWiki sources (FastMCP, DuckPGQ) have anomalously high section counts bec
 
 ### Agent Skills, MCP and Claude Code plugins (2026-11-08)
 
-`scripts/seed_agent_standards.py` seeds 86 sources for building plugins that bundle Skills and MCP servers. Before it, FastMCP was the only MCP source.
+`scripts/seed_agent_standards.py` seeds 107 sources for building plugins that bundle Skills and MCP servers. Before it, FastMCP was the only MCP source.
 
 | Tier | Authority | Fetch | What |
 |---|---|---|---|
 | Normative specs | 0.90 | github_raw, one page per source | MCP base protocol revision 2026-07-28; MCP Apps (SEP-1865, stable 2026-01-26); the MCP Skills extension (`io.modelcontextprotocol/skills`, SEP-2640); the Agent Skills spec (agentskills.io) |
-| Design records and guides | 0.80 | github_raw | SEPs behind the 2026 changes (extensions, stateless MCP, server cards, roots/sampling deprecation), modelcontextprotocol.io and agentskills.io guides, MCP Apps draft spec and guides, MCP Registry `server.json` |
-| Vendor docs | 0.85 | web_md, Context7 | Claude Code plugins / plugins-reference / marketplaces / skills / MCP / subagents / hooks, Agent SDK, Claude platform Agent Skills and MCP connector; Context7 for the Python and TypeScript SDKs, ext-apps SDK, Inspector, Registry, anthropics/skills, A2A |
+| Design records and guides | 0.80 | github_raw | SEPs behind the 2026 changes (extensions, stateless MCP, server cards, roots/sampling deprecation), modelcontextprotocol.io and agentskills.io guides, MCP Apps draft spec, guides and examples, MCP-UI (the pre-standard project MCP Apps grew from, 0.65), MCP Registry `server.json` |
+| Vendor docs | 0.85 | web_md, Context7 | Claude Code plugins / plugins-reference / marketplaces / skills / MCP / subagents / hooks, Agent SDK, Claude platform Agent Skills and MCP connector, Claude MCP Apps host docs; Context7 for the Python and TypeScript SDKs, ext-apps SDK, Inspector, Registry, anthropics/skills, A2A |
 
 Specs come from GitHub rather than Context7 because Context7 returns query-matched excerpts, not the whole page. The new `web_md` source type (`refresh_docs.WebMarkdownFetcher`) fetches a page the vendor serves as Markdown (Mintlify sites such as code.claude.com) and drops Mintlify's "Documentation Index" preamble. Spec paths are dated; when MCP ships a new revision, add its pages rather than editing these.
 

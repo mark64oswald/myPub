@@ -53,6 +53,7 @@ MCP_REPO = "modelcontextprotocol/modelcontextprotocol:main"
 MCP_REV = "2026-07-28"
 SPEC_AUTHORITY = 0.90
 RECORD_AUTHORITY = 0.80
+EXAMPLE_AUTHORITY = 0.65   # examples and the pre-standard MCP-UI project
 
 
 def _gh(name: str, repo_branch: str, path: str, *, authority: float, ttl: int) -> dict[str, Any]:
@@ -139,6 +140,33 @@ AGENT_STANDARD_SEEDS: list[dict[str, Any]] = [
             ("quickstart", "quickstart"),
             ("patterns", "patterns"),
             ("migrate from OpenAI Apps SDK", "migrate_from_openai_apps"),
+            ("overview", "overview"),
+            ("CSP and CORS", "csp-cors"),
+            ("authorization", "authorization"),
+            ("agent skills", "agent-skills"),
+        )
+    ],
+    # Two worked examples: a React server and a minimal host.
+    _gh("MCP Apps example: React server", "modelcontextprotocol/ext-apps:main",
+        "examples/basic-server-react/README.md", authority=EXAMPLE_AUTHORITY, ttl=30),
+    _gh("MCP Apps example: basic host", "modelcontextprotocol/ext-apps:main",
+        "examples/basic-host/README.md", authority=EXAMPLE_AUTHORITY, ttl=30),
+    # MCP-UI (idosal/mcp-ui) is the community project MCP Apps grew out of;
+    # SEP-1865 standardised its ideas. Kept as history and for its
+    # migration notes, ranked below the spec so it never outranks it.
+    *[
+        _gh(f"MCP-UI (pre-MCP Apps): {title}", "idosal/mcp-ui:main", path,
+            authority=EXAMPLE_AUTHORITY, ttl=30)
+        for title, path in (
+            ("README", "README.md"),
+            ("introduction", "docs/src/guide/introduction.md"),
+            ("relation to MCP Apps", "docs/src/guide/mcp-apps.md"),
+            ("protocol details", "docs/src/guide/protocol-details.md"),
+            ("Apps SDK adapter", "docs/src/guide/apps-sdk.md"),
+            ("TypeScript server walkthrough", "docs/src/guide/server/typescript/walkthrough.md"),
+            ("Python server walkthrough", "docs/src/guide/server/python/walkthrough.md"),
+            ("client overview", "docs/src/guide/client/overview.md"),
+            ("supported hosts", "docs/src/guide/supported-hosts.md"),
         )
     ],
     _mcp_doc("Apps build guide", "extensions/apps/build", ttl=14),
@@ -201,6 +229,18 @@ AGENT_STANDARD_SEEDS: list[dict[str, Any]] = [
     _web("Claude Agent SDK: plugins", f"{CLAUDE_CODE}/agent-sdk/plugins.md"),
     _web("Claude Agent SDK: MCP", f"{CLAUDE_CODE}/agent-sdk/mcp.md"),
 
+    # ---- Tier 3: MCP Apps in Claude (host docs) ------------------------------
+    *[
+        _web(f"Claude MCP Apps: {title}",
+             f"https://claude.com/docs/connectors/building/mcp-apps/{page}.md")
+        for title, page in (
+            ("getting started", "getting-started"),
+            ("quickstart", "quickstart"),
+            ("design guidelines", "design-guidelines"),
+            ("troubleshooting", "troubleshooting"),
+        )
+    ],
+
     # ---- Tier 3: Claude platform (Agent Skills, MCP connector) --------------
     _web("Claude platform: Agent Skills overview",
          f"{CLAUDE_PLATFORM}/agents-and-tools/agent-skills/overview.md"),
@@ -217,6 +257,8 @@ AGENT_STANDARD_SEEDS: list[dict[str, Any]] = [
     _c7("MCP Python SDK", "/modelcontextprotocol/python-sdk"),
     _c7("MCP TypeScript SDK", "/modelcontextprotocol/typescript-sdk"),
     _c7("MCP Apps SDK (ext-apps)", "/modelcontextprotocol/ext-apps"),
+    _c7("MCP Apps SDK API reference", "/websites/apps_extensions_modelcontextprotocol_io_api"),
+    _c7("OpenAI Apps SDK examples (ChatGPT host)", "/openai/openai-apps-sdk-examples", ttl=30),
     _c7("MCP Inspector", "/modelcontextprotocol/inspector"),
     _c7("MCP Registry", "/modelcontextprotocol/registry"),
     _c7("Anthropic example skills", "/anthropics/skills"),
