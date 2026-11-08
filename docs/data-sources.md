@@ -109,6 +109,18 @@ The live-doc layer ingests current vendor documentation through MCP servers, sna
 
 The DeepWiki sources (FastMCP, DuckPGQ) have anomalously high section counts because DeepWiki returns full repo trees rather than the 20-25 top topics that Context7 returns by default. The two stranded-then-recovered sources (Phase 1: snapshot only; Phase 2: extraction; Phase 3: alignment) contributed 391 of today's 1,320 alignment edges.
 
+### Agent Skills, MCP and Claude Code plugins (2026-11-08)
+
+`scripts/seed_agent_standards.py` seeds 86 sources for building plugins that bundle Skills and MCP servers. Before it, FastMCP was the only MCP source.
+
+| Tier | Authority | Fetch | What |
+|---|---|---|---|
+| Normative specs | 0.90 | github_raw, one page per source | MCP base protocol revision 2026-07-28; MCP Apps (SEP-1865, stable 2026-01-26); the MCP Skills extension (`io.modelcontextprotocol/skills`, SEP-2640); the Agent Skills spec (agentskills.io) |
+| Design records and guides | 0.80 | github_raw | SEPs behind the 2026 changes (extensions, stateless MCP, server cards, roots/sampling deprecation), modelcontextprotocol.io and agentskills.io guides, MCP Apps draft spec and guides, MCP Registry `server.json` |
+| Vendor docs | 0.85 | web_md, Context7 | Claude Code plugins / plugins-reference / marketplaces / skills / MCP / subagents / hooks, Agent SDK, Claude platform Agent Skills and MCP connector; Context7 for the Python and TypeScript SDKs, ext-apps SDK, Inspector, Registry, anthropics/skills, A2A |
+
+Specs come from GitHub rather than Context7 because Context7 returns query-matched excerpts, not the whole page. The new `web_md` source type (`refresh_docs.WebMarkdownFetcher`) fetches a page the vendor serves as Markdown (Mintlify sites such as code.claude.com) and drops Mintlify's "Documentation Index" preamble. Spec paths are dated; when MCP ships a new revision, add its pages rather than editing these.
+
 ### Why three providers (Context7, DeepWiki, GitHub raw)
 
 The probe order and authority defaults match how trustworthy each source typically is for a *technical* lookup:

@@ -11,6 +11,8 @@ Source-type contract (per arch §6.1, §5.4):
   - context7   — vendor docs and well-indexed OSS via Context7 MCP
   - deepwiki   — AI-generated docs for any public GitHub repo
   - github_raw — raw file fetching from a public repo (last-resort)
+  - web_md     — a vendor docs page served as Markdown at a URL (Mintlify
+                 sites such as code.claude.com); see refresh_docs.WebMarkdownFetcher
 
 Authority scores (explicit, not auto-discovered):
   - context7   : 0.85   (parity with top-imprint books — vendor docs are
@@ -50,7 +52,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CATALOG = PROJECT_ROOT / "data" / "catalog.ddb"
 LOG = logging.getLogger("seed_doc_sources")
 
-VALID_SOURCE_TYPES = {"context7", "deepwiki", "github_raw"}
+VALID_SOURCE_TYPES = {"context7", "deepwiki", "github_raw", "web_md"}
 
 # Per arch §5.4. Auto-discovered sources (Phase 4.5b) get lower scores;
 # these are the explicit/curated ceilings.
@@ -58,6 +60,7 @@ DEFAULT_AUTHORITY = {
     "context7": 0.85,
     "deepwiki": 0.70,
     "github_raw": 0.65,
+    "web_md": 0.85,   # vendor's own page served as Markdown (see WebMarkdownFetcher)
 }
 
 
