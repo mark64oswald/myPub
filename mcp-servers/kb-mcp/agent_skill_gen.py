@@ -187,7 +187,7 @@ sections cited.
 
 class SkillDecomposer:
     def decompose(self, conn: duckdb.DuckDBPyConnection, resolver: Any, query: str, **kw: Any):
-        tm = ks.topic_material(conn, resolver, query,
+        tm = ks.topic_material(conn, resolver, query, purpose=kw.get("purpose"),
                                max_procedures=int(kw.get("max_procedures", 8)))
         cites = ks.doc_citations(conn, ks.SKILL_SPEC_SOURCES,
                                  keywords=("name", "description", "references"), per_source=2)
