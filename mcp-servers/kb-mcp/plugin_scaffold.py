@@ -205,7 +205,8 @@ class PluginDecomposer:
         server = None
         if kw.get("mcp_server"):
             tools, tnotes = mcp_server_gen.tools_from_request(
-                conn, resolver, tool_names=kw.get("tools") or (), domain=kw.get("domain"))
+                conn, resolver, tool_names=kw.get("tools") or (), domain=kw.get("domain"),
+                purpose=query)
             notes += tnotes
             server = mcp_server_gen.ServerSpec(
                 name=f"{name}-server"[:48], purpose=" ".join(query.split()),
@@ -251,6 +252,9 @@ class PluginPlanner:
                     content=agent_skill_gen.REFINE_PROMPT.format(
                         name="<skill-name>", path=f"plugins/{p.name}/skills/<skill-name>/")
                     + "\nSkills to refine: " + ", ".join(skill_names) + "\n"))
+        if p.author == "Your Name":
+            problems.append("warning: author is the placeholder 'Your Name' in plugin.json and "
+                            "marketplace.json; pass author or edit them")
         plan.package_metadata = {
             "plugin_name": p.name, "skills": skill_names, "workflows": workflow_names,
             "hooks": p.hooks, "mcp_server": p.server.name if p.server else None,
