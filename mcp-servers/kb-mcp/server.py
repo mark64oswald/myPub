@@ -3330,6 +3330,177 @@ def generate_edi_roundtrip(
 
 
 # ---------------------------------------------------------------------------
+# Agent Skills / MCP server / plugin scaffolds (2026-11)
+# ---------------------------------------------------------------------------
+
+
+def _run_scaffold(gen: Any, query: str, output_root: Optional[str],
+                  overwrite: bool, **kwargs: Any) -> dict[str, Any]:
+    """Shared runner for the three scaffold generators."""
+    output_root = _resolve_output_root(output_root)
+    _bootstrap()
+    import json as _json  # pylint: disable=import-outside-toplevel
+
+    with _temporarily_open_writer() as rw_conn:
+        rw_resolver = EntityResolver(rw_conn, model=_MODEL)
+        package_id, report, issues = gen.run_deterministic(
+            rw_conn, rw_resolver, query, output_root=output_root,
+            overwrite=overwrite, **kwargs,
+        )
+        meta = None
+        if package_id != -1:
+            meta = rw_conn.execute(
+                "SELECT name, metadata_json FROM generated_package WHERE package_id = ?",
+                [package_id],
+            ).fetchone()
+    return {
+        "package_id": package_id,
+        "package_name": meta[0] if meta else report.package_name,
+        "output_root": output_root,
+        "metadata": _json.loads(meta[1]) if meta and meta[1] else {},
+        "file_paths": report.file_paths,
+        "validation_issues": [
+            {"severity": i.severity, "message": i.message, "unit": i.unit_logical_key}
+            for i in issues
+        ],
+        "notes": list(report.notes),
+    }
+
+
+@mcp.tool
+@_release_catalog
+def generate_agent_skill(
+    topic: str,
+    title: Optional[str] = None,
+    purpose: Optional[str] = None,
+    max_procedures: int = 8,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate one Agent Skill (agentskills.io spec) from a KB concept.
+
+    Writes ``<skill-name>/SKILL.md`` with a spec-valid ``name`` (slug that
+    matches the folder) and a what-and-when ``description``, plus
+    ``references/procedures.md``, ``references/concepts.md`` and
+    ``references/sources.md`` for progressive disclosure. Also
+    ``_validation.md`` (spec check) and ``_prompts/refine-skill.md`` for an
+    optional subagent pass that rewrites the body as instructions.
+    Deterministic.
+
+    Args:
+        topic: Concept to build the skill from (resolved via EntityResolver).
+        title: Human title; its slug becomes the skill name. Defaults to the concept name.
+        purpose: Extra "use when …" phrase for the description.
+        max_procedures: Procedures to include (concept + EXTENDS children).
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import agent_skill_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(agent_skill_gen.make_agent_skill_generator(), topic,
+                         output_root, overwrite, title=title, purpose=purpose,
+                         max_procedures=max_procedures)
+
+
+@mcp.tool
+@_release_catalog
+def generate_mcp_server(
+    purpose: str,
+    server_name: Optional[str] = None,
+    language: str = "python",
+    transport: str = "stdio",
+    tools: Optional[list[str]] = None,
+    domain: Optional[str] = None,
+    ui: bool = False,
+    skill_topics: Optional[list[str]] = None,
+    registry_namespace: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate an MCP server skeleton for MCP 2026-07-28 and the v2 SDKs.
+
+    Tool stubs come from ``tools`` (names), else from the procedures of the
+    ``domain`` concept, else one example tool. Options: ``language``
+    ``python`` (MCPServer; stdio or Streamable HTTP) or ``typescript``
+    (McpServer + zod, stdio); ``ui=True`` makes the first tool an MCP App
+    (``ui://`` view); ``skill_topics`` (python only) serves KB-built skills
+    as ``skill://`` resources plus the Skills extension when the SDK has it.
+    Also writes ``server.json`` (MCP Registry), ``.mcp.json``, a smoke test,
+    README, ``_provenance.md`` (spec sections) and ``_validation.md``.
+
+    Args:
+        purpose: What the server is for (also its description).
+        server_name: Kebab-case name; defaults to a slug of ``purpose``.
+        language: ``python`` or ``typescript``.
+        transport: ``stdio`` or ``http`` (python only).
+        tools: Tool names to stub.
+        domain: KB concept whose procedures become tool stubs.
+        ui: Make the first tool an MCP App.
+        skill_topics: KB concepts to ship as skills via the server.
+        registry_namespace: e.g. ``io.github.<user>`` for server.json.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import mcp_server_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(mcp_server_gen.make_mcp_server_generator(), purpose,
+                         output_root, overwrite, server_name=server_name,
+                         language=language, transport=transport, tools=tools or [],
+                         domain=domain, ui=ui, skill_topics=skill_topics or [],
+                         registry_namespace=registry_namespace)
+
+
+@mcp.tool
+@_release_catalog
+def generate_plugin_scaffold(
+    purpose: str,
+    plugin_name: Optional[str] = None,
+    skill_topics: Optional[list[str]] = None,
+    workflows: Optional[list[str]] = None,
+    mcp_server: bool = False,
+    language: str = "python",
+    transport: str = "stdio",
+    tools: Optional[list[str]] = None,
+    domain: Optional[str] = None,
+    ui: bool = False,
+    hooks: bool = False,
+    author: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate a Claude Code plugin with Agent Skills and an optional MCP server.
+
+    The package is a one-plugin local marketplace:
+    ``.claude-plugin/marketplace.json`` + ``plugins/<name>/`` holding
+    ``.claude-plugin/plugin.json``, ``skills/`` (one KB-built skill per
+    ``skill_topics`` entry, plus user-invoked workflow skills with
+    ``disable-model-invocation``), optional ``hooks/hooks.json``, and with
+    ``mcp_server=True`` a ``servers/<name>/`` scaffold wired in through
+    ``.mcp.json`` and ``${CLAUDE_PLUGIN_ROOT}``. Checked with
+    ``claude plugin validate``.
+
+    Args:
+        purpose: What the plugin does (manifest description).
+        plugin_name: Kebab-case name; defaults to a slug of ``purpose``.
+        skill_topics: KB concepts to turn into skills.
+        workflows: Titles of command-style skills to stub.
+        mcp_server: Include an MCP server.
+        language, transport, tools, domain, ui: MCP server options (see generate_mcp_server).
+        hooks: Include an example PostToolUse hook.
+        author: Manifest author name.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import plugin_scaffold  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(plugin_scaffold.make_plugin_scaffold_generator(), purpose,
+                         output_root, overwrite, plugin_name=plugin_name,
+                         skill_topics=skill_topics or [], workflows=workflows or [],
+                         mcp_server=mcp_server, language=language, transport=transport,
+                         tools=tools or [], domain=domain, ui=ui, hooks=hooks, author=author)
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 

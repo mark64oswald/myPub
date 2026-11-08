@@ -27,10 +27,10 @@ Pipeline (driven by ``/kb-generate-skills``):
      ``skill`` rows for the package and writes one ``SKILL.md`` file
      per skill to ``<output_root>/<package_folder>/<skill_folder>/``,
      plus ``_provenance.json`` with the audit trail. SKILL.md uses
-     the standard Anthropic frontmatter:
+     Agent Skills frontmatter (agentskills.io; see agent_skills.py):
 
          ---
-         name: <skill name>
+         name: <skill-name slug, = folder name>
          description: <trigger description>
          ---
          <body>
@@ -55,6 +55,7 @@ from typing import Any, Callable, Optional
 
 import duckdb
 
+import agent_skills
 import decomposition
 import package_planning
 import skill_generation
@@ -204,16 +205,15 @@ def _yaml_escape(s: str) -> str:
 
 
 def _build_skill_md(name: str, description: str, body: str) -> str:
-    """Compose the SKILL.md file content with Anthropic frontmatter."""
-    name_clean = (name or "").strip()
-    desc_clean = " ".join((description or "").split())  # collapse whitespace
-    body_clean = body.rstrip() + "\n"
-    return (
-        "---\n"
-        f'name: "{_yaml_escape(name_clean)}"\n'
-        f'description: "{_yaml_escape(desc_clean)}"\n'
-        "---\n\n"
-        f"{body_clean}"
+    """Compose SKILL.md per the Agent Skills spec (agentskills.io).
+
+    ``name`` is the skill's human title. The spec requires the frontmatter
+    ``name`` to be a lowercase-hyphen slug equal to the folder name, so the
+    slug goes in the frontmatter and the title becomes the body's H1.
+    """
+    title = (name or "").strip()
+    return agent_skills.build_skill_md(
+        agent_skills.skill_name(title), description or "", body or "", title=title or None,
     )
 
 
@@ -306,7 +306,7 @@ def materialize_package(
     ).fetchall()
     skill_summaries: list[dict[str, Any]] = []
     for skill_id, name, description, content_markdown, strategy in skills:
-        skill_folder = package_folder / package_planning._slugify(name)
+        skill_folder = package_folder / agent_skills.skill_name(name)
         skill_folder.mkdir(parents=True, exist_ok=True)
 
         skill_md_path = skill_folder / "SKILL.md"

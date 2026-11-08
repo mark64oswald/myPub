@@ -1,0 +1,282 @@
+"""
+plugin_scaffold.py — ``/kb-plugin-scaffold``: a Claude Code plugin with Agent Skills and,
+optionally, an MCP server (2026-11).
+
+Composes the other two scaffolds. The package is a one-plugin local
+marketplace, so it installs as soon as it lands:
+
+    <package>/
+      .claude-plugin/marketplace.json
+      plugins/<plugin>/
+        .claude-plugin/plugin.json
+        skills/<topic-skill>/...        one per KB topic (agent_skill_gen)
+        skills/<workflow>/SKILL.md      user-invoked workflow skills (disable-model-invocation)
+        hooks/hooks.json                optional example hook
+        scripts/after-edit.sh           ... and its script
+        .mcp.json                       optional, points at servers/<name> via ${CLAUDE_PLUGIN_ROOT}
+        servers/<name>/...              optional MCP server (mcp_server_gen)
+        README.md
+      _provenance.md, _validation.md, _prompts/refine-skill.md
+
+Skills, not ``commands/``: Claude Code now treats a skill with
+``disable-model-invocation: true`` as the slash-command form.
+
+Try it with ``/plugin marketplace add <package>`` then
+``/plugin install <plugin>@<plugin>-local``, and check it with
+``claude plugin validate <package>/plugins/<plugin>``.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import Any, Optional, Sequence
+
+import duckdb
+
+import agent_skill_gen
+import agent_skills
+import kb_scaffold as ks
+import mcp_server_gen
+from generator import GenFile, GenPlan, GenUnit, Generator, ValidationIssue
+
+GENERATOR_TYPE = "plugin_scaffold"
+RESERVED_PREFIXES = ("claude-", "anthropic-", "cc-plugin-")
+
+
+@dataclass
+class PluginSpec:
+    name: str
+    purpose: str
+    author: str = "Your Name"
+    topics: list[ks.TopicMaterial] = field(default_factory=list)
+    workflows: list[str] = field(default_factory=list)
+    hooks: bool = False
+    server: Optional[mcp_server_gen.ServerSpec] = None
+
+
+def plugin_problems(p: PluginSpec) -> list[str]:
+    out = []
+    if not agent_skills._NAME_RE.match(p.name):
+        out.append(f"plugin name {p.name!r} must be kebab-case")
+    if p.name.startswith(RESERVED_PREFIXES):
+        out.append(f"plugin name {p.name!r} uses a reserved prefix ({', '.join(RESERVED_PREFIXES)})")
+    if not (p.topics or p.workflows or p.server):
+        out.append("plugin has no skills, workflows or MCP server")
+    if p.server:
+        out += [f"mcp server: {x}" for x in mcp_server_gen.server_problems(p.server)]
+    return out
+
+
+def plugin_json(p: PluginSpec) -> str:
+    return json.dumps({
+        "name": p.name, "version": "0.1.0", "description": p.purpose,
+        "author": {"name": p.author}, "license": "MIT",
+        "keywords": [t.name.lower() for t in p.topics][:8] or [p.name],
+    }, indent=2) + "\n"
+
+
+def marketplace_json(p: PluginSpec) -> str:
+    return json.dumps({
+        "name": f"{p.name}-local", "owner": {"name": p.author},
+        "description": f"Local marketplace for the {p.name} plugin.",
+        "plugins": [{"name": p.name, "source": f"./plugins/{p.name}", "description": p.purpose}],
+    }, indent=2) + "\n"
+
+
+def workflow_skill(p: PluginSpec, title: str) -> tuple[str, str]:
+    name = agent_skills.skill_name(title)
+    topics = ", ".join(t.name for t in p.topics) or "this plugin's domain"
+    body = "\n".join([
+        f"# {title}", "",
+        "Run this when the user types the command. `$ARGUMENTS` holds what they typed after it.", "",
+        "## Steps", "",
+        "1. TODO: restate the goal from `$ARGUMENTS`; ask one question if it is ambiguous.",
+        f"2. TODO: apply the relevant skills ({topics}).",
+        *(["3. TODO: call the plugin's MCP tools ("
+           + ", ".join(f"`{t.name}`" for t in p.server.tools) + ") where they fit."] if p.server else []),
+        f"{4 if p.server else 3}. Report the result and anything left to do.", "",
+    ])
+    md = agent_skills.build_skill_md(name, f"{title}. Run with /{p.name}:{name}.", body,
+                                     metadata={"generator": "mypub plugin_scaffold"})
+    extra = 'disable-model-invocation: true\nargument-hint: "[what to work on]"\n'
+    return name, md.replace("\n---\n\n", f"\n{extra}---\n\n", 1)
+
+
+HOOKS_JSON = json.dumps({"hooks": {"PostToolUse": [{
+    "matcher": "Write|Edit",
+    "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/after-edit.sh\""}],
+}]}}, indent=2) + "\n"
+
+AFTER_EDIT_SH = """\
+#!/usr/bin/env bash
+# Example PostToolUse hook: Claude Code passes the tool call as JSON on stdin.
+# Exit 0 to continue; exit 2 and write to stderr to send feedback to Claude.
+set -euo pipefail
+payload="$(cat)"
+file="$(printf '%s' "$payload" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("file_path",""))')"
+# TODO: run a formatter or linter on "$file".
+exit 0
+"""
+
+
+def readme(p: PluginSpec, skill_names: Sequence[str], workflow_names: Sequence[str]) -> str:
+    lines = [f"# {p.name}", "", p.purpose, "",
+             "A Claude Code plugin generated by myPub `/kb-plugin-scaffold`.", "",
+             "## Install locally", "", "```text",
+             "/plugin marketplace add <path-to-this-package>",
+             f"/plugin install {p.name}@{p.name}-local", "```", "",
+             "## What's inside", ""]
+    if skill_names:
+        lines.append("- **Skills** (Claude loads them when relevant): "
+                     + ", ".join(f"`{n}`" for n in skill_names))
+    if workflow_names:
+        lines.append("- **Commands** (skills you run by name): "
+                     + ", ".join(f"`/{p.name}:{n}`" for n in workflow_names))
+    if p.server:
+        lines.append(f"- **MCP server** `{p.server.name}` ({p.server.language}) in "
+                     f"`servers/{p.server.name}/`, started from `.mcp.json`."
+                     + (" Run `npm install` there first." if p.server.language == "typescript" else
+                        " Needs `uv` on the PATH."))
+    if p.hooks:
+        lines.append("- **Hook**: `hooks/hooks.json` runs `scripts/after-edit.sh` after Write/Edit.")
+    lines += ["", "## Check it", "", "```bash", "claude plugin validate .", "```", ""]
+    return "\n".join(lines)
+
+
+def build_plugin_files(p: PluginSpec) -> tuple[list[tuple[str, str]], list[str], list[str], list[str]]:
+    """Return ``(files, skill_names, workflow_names, skill_problems)``; paths are plugin-relative."""
+    files: list[tuple[str, str]] = [(".claude-plugin/plugin.json", plugin_json(p))]
+    skill_names, problems = [], []
+    for tm in p.topics:
+        name, sk_files, probs = agent_skill_gen.build_skill_files(tm, prefix="skills/")
+        skill_names.append(name)
+        files += sk_files
+        problems += [f"{name}: {x}" for x in probs]
+    workflow_names = []
+    for w in p.workflows:
+        name, md = workflow_skill(p, w)
+        if name in skill_names or name in workflow_names:
+            problems.append(f"{name}: duplicate skill name")
+            continue
+        workflow_names.append(name)
+        files.append((f"skills/{name}/SKILL.md", md))
+    if p.hooks:
+        files += [("hooks/hooks.json", HOOKS_JSON), ("scripts/after-edit.sh", AFTER_EDIT_SH)]
+    if p.server:
+        root = f"${{CLAUDE_PLUGIN_ROOT}}/servers/{p.server.name}"
+        files += mcp_server_gen.build_server_files(p.server, prefix=f"servers/{p.server.name}/")
+        files.append((".mcp.json", json.dumps(
+            {"mcpServers": {p.server.name: mcp_server_gen.mcp_json_entry(p.server, root)}},
+            indent=2) + "\n"))
+    files.append(("README.md", readme(p, skill_names, workflow_names)))
+    return files, skill_names, workflow_names, problems
+
+
+def validation_checklist(p: PluginSpec, problems: Sequence[str]) -> str:
+    lines = [f"# Checks for the {p.name} plugin", ""]
+    lines += [f"- {x}" for x in problems] or ["Structure checks passed (names, skill frontmatter, server options)."]
+    lines += ["", "Before you share it:", "",
+              f"1. `claude plugin validate plugins/{p.name}` (and `claude plugin validate .` for the marketplace).",
+              f"2. `/plugin marketplace add <this folder>` then `/plugin install {p.name}@{p.name}-local`.",
+              "3. Ask Claude something that should trigger each skill; adjust descriptions that don't fire.",
+              "4. Fill in every `TODO` in the workflow skills" + (", hook script" if p.hooks else "")
+              + (" and server tools." if p.server else "."),
+              "5. Before submitting to the plugin directory, add a square PNG icon at `.claude-plugin/icon.png`.",
+              "6. Run `_prompts/refine-skill.md` with a subagent to turn generated skill bodies into instructions."]
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Generator components
+# ---------------------------------------------------------------------------
+
+
+class PluginDecomposer:
+    def decompose(self, conn: duckdb.DuckDBPyConnection, resolver: Any, query: str, **kw: Any):
+        notes: list[str] = []
+        topics, missing = [], []
+        for t in kw.get("skill_topics") or ():
+            tm = ks.topic_material(conn, resolver, t)
+            (topics.append(tm) if tm else missing.append(t))
+        if missing:
+            notes.append(f"skill topics not in the KB, skipped: {', '.join(missing)}")
+        name = agent_skills.skill_name(kw.get("plugin_name") or query)[:40].rstrip("-")
+        server = None
+        if kw.get("mcp_server"):
+            tools, tnotes = mcp_server_gen.tools_from_request(
+                conn, resolver, tool_names=kw.get("tools") or (), domain=kw.get("domain"))
+            notes += tnotes
+            server = mcp_server_gen.ServerSpec(
+                name=f"{name}-server"[:48], purpose=" ".join(query.split()),
+                language=kw.get("language", "python"), transport=kw.get("transport", "stdio"),
+                ui=bool(kw.get("ui")), tools=tools)
+        spec = PluginSpec(name=name, purpose=" ".join(query.split()),
+                          author=kw.get("author") or "Your Name", topics=topics,
+                          workflows=list(kw.get("workflows") or ()), hooks=bool(kw.get("hooks")),
+                          server=server)
+        names = list(ks.PLUGIN_SOURCES) + list(ks.SKILL_SPEC_SOURCES)
+        cites = ks.doc_citations(conn, names, keywords=("plugin", "skill", "manifest"), per_source=1)
+        if server:
+            cites += mcp_server_gen.citations_for(conn, server)
+        return {"spec": spec, "notes": notes, "citations": cites}
+
+
+class PluginPlanner:
+    def plan(self, conn: duckdb.DuckDBPyConnection, d: dict, *,
+             package_name: Optional[str] = None, **_: Any) -> GenPlan:
+        p: PluginSpec = d["spec"]
+        problems = plugin_problems(p)
+        plan = GenPlan(generator_type=GENERATOR_TYPE, package_name=package_name or p.name,
+                       domain=p.purpose, source_query=p.purpose, notes=list(d["notes"]))
+        skill_names: list[str] = []
+        workflow_names: list[str] = []
+        if not problems:
+            files, skill_names, workflow_names, sk_problems = build_plugin_files(p)
+            problems += sk_problems
+            base = f"plugins/{p.name}/"
+            plan.files += [GenFile(filename=base + path, content=c, purpose="plugin")
+                           for path, c in files]
+            plan.files.append(GenFile(filename=".claude-plugin/marketplace.json",
+                                      content=marketplace_json(p), purpose="marketplace"))
+            for i, tm in enumerate(p.topics):
+                plan.units.append(GenUnit(
+                    unit_type="agent_skill", name=skill_names[i], ordinal=i,
+                    logical_key=f"skill:{skill_names[i]}", metadata={"concept_id": tm.concept_id},
+                    sources=[(c.source_type, c.source_id, 1.0, 1.0, None) for c in tm.sources]
+                    + [("procedure", x.procedure_id, 1.0, 1.0, None) for x in tm.procedures]))
+            if skill_names:
+                plan.files.append(GenFile(
+                    filename="_prompts/refine-skill.md", purpose="subagent_prompt",
+                    content=agent_skill_gen.REFINE_PROMPT.format(
+                        name="<skill-name>", path=f"plugins/{p.name}/skills/<skill-name>/")
+                    + "\nSkills to refine: " + ", ".join(skill_names) + "\n"))
+        plan.package_metadata = {
+            "plugin_name": p.name, "skills": skill_names, "workflows": workflow_names,
+            "hooks": p.hooks, "mcp_server": p.server.name if p.server else None,
+            "language": p.server.language if p.server else None, "problems": problems,
+        }
+        plan.files += [
+            GenFile(filename="_provenance.md", purpose="provenance", content=(
+                f"# Provenance: {p.name}\n\n"
+                + "".join(f"- Skill `{n}` from concept **{t.name}** (`concept:{t.concept_id}`)\n"
+                          for n, t in zip(skill_names, p.topics))
+                + "\n" + ks.render_citations(d["citations"], "Specs this layout follows"))),
+            GenFile(filename="_validation.md", purpose="validation",
+                    content=validation_checklist(p, problems)),
+        ]
+        return plan
+
+
+class PluginValidator:
+    def validate(self, conn: duckdb.DuckDBPyConnection, plan: GenPlan) -> list[ValidationIssue]:
+        out = []
+        for x in plan.package_metadata.get("problems", []):
+            out.append(ValidationIssue("", "warning" if "warning:" in x else "error", x))
+        return out
+
+
+def make_plugin_scaffold_generator() -> Generator:
+    return Generator(generator_type=GENERATOR_TYPE, decomposer=PluginDecomposer(),
+                     planner=PluginPlanner(), ranking_mode="generation",
+                     validator=PluginValidator(), materializer=ks.TreeMaterializer())
