@@ -89,6 +89,7 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-tech-assessment` | Tech Assessment (12) | Comparison matrix + recommendation |
 | `/kb-migration-guide` | Migration Guide (13) | CONTRADICTS-driven; data-starved until alignment surfaces contradictions |
 | `/kb-currency-report` | Currency Report (13) | doc_snapshot history audit |
+| `/kb-refresh` | Live-doc refresh | On-demand: plan (dry run) → sync changed pages of doc sites (`doc_sites.py`) and stale single sources; optional extraction prep |
 | `/kb-dialog` | Dialog (14) | Architect/Practitioner divergence |
 | `/kb-author-panel` | Author Panel (14) | N≥2 characters, per-topic positions |
 | `/kb-bootstrap` | Project Bootstrap (15) | **User #1.** Composes Concept→Pattern→Procedure into a project tree + sub-agent prompts. Stack-aware: detects target language (python/rust/node/typescript/java/go/csharp/ruby) from the request keywords; explicit `stack` param overrides; generic skeleton if no signal |
