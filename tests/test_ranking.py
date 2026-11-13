@@ -104,10 +104,12 @@ def test_relevance_score_weak_fts_stays_low():
 
 
 def test_relevance_score_vss_passthrough():
-    """VSS cosine similarity is already in [0, 1] — pass through, clamped."""
+    """VSS cosine similarity passes through up to the soft-cap knee; above
+    it, values are compressed toward (never reaching) 1.0."""
     assert ranking.relevance_score({"vss_chapter": 0.85}) == pytest.approx(0.85)
-    # Clamping
-    assert ranking.relevance_score({"vss_chapter": 1.5}) == 1.0
+    assert ranking.relevance_score({"vss_chapter": 0.80}) == pytest.approx(0.80)
+    # Clamped to 1.0, then soft-capped
+    assert ranking.relevance_score({"vss_chapter": 1.5}) == pytest.approx(ranking.soft_cap(1.0))
     assert ranking.relevance_score({"vss_chapter": -0.1}) == 0.0
 
 
@@ -155,7 +157,7 @@ def test_relevance_score_addresses_doc_section_dominance_regression():
 
 def test_relevance_score_title_coverage_boost_amplifies():
     """Perfect title match amplifies relevance by ``1 + TITLE_COVERAGE_BOOST``,
-    capped at 1.0. coverage=0.0 leaves relevance unchanged."""
+    soft-capped below 1.0. coverage=0.0 leaves relevance unchanged."""
     base = ranking.relevance_score({"fts_chapter": 5.0})
     boosted = ranking.relevance_score({"fts_chapter": 5.0}, title_coverage=1.0)
     no_boost = ranking.relevance_score({"fts_chapter": 5.0}, title_coverage=0.0)
@@ -163,13 +165,26 @@ def test_relevance_score_title_coverage_boost_amplifies():
     assert no_boost == base
     assert boosted > base
     expected_multiplier = 1.0 + ranking.TITLE_COVERAGE_BOOST
-    assert boosted == pytest.approx(min(1.0, expected_multiplier * base), abs=1e-6)
+    assert boosted == pytest.approx(ranking.soft_cap(expected_multiplier * base), abs=1e-6)
 
 
 def test_relevance_score_title_coverage_caps_at_one():
-    """Even with full coverage on a strong base, relevance can't exceed 1.0."""
+    """Even with full coverage on a strong base, relevance stays below 1.0 —
+    and still separates strong from stronger instead of clamping both."""
     out = ranking.relevance_score({"fts_chapter": 10.0}, title_coverage=1.0)
-    assert out == 1.0
+    weaker = ranking.relevance_score({"fts_chapter": 10.0}, title_coverage=0.5)
+    assert weaker < out < 1.0
+
+
+def test_soft_cap_is_identity_below_knee_and_strictly_increasing():
+    assert ranking.soft_cap(0.5) == 0.5
+    assert ranking.soft_cap(ranking.RELEVANCE_KNEE) == pytest.approx(ranking.RELEVANCE_KNEE)
+    xs = [0.9, 1.0, 1.2, 1.4, 1.6, 1.8]
+    ys = [ranking.soft_cap(x) for x in xs]
+    assert all(a < b for a, b in zip(ys, ys[1:]))
+    assert ys[-1] < 1.0
+    # distinguishable at the 3 decimals rank_key keeps
+    assert all(round(b, 3) > round(a, 3) for a, b in zip(ys, ys[1:]))
 
 
 def test_relevance_score_title_coverage_partial():
@@ -239,7 +254,8 @@ def test_relevance_score_full_title_match_does_not_lower_strong_signal():
     strong = ranking.relevance_score(
         {"fts_chapter": 10.0}, title_coverage=1.0, full_title_match=True,
     )
-    assert strong == 1.0
+    assert strong == ranking.relevance_score({"fts_chapter": 10.0}, title_coverage=1.0)
+    assert strong > ranking.FULL_TITLE_MATCH_FLOOR
 
 
 def test_relevance_score_full_title_match_cant_revive_zero_base():
@@ -596,7 +612,7 @@ def test_compute_components_for_doc_section(catalog, populated):
               "modality_scores": {"vss_doc_section": 0.92}}
     comps = ranking.compute_components_for_result(catalog, result, now=NOW)
     assert comps.recency > 0.99  # very recent snapshot
-    assert comps.relevance == pytest.approx(0.92)
+    assert comps.relevance == pytest.approx(ranking.soft_cap(0.92))
     assert comps.authority == 0.85
 
 
@@ -781,3 +797,49 @@ def test_generation_ranker_empty_results_returns_empty_output(catalog):
     assert out.selected == []
     assert out.dropped == []
     assert out.strategy == "recent_doc_anchored"
+
+
+
+def test_release_intent_detection():
+    f = ranking.query_has_release_intent
+    assert not f("Lakeflow Spark Declarative Pipelines expectations")
+    assert not f("how do I define a Claude Code hook that runs before a tool call")
+    assert f("what's new in Unity Catalog")
+    assert f("Databricks release notes November 2025")
+    assert f("changes in runtime 17.3 2026")
+    assert f("deprecated features in MCP")
+
+
+def test_is_release_notes():
+    assert ranking.is_release_notes("https://docs.databricks.com/aws/en/release-notes/product/2025/november", None)
+    assert ranking.is_release_notes("https://code.claude.com/docs/en/changelog.md", None)
+    assert ranking.is_release_notes(None, "Claude Platform: Release notes")
+    assert not ranking.is_release_notes("https://docs.databricks.com/aws/en/ldp/expectations", "Databricks: Manage data quality")
+
+
+
+def test_page_kind_and_intents():
+    pk = ranking.page_kind
+    assert pk("https://docs.databricks.com/aws/en/error-messages/row-column-access-error-class", None) == "error_reference"
+    assert pk("https://platform.claude.com/docs/en/api/beta/events.md", "Claude API: Events") == "api_reference"
+    assert pk("https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md", None) is None
+    qi = ranking.query_intents
+    assert qi("event sourcing") == frozenset()
+    assert "api_reference" in qi("messages API request parameters")
+    assert "error_reference" in qi("ROW_COLUMN_ACCESS error")
+    assert "error_reference" in qi("DELTA_MISSING_COLUMN")
+    f = ranking.page_kind_factor
+    assert f(None, frozenset()) == 1.0
+    assert f("api_reference", frozenset()) == ranking.API_REFERENCE_RELEVANCE_FACTOR
+    assert f("api_reference", frozenset({"api_reference"})) == 1.0
+
+
+
+def test_year_factor():
+    yf = ranking.year_factor
+    ys = ranking.query_years("what's new in Databricks SQL November 2025")
+    assert ys == frozenset({"2025"})
+    assert yf(ys, "Databricks SQL release notes / Changes in 2024.40") == ranking.YEAR_MISMATCH_FACTOR
+    assert yf(ys, "Databricks SQL release notes / Changes in 2025.35") == 1.0
+    assert yf(ys, "Databricks SQL release notes") == 1.0
+    assert yf(frozenset(), "Changes in 2024.40") == 1.0

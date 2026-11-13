@@ -315,6 +315,135 @@ TITLE_COVERAGE_BOOST = 0.8
 FULL_TITLE_MATCH_FLOOR = 0.95
 
 
+# Above RELEVANCE_KNEE, relevance approaches 1.0 gradually instead of
+# clamping. A hard clamp put every decent match on a 127k-section catalog
+# at exactly 1.0 (BM25 ≥ ~10, or any title-boosted match), so relevance
+# stopped separating results and ties fell to RRF. Values up to the knee
+# are unchanged, so cosine similarity still passes straight through.
+RELEVANCE_KNEE = 0.85
+RELEVANCE_SOFT_SPAN = 0.5
+
+
+def soft_cap(x: float, knee: float = RELEVANCE_KNEE,
+             span: float = RELEVANCE_SOFT_SPAN) -> float:
+    """Identity up to ``knee``, then a strictly increasing approach to 1.0.
+
+    A stronger signal always scores higher: 0.95 → ~0.88, 1.0 → ~0.89,
+    1.4 → ~0.95, 1.8 → ~0.98.
+    """
+    if x <= knee:
+        return max(0.0, x)
+    return knee + (1.0 - knee) * (1.0 - math.exp(-(x - knee) / span))
+
+
+# Page-kind priors for whole-site docs. Release notes mention every
+# product name in their headings; error-code pages and per-endpoint API
+# reference pages are short, keyword-dense and title-matched by single
+# words ("Events", "ROW_COLUMN_ACCESS"). All three out-match the guide a
+# concept query is looking for, so their relevance is scaled down — unless
+# the query is itself about releases, errors or the API.
+RELEASE_NOTES_RELEVANCE_FACTOR = 0.7
+ERROR_REFERENCE_RELEVANCE_FACTOR = 0.8
+API_REFERENCE_RELEVANCE_FACTOR = 0.85
+_MONTHS = {"january", "february", "march", "april", "may", "june", "july", "august",
+           "september", "october", "november", "december"}
+_PAGE_KINDS: dict[str, dict[str, Any]] = {
+    "release_notes": {
+        "factor": RELEASE_NOTES_RELEVANCE_FACTOR,
+        "url": ("/release-notes", "/releasenotes", "/release_notes", "/changelog",
+                "/whats-new", "/what-s-new"),
+        "name": ("release notes", "changelog", "what's new", "whats new"),
+        "intent": {"release", "releases", "released", "changelog", "new", "whats",
+                   "latest", "deprecated", "deprecation", "deprecations", "renamed",
+                   "announced", "announcement", "version", "versions", "ga",
+                   "preview", "upgrade"} | _MONTHS,
+        "intent_phrases": ("release note", "what's new"),
+    },
+    "error_reference": {
+        "factor": ERROR_REFERENCE_RELEVANCE_FACTOR,
+        "url": ("/error-messages/", "/errors/", "/error-codes/"),
+        "name": ("error class", "error condition", "error code"),
+        "intent": {"error", "errors", "exception", "exceptions", "fails", "failed",
+                   "failure", "failing", "sqlstate", "troubleshoot", "troubleshooting"},
+        "intent_phrases": (),
+    },
+    "api_reference": {
+        "factor": API_REFERENCE_RELEVANCE_FACTOR,
+        "url": ("platform.claude.com/docs/en/api/",),
+        "name": (),
+        "intent": {"api", "endpoint", "endpoints", "request", "response", "parameter",
+                   "parameters", "rest", "http", "curl", "sdk", "payload", "schema"},
+        "intent_phrases": (),
+    },
+}
+
+
+def page_kind(identifier: Optional[str], name: Optional[str]) -> Optional[str]:
+    """'release_notes' | 'error_reference' | 'api_reference' | None (a guide)."""
+    ident = (identifier or "").lower()
+    nm = (name or "").lower()
+    for kind, spec in _PAGE_KINDS.items():
+        if any(m in ident for m in spec["url"]) or any(m in nm for m in spec["name"]):
+            return kind
+    return None
+
+
+def query_intents(query: Optional[str]) -> frozenset[str]:
+    """The page kinds a query is explicitly about."""
+    if not query:
+        return frozenset()
+    q = query.lower()
+    tokens = set(re.findall(r"[a-z0-9_']+", q))
+    out = set()
+    for kind, spec in _PAGE_KINDS.items():
+        if tokens & spec["intent"] or any(ph in q for ph in spec["intent_phrases"]):
+            out.add(kind)
+    if any(re.fullmatch(r"20\d\d(\.\d+)?", t) for t in tokens):
+        out.add("release_notes")
+    # an ERROR_CODE-style token (SCREAMING_SNAKE) is an error lookup
+    if re.search(r"\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+\b", query):
+        out.add("error_reference")
+    return frozenset(out)
+
+
+def page_kind_factor(kind: Optional[str], intents: Any) -> float:
+    if kind is None or kind in (intents or ()):
+        return 1.0
+    return float(_PAGE_KINDS[kind]["factor"])
+
+
+YEAR_MISMATCH_FACTOR = 0.9
+_YEAR = re.compile(r"\b(20\d\d)\b")
+
+
+def query_years(query: Optional[str]) -> frozenset[str]:
+    return frozenset(_YEAR.findall(query or ""))
+
+
+def year_factor(years: Any, title: Optional[str]) -> float:
+    """Scale down a result dated to a different year than the query asks for.
+
+    Only when the query names a year and the result's title names years,
+    none of them the one asked for ("Changes in 2024.40" for a "November
+    2025" query). Undated titles are left alone.
+    """
+    if not years or not title:
+        return 1.0
+    found = set(_YEAR.findall(title))
+    if found and not (found & set(years)):
+        return YEAR_MISMATCH_FACTOR
+    return 1.0
+
+
+def query_has_release_intent(query: Optional[str]) -> bool:
+    """True when the query asks about releases, versions or changes."""
+    return "release_notes" in query_intents(query)
+
+
+def is_release_notes(identifier: Optional[str], name: Optional[str]) -> bool:
+    return page_kind(identifier, name) == "release_notes"
+
+
 def relevance_score(
     modality_scores: Optional[dict[str, Any]] = None,
     *, title_coverage: float = 0.0,
@@ -379,7 +508,7 @@ def relevance_score(
     if base <= 0.0:
         return 0.0
     cov = max(0.0, min(1.0, float(title_coverage)))
-    boosted = min(1.0, base * (1.0 + TITLE_COVERAGE_BOOST * cov))
+    boosted = soft_cap(base * (1.0 + TITLE_COVERAGE_BOOST * cov))
     # Full title match (caller-asserted: every significant query token in
     # title AND ≥2 tokens) floors relevance at FULL_TITLE_MATCH_FLOOR.
     # This decisively rewards chapters whose title IS the query topic.
@@ -519,6 +648,23 @@ def chapter_raw_authority(conn: duckdb.DuckDBPyConnection,
     return authority_score_from_publisher(publisher)
 
 
+def doc_section_source_info(conn: duckdb.DuckDBPyConnection,
+                            doc_section_id: int) -> tuple[Optional[float], Optional[str]]:
+    """(doc_source.authority_score, page kind) for a section."""
+    row = conn.execute(
+        """
+        SELECT src.authority_score, src.identifier, src.name FROM doc_section s
+          JOIN doc_snapshot sn  ON s.snapshot_id  = sn.snapshot_id
+          JOIN doc_source   src ON sn.doc_source_id = src.doc_source_id
+         WHERE s.doc_section_id = ?
+        """, [doc_section_id],
+    ).fetchone()
+    if row is None:
+        return None, None
+    auth = None if row[0] is None else float(row[0])
+    return auth, page_kind(row[1], row[2])
+
+
 def doc_section_raw_authority(conn: duckdb.DuckDBPyConnection,
                               doc_section_id: int) -> Optional[float]:
     """Pull doc_source.authority_score for the source this section came from."""
@@ -575,6 +721,7 @@ def compute_components_for_result(
     rid = int(result["result_id"])
     modality_scores = result.get("modality_scores") or {}
 
+    kind_of_page = None
     if kind == "chapter":
         age = chapter_age_days(conn, rid, now=now)
         corr_n, contr_n = chapter_alignment_stats(conn, rid)
@@ -582,20 +729,26 @@ def compute_components_for_result(
     elif kind == "doc_section":
         age = doc_section_age_days(conn, rid, now=now)
         corr_n, contr_n = doc_section_alignment_stats(conn, rid)
-        auth_raw = doc_section_raw_authority(conn, rid)
+        auth_raw, kind_of_page = doc_section_source_info(conn, rid)
     else:
         raise ValueError(f"unknown result kind {kind!r}")
+
+    relevance = relevance_score(
+        modality_scores,
+        title_coverage=float(result.get("title_coverage") or 0.0),
+        full_title_match=bool(result.get("full_title_match")),
+    )
+    relevance *= page_kind_factor(kind_of_page, result.get("query_intents"))
+    title = " ".join(str(t) for t in (result.get("doc_source_name"), result.get("heading_text"),
+                                     result.get("book_title"), result.get("chapter_title")) if t)
+    relevance *= year_factor(result.get("query_years"), title)
 
     return ComponentScores(
         recency=recency_score(age_days=age),
         doc_alignment=doc_alignment_score(
             corroborates=corr_n, contradicts=contr_n,
         ),
-        relevance=relevance_score(
-            modality_scores,
-            title_coverage=float(result.get("title_coverage") or 0.0),
-            full_title_match=bool(result.get("full_title_match")),
-        ),
+        relevance=relevance,
         corroboration=corroboration_score(corroborator_count=corr_n),
         authority=authority_score_from_raw(auth_raw),
     )
