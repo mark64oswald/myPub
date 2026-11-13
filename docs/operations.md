@@ -8,28 +8,66 @@ Day-to-day running of myPub: refresh, eval, deferred work, disaster recovery.
 
 ## Refresh
 
-### Live-doc refresh
+### Live-doc refresh (on demand)
+
+Freshness is a command, not a schedule. `/mypub:kb-refresh` walks the
+steps below; the scripts can also be run directly.
 
 ```bash
-# Refresh anything past its TTL (default 30 days)
-.venv/bin/python3 scripts/refresh_docs.py refresh --all
+# What's stale? (read-only)
+.venv/bin/python3 scripts/doc_sites.py status                 # doc sites
+.venv/bin/python3 scripts/doc_sites.py stale [--domain X]     # single sources past TTL
+.venv/bin/python3 scripts/doc_sites.py plan --site databricks [--check]
+.venv/bin/python3 scripts/refresh_docs.py refresh --stale --dry-run
 
-# Refresh one source
-.venv/bin/python3 scripts/refresh_docs.py refresh --source "Apache Kafka"
-
-# Skip extraction (snapshot only — useful when only re-snapshotting)
-.venv/bin/python3 scripts/refresh_docs.py refresh --all --no-extract
-
-# Status — what's stale, pinned, recently refreshed
-.venv/bin/python3 scripts/refresh_docs.py status
+# Refresh
+.venv/bin/python3 scripts/doc_sites.py sync --site databricks [--max-pages N] [--prep-extract]
+.venv/bin/python3 scripts/refresh_docs.py refresh --stale [--domain X] [--no-extract]
+.venv/bin/python3 scripts/refresh_docs.py refresh --source-id 123
 ```
 
-A doc is re-snapshotted when:
+Two kinds of live-doc source:
 
-- Its TTL elapses, *and*
-- Its content hash differs from the last snapshot
+- **Doc sites** (`doc_sites.py`): a whole docs site enumerated from its
+  sitemap.xml or llms.txt, one `doc_source` per page. Presets:
+  `databricks` (docs.databricks.com/aws/en, HTML, ~6.4k pages) and
+  `claude-code` (code.claude.com/docs, Markdown, ~200 pages). Register
+  with `add-site --preset NAME`. A sync re-reads the index, registers new
+  pages, sends conditional GETs (ETag / Last-Modified), compares a hash of
+  the *extracted text* (Databricks redeploys daily, so HTTP dates alone
+  over-report change), re-ingests only changed pages, and retires pages
+  that left the index or return 404. If the index loses more than 10% of
+  live pages at once, retiring is skipped unless `--force-retire`. Single
+  `web_md` sources seeded earlier under a site's URL prefix are adopted.
+  State lives in `doc_site`, `doc_fetch_state` (per page: ETag, hash,
+  last checked / changed, the page's own "last updated" date,
+  retired_at) and `doc_refresh_run`. `sync --path FRAGMENT` (a glob, or a fragment matched anywhere in the URL) limits a run
+  to part of a site and `--force` re-ingests already-fetched pages even if unchanged. Site
+  pages are sectioned with the `site_md` rule: split at H2–H4, then any
+  section over 4 KB is cut at paragraph / code-fence / table-row
+  boundaries (table header repeated) into "Heading (part k/n)" sections,
+  because the embedder reads only the first ~1 KB of a section. Site
+  sections are embedded as "page › heading path" + body (the stored text
+  is unchanged; the heading is also in the FTS index), and link-only
+  "Additional resources" / "Next steps" blocks are skipped. `doc_sites.py
+  reembed --site NAME` re-embeds a site's live sections that way, e.g.
+  after pages were carried over from an earlier embedding style.
+- **Single sources** (`refresh_docs.py`): Context7, DeepWiki, GitHub raw,
+  single web pages. `--all`, `--tier` and `--stale` leave site pages out.
 
-So a TTL-elapsed-but-unchanged doc only updates `last_refresh_at` — no new `doc_snapshot` row, no re-embedding, no re-indexing.
+**Supersession.** When a source's content changes, the new snapshot
+becomes the only one with sections. Sections whose heading and body are
+unchanged keep their embedding and everything extracted from them
+(concept relations, procedures, alignment edges, skill/generator
+provenance); only the rest are embedded and offered for extraction. The
+older snapshots' remaining sections are deleted with their extraction;
+`doc_snapshot` rows stay as history. Context7 is the exception — it
+returns a sample of snippets per query, so its snapshots still
+accumulate. (Before 2026-11 every refresh left the old sections
+searchable; the first refresh of such a source cleans them up.)
+
+An unchanged doc only updates `last_refresh_at` — no new snapshot, no
+re-embedding. The FTS index is rebuilt once per run, not per source.
 
 ### Pinning a source
 

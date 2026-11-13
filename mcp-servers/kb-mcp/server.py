@@ -1204,7 +1204,7 @@ def search_chapters(
                 scored.append(ranking.ScoredResult(
                     result=r, components=comps, combined=comps.combine(weights),
                 ))
-            scored.sort(key=lambda s: s.combined, reverse=True)
+            scored.sort(key=ranking.rank_key, reverse=True)
             return {
                 "query": query,
                 "mode": mode,
