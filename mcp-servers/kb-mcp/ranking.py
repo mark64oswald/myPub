@@ -403,6 +403,19 @@ def authority_score_from_raw(raw: Optional[float]) -> float:
     return max(0.0, min(1.0, float(raw)))
 
 
+def rank_key(s: Any) -> tuple[float, float]:
+    """Sort key for scored results: combined score, ties broken by RRF.
+
+    Relevance clamps at 1.0 for strong matches and recency is ~1.0 for
+    anything ingested recently, so after a bulk doc-site ingest many top
+    candidates share a combined score to the 4th decimal and the order fell
+    to noise in recency. Rounding to 3 decimals treats those as ties and
+    lets the RRF score — which rewards ranking high in several modalities —
+    decide.
+    """
+    return (round(float(s.combined), 3), float((s.result or {}).get("rrf_score") or 0.0))
+
+
 def combined_score(
     weights: Weights, *, recency: float, doc_alignment: float,
     relevance: float, corroboration: float, authority: float,
@@ -642,7 +655,7 @@ class InteractiveRanker:
             scored.append(ScoredResult(
                 result=r, components=comps, combined=comps.combine(self.weights),
             ))
-        scored.sort(key=lambda s: s.combined, reverse=True)
+        scored.sort(key=rank_key, reverse=True)
 
         primary = scored[0]
         conflict_keys = self._conflict_keys_for(primary)
@@ -749,7 +762,7 @@ class GenerationRanker:
             scored.append(ScoredResult(
                 result=r, components=comps, combined=comps.combine(self.weights),
             ))
-        scored.sort(key=lambda s: s.combined, reverse=True)
+        scored.sort(key=rank_key, reverse=True)
 
         if strategy == "recent_doc_anchored":
             return self._recent_doc_anchored(scored)

@@ -368,6 +368,27 @@ class WebMarkdownFetcher:
         return cls._INDEX_NOTE.sub("", text, count=1)
 
 
+class WebHtmlFetcher:
+    """Fetch an HTML docs page and keep its article as Markdown.
+
+    Identifier: the page's ``https://`` URL. Used for pages registered by
+    ``doc_sites.py`` from a site whose pages aren't served as Markdown
+    (docs.databricks.com); the article element is located and converted
+    the same way ``doc_sites.sync`` does, so a one-off ``refresh
+    --source-id`` and a site sync produce the same content hash.
+    """
+
+    def fetch(self, identifier: str) -> FetchResult:
+        import doc_sites  # local: doc_sites imports this module
+        url = identifier.strip()
+        site = doc_sites.Site(name="", index_url="", index_kind="sitemap", page_format="html",
+                              content_selector=doc_sites.selector_for(url))
+        pf = doc_sites.fetch_page(site, url)
+        if pf.status != "ok":
+            raise FetchError(f"{url}: {pf.status} {pf.error or pf.http_status or ''}".strip())
+        return FetchResult(url=url, content=pf.content, source_type="site_md")
+
+
 # ---- MCP-SDK-based fetchers (Context7, DeepWiki) -------------------------
 
 
@@ -652,6 +673,8 @@ def get_fetcher(source_type: str):
         return DeepWikiFetcher()
     if st == "web_md":
         return WebMarkdownFetcher()
+    if st == "web_html":
+        return WebHtmlFetcher()
     raise FetchError(f"no fetcher registered for source_type={source_type!r}")
 
 
@@ -685,6 +708,7 @@ class RefreshResult:
     snapshot_id: Optional[int] = None
     section_count: int = 0
     error: Optional[str] = None
+    new_section_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -816,20 +840,41 @@ def generate_section_embeddings(
     if not section_ids:
         return
     vectors = embedder.encode(contents, show_progress_bar=False)
-    for sid, vec in zip(section_ids, vectors):
-        # numpy → python list of floats so duckdb can bind to FLOAT[384]
-        as_list = [float(x) for x in vec]
+    write_section_embeddings(conn, section_ids, vectors)
+
+
+def write_section_embeddings(
+    conn: duckdb.DuckDBPyConnection, section_ids: Sequence[int], vectors: Any,
+) -> None:
+    """Bulk-insert (section_id, vector) rows into doc_section_embedding.
+
+    Through an Arrow table when pyarrow is available — executemany with
+    FLOAT[384] lists managed ~32 rows/s on the real catalog.
+    """
+    rows = [[float(x) for x in vec] for vec in vectors]
+    for as_list in rows:
         if len(as_list) != EMBEDDING_DIM:
             raise ValueError(
                 f"embedding dimension mismatch: got {len(as_list)}, expected {EMBEDDING_DIM}"
             )
-        conn.execute(
-            """
-            INSERT INTO doc_section_embedding (doc_section_id, embedding, model)
-            VALUES (?, ?, ?)
-            """,
-            [sid, as_list, EMBEDDING_MODEL],
-        )
+    ids = [int(i) for i in section_ids]
+    if not ids:
+        return
+    try:
+        import pyarrow as pa
+    except ImportError:
+        conn.executemany(
+            "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) "
+            "VALUES (?, ?, ?)", [[i, v, EMBEDDING_MODEL] for i, v in zip(ids, rows)])
+        return
+    _emb_batch = pa.table({  # noqa: F841 — referenced by name in the SQL below
+        "doc_section_id": pa.array(ids, type=pa.int64()),
+        "embedding": pa.array(rows, type=pa.list_(pa.float32(), EMBEDDING_DIM)),
+    })
+    conn.execute(
+        "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) "
+        "SELECT doc_section_id, embedding::FLOAT[384], ? FROM _emb_batch",
+        [EMBEDDING_MODEL])
 
 
 def rebuild_doc_section_fts_index(conn: duckdb.DuckDBPyConnection) -> None:
@@ -840,7 +885,7 @@ def rebuild_doc_section_fts_index(conn: duckdb.DuckDBPyConnection) -> None:
     O(total sections); fine at our scale.
     """
     conn.execute(
-        "PRAGMA create_fts_index('doc_section', 'doc_section_id', 'content', "
+        "PRAGMA create_fts_index('doc_section', 'doc_section_id', 'heading_text', 'content', "
         "stemmer='porter', stopwords='english', ignore='(\\\\.|[^a-z])+', "
         "strip_accents=1, lower=1, overwrite=1)"
     )
@@ -875,6 +920,7 @@ def refresh_one_source(
     *,
     fetcher: Optional[Any] = None,
     embedder: Optional[Any] = None,
+    rebuild_fts: bool = True,
 ) -> RefreshResult:
     """End-to-end pipeline for one doc_source: steps 1–6 of §6.2.
 
@@ -916,12 +962,241 @@ def refresh_one_source(
             doc_source_id=doc_source_id, status="no_change", snapshot_id=None,
         )
 
+    ingest = ingest_snapshot(
+        conn, doc_source_id, fetched,
+        snapshot_source_type=source_type, content_hash=content_hash,
+        embedder=embedder, rebuild_fts=rebuild_fts,
+    )
+    log.info(
+        "doc_source %d (%s): refreshed; snapshot_id=%d sections=%d "
+        "(kept %d, new %d, dropped %d) hash=%s",
+        doc_source_id, name, ingest.snapshot_id, ingest.section_count,
+        len(ingest.kept_section_ids), len(ingest.new_section_ids),
+        ingest.dropped_sections, content_hash[:8],
+    )
+    return RefreshResult(
+        doc_source_id=doc_source_id, status="refreshed",
+        snapshot_id=ingest.snapshot_id, section_count=ingest.section_count,
+        new_section_ids=ingest.new_section_ids,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Snapshot ingestion with supersession (freshness)
+# ---------------------------------------------------------------------------
+#
+# Search and every generator read doc_section joined to doc_snapshot with no
+# "latest snapshot" filter, so before 2026-11 a changed page left its old
+# sections searchable next to the new ones. ``ingest_snapshot`` now makes the
+# new snapshot the only one with sections:
+#
+#   * a new section whose (heading, body) matches a section of an earlier
+#     snapshot inherits that section's embedding and its extraction rows
+#     (concept_relation, procedure, alignment_edge, skill/generated
+#     provenance) — no re-embed, no re-extraction;
+#   * every other new section is embedded and reported in
+#     ``new_section_ids`` so extraction can be prepped for just those;
+#   * the earlier snapshots' remaining sections, and what was extracted from
+#     them, are deleted. doc_snapshot rows (content + hash) are kept as
+#     history for the currency report.
+#
+# Context7 is the exception: it answers queries with a sample of snippets,
+# so two snapshots rarely share a section even when nothing changed.
+# Superseding there would discard extraction on every refresh; its
+# snapshots keep accumulating as before.
+
+SAMPLED_SOURCE_TYPES = {"context7"}
+
+# Tables that point at doc_section ids without an FK (polymorphic
+# provenance). Repointed on carry-over so links survive a refresh.
+_PROVENANCE_REPOINTS = (
+    ("concept_relation", "source_id", "source_type = 'doc_section'"),
+    ("skill_source", "source_id", "source_type = 'doc_section'"),
+    ("generated_source", "source_id", "source_type = 'doc_section'"),
+)
+
+
+@dataclass
+class IngestResult:
+    snapshot_id: int
+    section_count: int
+    new_section_ids: list[int] = field(default_factory=list)
+    kept_section_ids: list[int] = field(default_factory=list)
+    dropped_sections: int = 0
+
+
+def _section_key(heading: Optional[str], content: Optional[str]) -> str:
+    return hashlib.sha256(
+        f"{heading or ''}\x00{content or ''}".encode("utf-8")
+    ).hexdigest()
+
+
+def _table_exists(conn: duckdb.DuckDBPyConnection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'main' AND table_name = ?", [table],
+    ).fetchone() is not None
+
+
+def _prior_sections(
+    conn: duckdb.DuckDBPyConnection, doc_source_id: int, exclude_snapshot_id: int,
+) -> list[tuple[int, Optional[str], Optional[str]]]:
+    return conn.execute(
+        """
+        SELECT s.doc_section_id, s.heading_text, s.content
+          FROM doc_section s
+          JOIN doc_snapshot sn ON sn.snapshot_id = s.snapshot_id
+         WHERE sn.doc_source_id = ? AND sn.snapshot_id <> ?
+         ORDER BY sn.retrieved_at DESC, sn.snapshot_id DESC, s.doc_section_id
+        """,
+        [doc_source_id, exclude_snapshot_id],
+    ).fetchall()
+
+
+def _carry_over_sections(
+    conn: duckdb.DuckDBPyConnection, pairs: Sequence[tuple[int, int]],
+    *, copy_embeddings: bool = True,
+) -> None:
+    """Move embeddings + extraction provenance from old to new section ids.
+
+    Set-based: one statement per table over a temp old→new map (the
+    per-section version spent ~0.15 s a section on a large catalog).
+    ``copy_embeddings=False`` re-points provenance only, for callers that
+    re-embed the carried sections.
+    """
+    if not pairs:
+        return
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _carry (old_id BIGINT, new_id BIGINT)")
+    conn.execute("DELETE FROM _carry")
+    conn.executemany("INSERT INTO _carry VALUES (?, ?)", [list(p) for p in pairs])
+    if copy_embeddings:
+        conn.execute(
+            "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) "
+            "SELECT m.new_id, e.embedding, e.model FROM doc_section_embedding e "
+            "JOIN _carry m ON e.doc_section_id = m.old_id")
+    # procedure: indexed source_id on an FK-referenced row — lift the
+    # procedure_concept links, update, put them back (autocommit only; see
+    # ingest_snapshot).
+    links = conn.execute(
+        "SELECT pc.procedure_id, pc.concept_id FROM procedure_concept pc "
+        "JOIN procedure p ON p.procedure_id = pc.procedure_id "
+        "JOIN _carry m ON p.source_type = 'doc_section' AND p.source_id = m.old_id").fetchall()
+    if links:
+        conn.execute(
+            "DELETE FROM procedure_concept WHERE procedure_id IN (SELECT p.procedure_id "
+            "FROM procedure p JOIN _carry m ON p.source_type = 'doc_section' "
+            "AND p.source_id = m.old_id)")
+    conn.execute(
+        "UPDATE procedure SET source_id = m.new_id FROM _carry m "
+        "WHERE procedure.source_type = 'doc_section' AND procedure.source_id = m.old_id")
+    if links:
+        conn.executemany("INSERT INTO procedure_concept (procedure_id, concept_id) VALUES (?, ?)",
+                         [list(l) for l in links])
+    for table, col, cond in _PROVENANCE_REPOINTS:
+        if _table_exists(conn, table):
+            conn.execute(
+                f"UPDATE {table} SET {col} = m.new_id FROM _carry m "
+                f"WHERE {table}.{cond} AND {table}.{col} = m.old_id")
+    if _table_exists(conn, "alignment_edge"):
+        for col in ("from_doc_section_id", "to_doc_section_id"):
+            conn.execute(
+                f"UPDATE alignment_edge SET {col} = m.new_id FROM _carry m "
+                f"WHERE alignment_edge.{col} = m.old_id")
+    conn.execute("DELETE FROM _carry")
+
+
+def purge_sections(conn: duckdb.DuckDBPyConnection, section_ids: Sequence[int]) -> int:
+    """Delete doc_section rows and everything extracted from them.
+
+    Order matters for the FKs: alignment edges and embeddings first, then
+    procedure_concept → procedure, then the sections. doc_section_embedding
+    has no HNSW index, so these deletes are safe (unlike chapter_embedding).
+    Concepts themselves stay — other sources may reference them.
+    """
+    ids = [int(i) for i in section_ids]
+    if not ids:
+        return 0
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        ph = ",".join("?" * len(chunk))
+        if _table_exists(conn, "alignment_edge"):
+            conn.execute(
+                f"DELETE FROM alignment_edge WHERE from_doc_section_id IN ({ph}) "
+                f"OR to_doc_section_id IN ({ph})", chunk + chunk,
+            )
+        conn.execute(
+            f"DELETE FROM concept_relation WHERE source_type = 'doc_section' "
+            f"AND source_id IN ({ph})", chunk,
+        )
+        proc_ids = [r[0] for r in conn.execute(
+            f"SELECT procedure_id FROM procedure WHERE source_type = 'doc_section' "
+            f"AND source_id IN ({ph})", chunk,
+        ).fetchall()]
+        if proc_ids:
+            pph = ",".join("?" * len(proc_ids))
+            conn.execute(f"DELETE FROM procedure_concept WHERE procedure_id IN ({pph})", proc_ids)
+            conn.execute(f"DELETE FROM procedure WHERE procedure_id IN ({pph})", proc_ids)
+        conn.execute(f"DELETE FROM doc_section_embedding WHERE doc_section_id IN ({ph})", chunk)
+        conn.execute(f"DELETE FROM doc_section WHERE doc_section_id IN ({ph})", chunk)
+    return len(ids)
+
+
+def retire_source_sections(conn: duckdb.DuckDBPyConnection, doc_source_id: int) -> int:
+    """Remove every section of a source (page removed upstream). Snapshots stay."""
+    ids = [r[0] for r in conn.execute(
+        "SELECT s.doc_section_id FROM doc_section s "
+        "JOIN doc_snapshot sn ON sn.snapshot_id = s.snapshot_id "
+        "WHERE sn.doc_source_id = ?", [doc_source_id],
+    ).fetchall()]
+    return purge_sections(conn, ids)
+
+
+def _heading_paths(flat: list[_FlatSection]) -> list[list[str]]:
+    paths: list[list[str]] = []
+    for fs in flat:
+        parent = paths[fs.parent_index] if fs.parent_index >= 0 else []
+        paths.append(parent + ([fs.heading_text] if fs.heading_text else []))
+    return paths
+
+
+def section_embedding_text(page_name: Optional[str], heading_path: list[str],
+                           content: str) -> str:
+    """'Page › H2 › H3' line + body — what a doc-site section is embedded as."""
+    trail = [p for p in ([page_name] if page_name else []) + heading_path if p]
+    # The page's own H1 usually repeats the page name.
+    deduped = [p for i, p in enumerate(trail) if i == 0 or p not in trail[i - 1]]
+    return (" › ".join(deduped) + "\n\n" + content) if deduped else content
+
+
+def ingest_snapshot(
+    conn: duckdb.DuckDBPyConnection,
+    doc_source_id: int,
+    fetched: FetchResult,
+    *,
+    snapshot_source_type: str,
+    content_hash: str,
+    embedder: Any,
+    rebuild_fts: bool = True,
+    supersede: Optional[bool] = None,
+    embed_context: bool = False,
+    reembed: bool = False,
+) -> IngestResult:
+    """Steps 3–6 of §6.2 for already-fetched content, with supersession.
+
+    ``supersede`` defaults to True except for sampled source types
+    (Context7). Pass ``rebuild_fts=False`` when ingesting many sources in a
+    row and rebuild once at the end — the BM25 index is rebuilt over the
+    whole doc_section table each time.
+    """
+    if supersede is None:
+        supersede = snapshot_source_type.lower() not in SAMPLED_SOURCE_TYPES
+
     # Step 3: persist snapshot.
     snapshot_id = persist_snapshot(
         conn,
         doc_source_id=doc_source_id,
         fetched=fetched,
-        snapshot_source_type=source_type,
+        snapshot_source_type=snapshot_source_type,
         content_hash=content_hash,
     )
 
@@ -933,27 +1208,62 @@ def refresh_one_source(
         "content": fetched.content,
     })
     flat = flatten_section_tree(sections)
-
-    # Step 4b: persist doc_section rows.
     section_ids = persist_sections(conn, snapshot_id, flat)
 
-    # Step 5: per-section embeddings.
-    contents = [fs.content for fs in flat]
+    # Step 4c: carry over unchanged sections from earlier snapshots.
+    kept: list[int] = []
+    to_embed: list[tuple[int, str]] = []
+    prior = _prior_sections(conn, doc_source_id, snapshot_id) if supersede else []
+    by_key: dict[str, list[int]] = {}
+    for old_id, heading, content in prior:
+        by_key.setdefault(_section_key(heading, content), []).append(int(old_id))
+    pairs: list[tuple[int, int]] = []
+    for sid, fs in zip(section_ids, flat):
+        candidates = by_key.get(_section_key(fs.heading_text, fs.content))
+        if candidates:
+            pairs.append((candidates.pop(0), sid))
+            kept.append(sid)
+            if reembed:
+                to_embed.append((sid, fs.content))
+        else:
+            to_embed.append((sid, fs.content))
+    _carry_over_sections(conn, pairs, copy_embeddings=not reembed)
+
+    # Step 5: embed only what's new. With ``embed_context`` the text
+    # embedded is "page › heading path" + body, so a section titled
+    # "Parameters" or a table part "(part 3/5)" still says what it's about.
+    # The stored content is unchanged; only the vector sees the prefix.
+    if embed_context and to_embed:
+        name_row = conn.execute("SELECT name FROM doc_source WHERE doc_source_id = ?",
+                                [doc_source_id]).fetchone()
+        paths = _heading_paths(flat)
+        pos = {sid: i for i, sid in enumerate(section_ids)}
+        texts = [section_embedding_text(name_row[0] if name_row else None,
+                                        paths[pos[sid]], c) for sid, c in to_embed]
+    else:
+        texts = [c for _, c in to_embed]
     generate_section_embeddings(
-        conn, section_ids=section_ids, contents=contents, embedder=embedder,
+        conn,
+        section_ids=[sid for sid, _ in to_embed],
+        contents=texts,
+        embedder=embedder,
     )
+
+    # Step 5b: drop what the new snapshot superseded.
+    dropped = purge_sections(conn, [r[0] for r in prior]) if supersede else 0
 
     # Step 6: rebuild FTS index over doc_section.
-    rebuild_doc_section_fts_index(conn)
+    if rebuild_fts:
+        rebuild_doc_section_fts_index(conn)
 
     _update_source_metadata(conn, doc_source_id, content_changed=True)
-    log.info(
-        "doc_source %d (%s): refreshed; snapshot_id=%d sections=%d hash=%s",
-        doc_source_id, name, snapshot_id, len(section_ids), content_hash[:8],
-    )
-    return RefreshResult(
-        doc_source_id=doc_source_id, status="refreshed",
-        snapshot_id=snapshot_id, section_count=len(section_ids),
+    kept_set = set(kept)
+    return IngestResult(
+        snapshot_id=snapshot_id,
+        section_count=len(section_ids),
+        new_section_ids=[sid for sid, _ in to_embed if sid not in kept_set],
+        kept_section_ids=kept,
+        dropped_sections=dropped,
     )
 
 
@@ -1106,8 +1416,15 @@ def prep_extraction(
     conn: duckdb.DuckDBPyConnection,
     snapshot_id: int,
     output_dir: Path,
+    *,
+    section_ids: Optional[Sequence[int]] = None,
 ) -> PrepManifest:
     """Emit one prompt per doc_section + a manifest, ready for sub-agent dispatch.
+
+    ``section_ids`` limits the manifest to those sections — a refresh passes
+    the sections that weren't carried over, so unchanged sections keep
+    their extraction and aren't re-prompted. An empty list writes an empty
+    manifest.
 
     Idempotent on repeat calls: existing files are overwritten, so a
     re-prep of the same snapshot reproduces the same manifest deterministically.
@@ -1128,6 +1445,9 @@ def prep_extraction(
         """,
         [snapshot_id],
     ).fetchall()
+    if section_ids is not None:
+        wanted = {int(i) for i in section_ids}
+        rows = [r for r in rows if int(r[0]) in wanted]
 
     sections: list[SectionEntry] = []
     for sid, snap_id, heading, content, src_id, src_name in rows:
@@ -2152,11 +2472,17 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         help="Refresh exactly one doc_source by id.")
     target.add_argument("--all", action="store_true",
                         help="Refresh every doc_source row.")
+    target.add_argument("--stale", action="store_true",
+                        help="sources whose last refresh is older than refresh_ttl_days")
     target.add_argument("--tier", choices=("hot", "warm", "cool"),
                         help="Refresh sources with the given priority_tier.")
     p_refresh.add_argument("--output-dir", type=Path, default=None,
                            help="Where to emit the extraction manifest "
                                 "(default: data/refresh/<UTC-timestamp>).")
+    p_refresh.add_argument("--domain",
+                           help="only sources whose identifier contains this text")
+    p_refresh.add_argument("--dry-run", action="store_true",
+                           help="list the sources that would be refreshed; write nothing")
     p_refresh.add_argument("--no-extract", action="store_true",
                            help="Skip writing prompts for steps 7-9 "
                                 "(Phase 4b LaunchAgent path: cron at 3am).")
@@ -2208,21 +2534,35 @@ def _select_doc_source_ids(
     conn: duckdb.DuckDBPyConnection,
     *,
     source_id: Optional[int], all_sources: bool, tier: Optional[str],
+    stale: bool = False, domain: Optional[str] = None,
 ) -> list[int]:
+    """Resolve the refresh target to doc_source ids.
+
+    Pages that belong to a doc site (doc_sites.py) are left out of
+    --all / --tier / --stale: ``doc_sites.py sync`` refreshes them with
+    conditional GETs and handles removed pages. --source-id still works
+    on one of them.
+    """
     if source_id is not None:
         return [source_id]
-    if all_sources:
-        rows = conn.execute(
-            "SELECT doc_source_id FROM doc_source ORDER BY doc_source_id"
-        ).fetchall()
-        return [int(r[0]) for r in rows]
+    if not (all_sources or tier or stale):
+        return []
+    sql = "SELECT doc_source_id FROM doc_source d WHERE 1=1"
+    params: list[Any] = []
     if tier:
-        rows = conn.execute(
-            "SELECT doc_source_id FROM doc_source WHERE priority_tier = ? "
-            "ORDER BY doc_source_id", [tier],
-        ).fetchall()
-        return [int(r[0]) for r in rows]
-    return []
+        sql += " AND priority_tier = ?"
+        params.append(tier)
+    if stale:
+        sql += (" AND (last_refresh_at IS NULL OR last_refresh_at < "
+                "CURRENT_TIMESTAMP - to_days(COALESCE(refresh_ttl_days, 14)))")
+    if domain:
+        sql += " AND identifier LIKE ?"
+        params.append(f"%{domain}%")
+    if _table_exists(conn, "doc_fetch_state"):
+        sql += (" AND doc_source_id NOT IN (SELECT doc_source_id FROM doc_fetch_state "
+                "WHERE site_id IS NOT NULL)")
+    rows = conn.execute(sql + " ORDER BY doc_source_id", params).fetchall()
+    return [int(r[0]) for r in rows]
 
 
 def _default_output_dir() -> Path:
@@ -2233,23 +2573,45 @@ def _default_output_dir() -> Path:
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
     output_dir = args.output_dir or _default_output_dir()
+    if args.dry_run:
+        conn = duckdb.connect(str(args.catalog), read_only=True)
+        try:
+            ids = _select_doc_source_ids(
+                conn, source_id=args.source_id, all_sources=args.all, tier=args.tier,
+                stale=args.stale, domain=args.domain,
+            )
+            for dsid in ids:
+                r = conn.execute(
+                    "SELECT source_type, last_refresh_at, refresh_ttl_days, name "
+                    "FROM doc_source WHERE doc_source_id = ?", [dsid]).fetchone()
+                if r:
+                    print(f"{dsid:>6}  {r[0]:<11} {str(r[1] or 'never')[:16]:<16} "
+                          f"ttl={r[2]}  {r[3]}")
+            print(f"{len(ids)} source(s) would be refreshed")
+        finally:
+            conn.close()
+        return 0
     conn = open_writer(args.catalog, auto_stop=not args.no_auto_stop)
     try:
         ids = _select_doc_source_ids(
             conn, source_id=args.source_id, all_sources=args.all, tier=args.tier,
+            stale=args.stale, domain=args.domain,
         )
         if not ids:
             log.warning("no doc_source rows match the selection — nothing to do")
             return 0
 
         embedder = _load_default_embedder()
-        refreshed_snapshot_ids: list[int] = []
+        refreshed: list[tuple[int, list[int]]] = []
         for sid in ids:
-            res = refresh_one_source(conn, sid, embedder=embedder)
+            res = refresh_one_source(conn, sid, embedder=embedder, rebuild_fts=False)
             if res.status == "refreshed" and res.snapshot_id is not None:
-                refreshed_snapshot_ids.append(res.snapshot_id)
+                refreshed.append((res.snapshot_id, res.new_section_ids))
             elif res.status == "error":
                 log.warning("doc_source %d error: %s", sid, res.error)
+        if refreshed:
+            rebuild_doc_section_fts_index(conn)
+        refreshed_snapshot_ids = [snap for snap, _ in refreshed]
 
         if args.no_extract:
             log.info("--no-extract: skipping manifest emission "
@@ -2260,9 +2622,11 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
         # Emit one combined manifest covering every newly-refreshed snapshot.
         # Each snapshot writes its own subdir so process can ingest one snapshot
         # at a time if desired.
-        for snap_id in refreshed_snapshot_ids:
+        for snap_id, new_ids in refreshed:
+            if not new_ids:
+                continue  # every section carried over its extraction
             sub_dir = Path(output_dir) / f"snapshot_{snap_id}"
-            prep_extraction(conn, snap_id, sub_dir)
+            prep_extraction(conn, snap_id, sub_dir, section_ids=new_ids)
         log.info("manifests written under %s", output_dir)
         return 0
     finally:
