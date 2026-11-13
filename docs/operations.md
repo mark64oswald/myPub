@@ -31,7 +31,11 @@ Two kinds of live-doc source:
 - **Doc sites** (`doc_sites.py`): a whole docs site enumerated from its
   sitemap.xml or llms.txt, one `doc_source` per page. Presets:
   `databricks` (docs.databricks.com/aws/en, HTML, ~6.4k pages) and
-  `claude-code` (code.claude.com/docs, Markdown, ~200 pages). Register
+  `claude-code` (code.claude.com/docs, Markdown, ~200 pages), plus the other
+  Claude developer sites: `claude-platform` (platform.claude.com/docs/en,
+  ~916 pages incl. the API reference), `claude-docs` (claude.com/docs,
+  developer subset, ~70 pages), `mcp` (modelcontextprotocol.io, current spec
+  revision only) and `agent-skills` (agentskills.io). Register
   with `add-site --preset NAME`. A sync re-reads the index, registers new
   pages, sends conditional GETs (ETag / Last-Modified), compares a hash of
   the *extracted text* (Databricks redeploys daily, so HTTP dates alone
