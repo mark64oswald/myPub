@@ -579,6 +579,10 @@ def test_claude_developer_presets_scope():
     assert mcp.wants("https://modelcontextprotocol.io/specification/2026-07-28/server/tools")
     assert not mcp.wants("https://modelcontextprotocol.io/specification/2025-06-18/server/tools")
     assert not mcp.wants("https://modelcontextprotocol.io/specification/draft/server/tools")
+    assert not mcp.wants("https://modelcontextprotocol.io/docs/2025-11-25/learn/architecture.md")
+    assert not mcp.wants("https://modelcontextprotocol.io/docs/draft/learn/architecture.md")
+    assert mcp.wants("https://modelcontextprotocol.io/docs/2026-07-28/learn/architecture.md")
+    assert mcp.wants("https://modelcontextprotocol.io/seps/2575-stateless-mcp.md")
     assert mcp.fetch_url("https://modelcontextprotocol.io/docs/learn/architecture") \
         == "https://modelcontextprotocol.io/docs/learn/architecture.md"
     assert doc_sites._page_name(P["claude-platform"], "Create a Message",
