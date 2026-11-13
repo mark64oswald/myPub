@@ -264,7 +264,7 @@ PRESETS: dict[str, Site] = {
         refresh_ttl_days=7,
     ),
     # modelcontextprotocol.io: MCP docs, extensions and the specification.
-    # Only the current spec revision — older dated revisions and the draft
+    # Only the current revision (spec and docs) — older dated revisions and the draft
     # would put three or four near-copies of every spec page in search.
     # When a new revision ships, add the old one to the excludes.
     "mcp": Site(
@@ -274,8 +274,9 @@ PRESETS: dict[str, Site] = {
         page_format="markdown",
         md_url_suffix=".md",
         include_patterns=["https://modelcontextprotocol.io/*"],
-        exclude_patterns=["*/specification/2024-*", "*/specification/2025-*",
-                          "*/specification/draft*", "*/community/*"],
+        # Both specification/ and docs/ are versioned by revision date.
+        exclude_patterns=[f"*/{tree}/{v}*" for tree in ("specification", "docs")
+                          for v in ("2024-", "2025-", "draft")] + ["*/community/*"],
         name_prefix="MCP",
         authority_score=0.85,
         refresh_ttl_days=14,
