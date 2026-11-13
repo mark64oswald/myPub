@@ -412,6 +412,29 @@ def page_kind_factor(kind: Optional[str], intents: Any) -> float:
     return float(_PAGE_KINDS[kind]["factor"])
 
 
+YEAR_MISMATCH_FACTOR = 0.9
+_YEAR = re.compile(r"\b(20\d\d)\b")
+
+
+def query_years(query: Optional[str]) -> frozenset[str]:
+    return frozenset(_YEAR.findall(query or ""))
+
+
+def year_factor(years: Any, title: Optional[str]) -> float:
+    """Scale down a result dated to a different year than the query asks for.
+
+    Only when the query names a year and the result's title names years,
+    none of them the one asked for ("Changes in 2024.40" for a "November
+    2025" query). Undated titles are left alone.
+    """
+    if not years or not title:
+        return 1.0
+    found = set(_YEAR.findall(title))
+    if found and not (found & set(years)):
+        return YEAR_MISMATCH_FACTOR
+    return 1.0
+
+
 def query_has_release_intent(query: Optional[str]) -> bool:
     """True when the query asks about releases, versions or changes."""
     return "release_notes" in query_intents(query)
@@ -716,6 +739,9 @@ def compute_components_for_result(
         full_title_match=bool(result.get("full_title_match")),
     )
     relevance *= page_kind_factor(kind_of_page, result.get("query_intents"))
+    title = " ".join(str(t) for t in (result.get("doc_source_name"), result.get("heading_text"),
+                                     result.get("book_title"), result.get("chapter_title")) if t)
+    relevance *= year_factor(result.get("query_years"), title)
 
     return ComponentScores(
         recency=recency_score(age_days=age),

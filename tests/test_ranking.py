@@ -832,3 +832,14 @@ def test_page_kind_and_intents():
     assert f(None, frozenset()) == 1.0
     assert f("api_reference", frozenset()) == ranking.API_REFERENCE_RELEVANCE_FACTOR
     assert f("api_reference", frozenset({"api_reference"})) == 1.0
+
+
+
+def test_year_factor():
+    yf = ranking.year_factor
+    ys = ranking.query_years("what's new in Databricks SQL November 2025")
+    assert ys == frozenset({"2025"})
+    assert yf(ys, "Databricks SQL release notes / Changes in 2024.40") == ranking.YEAR_MISMATCH_FACTOR
+    assert yf(ys, "Databricks SQL release notes / Changes in 2025.35") == 1.0
+    assert yf(ys, "Databricks SQL release notes") == 1.0
+    assert yf(frozenset(), "Changes in 2024.40") == 1.0

@@ -1206,8 +1206,10 @@ def search_chapters(
     # weight profile.
     weights = ranking.WEIGHT_PROFILES[weight_profile]
     intents = ranking.query_intents(query)
+    years = ranking.query_years(query)
     for r in merged:
         r["query_intents"] = intents
+        r["query_years"] = years
 
     if mode == "generation":
         gen_ranker = ranking.GenerationRanker(_CONN, weights, top_k=limit)
