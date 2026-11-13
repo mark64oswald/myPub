@@ -588,3 +588,25 @@ def test_claude_developer_presets_scope():
     assert doc_sites._page_name(P["claude-platform"], "Create a Message",
                                 "https://platform.claude.com/docs/en/api/messages/create.md") \
         == "Claude API: Create a Message"
+
+
+def test_front_matter_is_not_a_heading():
+    import sectionizer
+    page = ("---\ntitle: Tool use with prompt caching\nurl: https://x.test/p.md\n"
+            "description: Cache tool definitions across turns.\n---\n\n"
+            f"Intro paragraph. {BODY}\n\n## Details\n\n{BODY}\n")
+    for st in ("site_md", "markdown"):
+        secs = sectionizer.sectionize({"source_type": st, "content": page})
+        flat, stack = [], list(secs)
+        while stack:
+            x = stack.pop(0)
+            flat.append(x)
+            stack[:0] = x.children
+        heads = [x.heading_text for x in flat]
+        assert heads[0] == "Tool use with prompt caching", (st, heads)
+        assert not any(h and "title:" in h for h in heads)
+        assert "Cache tool definitions" in flat[0].content
+    # an existing H1 is kept; the description goes under it
+    out = sectionizer.strip_front_matter("---\ntitle: T\ndescription: D\n---\n# Real\n\nbody\n")
+    assert out.startswith("# Real\n\nD\n\nbody")
+    assert sectionizer.strip_front_matter("no front matter\n---\n") == "no front matter\n---\n"
