@@ -393,7 +393,26 @@ def _clean_article(el) -> None:
     # Feature tables mark support with check-icon images; keep the meaning.
     for img in el.find_all("img"):
         alt = (img.get("alt") or "").strip()
-        img.replace_with("✓" if re.search(r"check|yes", alt, re.I) else (alt and f"[{alt}]"))
+        if re.search(r"check|yes", alt, re.I):
+            img.replace_with("✓")
+        elif re.search(r"red x|\bx icon|cross|not supported|\bno\b", alt, re.I):
+            img.replace_with("✗")
+        else:
+            img.replace_with(alt and f"[{alt}]")
+    # Prism renders code one <div class="token-line"> per line with <br>;
+    # get_text() would fuse the lines.
+    for pre in el.find_all("pre"):
+        for br in pre.find_all("br"):
+            br.replace_with("\n")
+        for line in pre.select("div.token-line, span.token-line"):
+            if not line.get_text().endswith("\n"):
+                line.append("\n")
+    # html_doc emits an <li> with its full text, nested lists included, and
+    # then each nested item again. Lift nested lists out to follow their
+    # parent item (deepest first) so every item is emitted once.
+    for li in reversed(el.find_all("li")):
+        for sub in reversed(li.find_all(["ul", "ol"], recursive=False)):
+            li.insert_after(sub.extract())
 
 
 def _main_html(html: str, selector: Optional[str]) -> tuple[str, Optional[str]]:
@@ -404,7 +423,13 @@ def _main_html(html: str, selector: Optional[str]) -> tuple[str, Optional[str]]:
     the article body, not in it. It's metadata, not part of the hash.
     """
     from bs4 import BeautifulSoup
-    soup = BeautifulSoup(html, "html.parser")
+    # lxml, not html.parser: minified docs HTML omits optional end tags
+    # (</tr>, </td>, </p>), and html.parser nests every row inside the
+    # previous one, which turns tables into run-on text.
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:  # bs4.FeatureNotFound when lxml isn't installed
+        soup = BeautifulSoup(html, "html.parser")
     t = soup.select_one("time[itemprop=dateModified][datetime]") or \
         soup.select_one(".theme-last-updated time[datetime]")
     content_date = t.get("datetime") if t else None
@@ -424,9 +449,26 @@ def html_page_to_markdown(html: str, selector: Optional[str] = None,
     title_el = BeautifulSoup(html, "html.parser").title
     page_title = " ".join(title_el.get_text(" ", strip=True).split()) if title_el else ""
     body, content_date = _main_html(html, selector)
-    _, md = html_doc.html_to_markdown(body)
-    md = md.replace("\u200b", "")
+    _, md = html_doc.html_to_markdown(body, max_cell=None)
+    md = _tidy_spacing(md.replace("\u200b", ""))
     return page_title, md, content_date
+
+
+_SPACE_BEFORE_PUNCT = re.compile(r"(?<=\S) +([.,;:!?)\]])(?=\s|$)")
+_SPACE_AFTER_OPEN = re.compile(r"([(\[]) +(?=\S)")
+
+
+def _tidy_spacing(md: str) -> str:
+    """Undo the space html_doc puts before punctuation after inline elements
+    ("in Databricks ." → "in Databricks."), outside code fences only."""
+    out, in_fence = [], False
+    for line in md.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence:
+            line = _SPACE_AFTER_OPEN.sub(r"\1", _SPACE_BEFORE_PUNCT.sub(r"\1", line))
+        out.append(line)
+    return "\n".join(out)
 
 
 def markdown_title(md: str) -> Optional[str]:
@@ -620,9 +662,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# A site section that is its own product gets its own name prefix.
+PREFIX_BY_URL = {
+    "https://code.claude.com/docs/en/agent-sdk/": "Claude Agent SDK",
+}
+
+
 def _page_name(site: Site, title: Optional[str], url: str) -> str:
     label = title or urlparse(url).path.rstrip("/").rsplit("/", 1)[-1] or url
-    return f"{site.name_prefix}: {label}" if site.name_prefix else label
+    prefix = next((p for u, p in PREFIX_BY_URL.items() if url.startswith(u)), site.name_prefix)
+    return f"{prefix}: {label}" if prefix else label
 
 
 def register_page(conn: duckdb.DuckDBPyConnection, site: Site, page_url: str) -> int:

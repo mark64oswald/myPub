@@ -213,6 +213,28 @@ DOCUSAURUS = """<html><head><title>SELECT | Databricks</title></head><body>
 </article><footer>legal</footer></body></html>"""
 
 
+MINIFIED = """<html><body><article><div class="theme-doc-markdown">
+<h1>Productboard</h1><p>Use <code>SELECT</code> in <a href="#">Databricks</a> .
+<table><thead><tr><th>Feature<th>Availability</thead>
+<tbody><tr><td>UI-based pipeline authoring<td><img alt="Green check icon"> Supported
+<tr><td>API-based pipeline authoring<td><img alt="Red X icon"> Not supported
+<tr><td>Long<td>""" + "x" * 300 + """</tbody></table>
+<pre><code><div class="token-line">SELECT a<br></div><div class="token-line">FROM t<br></div><div class="token-line">WHERE x</div></code></pre>
+<ul><li>can be any one of:<ul><li>a timestamp</li><li>a date</li></ul></li><li>last</li></ul>
+</div></article></body></html>"""
+
+
+def test_minified_html_tables_code_and_nested_lists():
+    _, md, _ = doc_sites.html_page_to_markdown(MINIFIED, "div.theme-doc-markdown")
+    assert "| UI-based pipeline authoring | ✓ Supported |" in md
+    assert "| API-based pipeline authoring | ✗ Not supported |" in md
+    assert "x" * 300 in md                      # cells are not truncated
+    assert "SELECT a\nFROM t\nWHERE x" in md   # code keeps its lines
+    assert md.count("a timestamp") == 1 and md.count("a date") == 1
+    assert "- can be any one of:" in md
+    assert "Databricks." in md and "Databricks ." not in md
+
+
 def test_docusaurus_article_is_cleaned():
     title, md, content_date = doc_sites.html_page_to_markdown(
         DOCUSAURUS, "div.theme-doc-markdown")

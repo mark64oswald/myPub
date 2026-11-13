@@ -46,15 +46,15 @@ def _text(el) -> str:
     return " ".join(el.get_text(" ", strip=True).split())
 
 
-def _cell(el) -> str:
+def _cell(el, max_cell: Optional[int] = MAX_CELL) -> str:
     s = _text(el).replace("|", "\\|")
-    return s if len(s) <= MAX_CELL else s[: MAX_CELL - 1] + "…"
+    return s if max_cell is None or len(s) <= max_cell else s[: max_cell - 1] + "…"
 
 
-def _table(tbl) -> list[str]:
+def _table(tbl, max_cell: Optional[int] = MAX_CELL) -> list[str]:
     rows = []
     for tr in tbl.find_all("tr"):
-        cells = [_cell(c) for c in tr.find_all(["th", "td"], recursive=False)]
+        cells = [_cell(c, max_cell) for c in tr.find_all(["th", "td"], recursive=False)]
         if any(cells):
             rows.append(cells)
     if not rows:
@@ -67,8 +67,11 @@ def _table(tbl) -> list[str]:
     return ([f"**{_text(caption)}**", ""] if caption else []) + out + [""]
 
 
-def html_to_markdown(html: str) -> tuple[str, str]:
-    """Return (title, markdown) for one HTML page."""
+def html_to_markdown(html: str, *, max_cell: Optional[int] = MAX_CELL) -> tuple[str, str]:
+    """Return (title, markdown) for one HTML page.
+
+    ``max_cell`` truncates long table cells (spec tables); None keeps them whole.
+    """
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
@@ -84,7 +87,7 @@ def html_to_markdown(html: str) -> tuple[str, str]:
             continue
         if el.name == "table":
             if not el.find_parent("table"):
-                lines += _table(el)
+                lines += _table(el, max_cell)
             continue
         if el.name in ("p", "li", "dd", "dt") and el.find_parent(["li", "dd"]) and el.name != "li":
             continue
