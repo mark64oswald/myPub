@@ -467,3 +467,41 @@ def test_sync_adopts_seeded_pages_and_retires_ones_gone_from_the_index(conn):
         "SELECT DISTINCT sn.doc_source_id FROM doc_section s JOIN doc_snapshot sn "
         "USING (snapshot_id)").fetchall()}
     assert 81 not in live and 80 in live and 82 in live
+
+
+def test_site_sectionizer_mintlify_tables_and_link_tails():
+    from sectionizer import sectionize
+    rows = "\n".join(f"| VAR_{i} | {'p' * 60} |" for i in range(200))
+    md = (f"# Env vars\n\n## Variables\n\n| Variable | Purpose |\n| :- | :- |\n{rows}\n\n"
+          "## Additional resources\n\n- [Hooks](https://x.test/hooks)\n- [Settings](https://x.test/s)\n\n"
+          "## Next steps\n\nRead the hooks guide, then try a PreToolUse hook.\n")
+    flat = refresh_docs.flatten_section_tree(sectionize({"source_type": "site_md", "content": md}))
+    parts = [f for f in flat if (f.heading_text or "").startswith("Variables (part")]
+    assert len(parts) >= 3
+    assert all(f.content.startswith("| Variable | Purpose |\n| :- | :- |") for f in parts)
+    heads = [f.heading_text for f in flat]
+    assert "Additional resources" not in heads   # link-only tail dropped
+    assert "Next steps" in heads                 # has prose: kept
+
+
+def test_embedding_text_carries_page_and_heading_path(conn):
+    assert refresh_docs.section_embedding_text(
+        "Databricks: Audit log reference", ["Audit log reference", "Workspace events",
+                                            "Genie (part 2/4)"], "| a | b |") == (
+        "Databricks: Audit log reference › Workspace events › Genie (part 2/4)\n\n| a | b |")
+    dsid = _source(conn)
+    conn.execute("UPDATE doc_source SET name = 'T: Page' WHERE doc_source_id = ?", [dsid])
+
+    class Capture(FakeEmbedder):
+        def encode(self, texts, *, show_progress_bar=False):
+            self.seen = list(texts)
+            return super().encode(texts)
+
+    emb = Capture()
+    fetched = refresh_docs.FetchResult(url="u", content=V1, source_type="site_md")
+    refresh_docs.ingest_snapshot(conn, dsid, fetched, snapshot_source_type="web_md",
+                                 content_hash="h", embedder=emb, rebuild_fts=False,
+                                 embed_context=True)
+    assert "T: Page › Title › Beta\n\nbeta body" in emb.seen
+    stored = [r[0] for r in conn.execute("SELECT content FROM doc_section").fetchall()]
+    assert "beta body" in stored               # stored content has no prefix

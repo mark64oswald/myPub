@@ -840,6 +840,7 @@ def generate_section_embeddings(
     if not section_ids:
         return
     vectors = embedder.encode(contents, show_progress_bar=False)
+    rows = []
     for sid, vec in zip(section_ids, vectors):
         # numpy → python list of floats so duckdb can bind to FLOAT[384]
         as_list = [float(x) for x in vec]
@@ -847,13 +848,11 @@ def generate_section_embeddings(
             raise ValueError(
                 f"embedding dimension mismatch: got {len(as_list)}, expected {EMBEDDING_DIM}"
             )
-        conn.execute(
-            """
-            INSERT INTO doc_section_embedding (doc_section_id, embedding, model)
-            VALUES (?, ?, ?)
-            """,
-            [sid, as_list, EMBEDDING_MODEL],
-        )
+        rows.append([sid, as_list, EMBEDDING_MODEL])
+    conn.executemany(
+        "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) VALUES (?, ?, ?)",
+        rows,
+    )
 
 
 def rebuild_doc_section_fts_index(conn: duckdb.DuckDBPyConnection) -> None:
@@ -1131,6 +1130,23 @@ def retire_source_sections(conn: duckdb.DuckDBPyConnection, doc_source_id: int) 
     return purge_sections(conn, ids)
 
 
+def _heading_paths(flat: list[_FlatSection]) -> list[list[str]]:
+    paths: list[list[str]] = []
+    for fs in flat:
+        parent = paths[fs.parent_index] if fs.parent_index >= 0 else []
+        paths.append(parent + ([fs.heading_text] if fs.heading_text else []))
+    return paths
+
+
+def section_embedding_text(page_name: Optional[str], heading_path: list[str],
+                           content: str) -> str:
+    """'Page › H2 › H3' line + body — what a doc-site section is embedded as."""
+    trail = [p for p in ([page_name] if page_name else []) + heading_path if p]
+    # The page's own H1 usually repeats the page name.
+    deduped = [p for i, p in enumerate(trail) if i == 0 or p not in trail[i - 1]]
+    return (" › ".join(deduped) + "\n\n" + content) if deduped else content
+
+
 def ingest_snapshot(
     conn: duckdb.DuckDBPyConnection,
     doc_source_id: int,
@@ -1141,6 +1157,7 @@ def ingest_snapshot(
     embedder: Any,
     rebuild_fts: bool = True,
     supersede: Optional[bool] = None,
+    embed_context: bool = False,
 ) -> IngestResult:
     """Steps 3–6 of §6.2 for already-fetched content, with supersession.
 
@@ -1186,11 +1203,23 @@ def ingest_snapshot(
         else:
             to_embed.append((sid, fs.content))
 
-    # Step 5: embed only what's new.
+    # Step 5: embed only what's new. With ``embed_context`` the text
+    # embedded is "page › heading path" + body, so a section titled
+    # "Parameters" or a table part "(part 3/5)" still says what it's about.
+    # The stored content is unchanged; only the vector sees the prefix.
+    if embed_context and to_embed:
+        name_row = conn.execute("SELECT name FROM doc_source WHERE doc_source_id = ?",
+                                [doc_source_id]).fetchone()
+        paths = _heading_paths(flat)
+        pos = {sid: i for i, sid in enumerate(section_ids)}
+        texts = [section_embedding_text(name_row[0] if name_row else None,
+                                        paths[pos[sid]], c) for sid, c in to_embed]
+    else:
+        texts = [c for _, c in to_embed]
     generate_section_embeddings(
         conn,
         section_ids=[sid for sid, _ in to_embed],
-        contents=[c for _, c in to_embed],
+        contents=texts,
         embedder=embedder,
     )
 

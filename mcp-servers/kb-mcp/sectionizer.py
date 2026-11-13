@@ -363,6 +363,8 @@ def sectionize_site_markdown(
         flat = [(1, None, content.strip("\n"))]
     out: list[tuple[int, Optional[str], str]] = []
     for level, heading, body in flat:
+        if _is_link_list_tail(heading, body):
+            continue
         parts = _split_body(body, max_chars)
         if len(parts) == 1:
             out.append((level, heading, body))
@@ -371,6 +373,24 @@ def sectionize_site_markdown(
             title = f"{heading or 'Section'} (part {k}/{len(parts)})"
             out.append((level, title, part))
     return _build_tree(out)
+
+
+_TAIL_HEADINGS = re.compile(
+    r"^(additional resources|next steps|related (content|articles|topics|pages)|"
+    r"learn more|see also|what's next)$", re.I)
+
+
+def _is_link_list_tail(heading: Optional[str], body: str) -> bool:
+    """'Additional resources' / 'Next steps' blocks that are only links.
+
+    They're short and topic-dense, so they win vector search for the very
+    topic whose real page they merely point to. Dropped when the body is
+    nothing but list items / links.
+    """
+    if not heading or not _TAIL_HEADINGS.match(heading.strip()):
+        return False
+    text = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    return all(ln.startswith(("- ", "* ", "[")) for ln in text) and len(body) < 2000
 
 
 def _blocks(body: str) -> list[str]:
@@ -391,9 +411,13 @@ def _blocks(body: str) -> list[str]:
     return [b for b in blocks if b.strip()]
 
 
+_TABLE_SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+
+
 def _split_table(block: str, max_chars: int) -> list[str]:
     lines = block.split("\n")
-    if len(lines) < 3 or not lines[1].lstrip().startswith("|-") and "---" not in lines[1]:
+    # Separator styles: |---|---|, | --- | :-: |, Mintlify's | :- | :- |.
+    if len(lines) < 3 or not _TABLE_SEP.match(lines[1]):
         return [block]
     header, rows = lines[:2], lines[2:]
     out, cur, size = [], [], 0

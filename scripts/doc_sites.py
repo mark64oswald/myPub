@@ -906,7 +906,7 @@ def sync_site(
                 refresh_docs.FetchResult(url=pf.fetch_url, content=pf.content,
                                          source_type="site_md"),
                 snapshot_source_type=site.source_type, content_hash=content_hash,
-                embedder=embedder, rebuild_fts=False)
+                embedder=embedder, rebuild_fts=False, embed_context=True)
             _record(conn, dsid, pf, "changed" if st.content_hash else "new",
                     content_hash=content_hash, changed=True)
         except Exception as e:  # keep going; one bad page shouldn't stop a crawl
