@@ -234,6 +234,64 @@ PRESETS: dict[str, Site] = {
         authority_score=0.85,
         refresh_ttl_days=7,
     ),
+    # Claude Developer Platform: API reference, build-with-claude guides,
+    # agents and tools, Managed Agents, models, release notes (English only;
+    # the translated copies are partial mirrors). llms.txt lists .md URLs.
+    "claude-platform": Site(
+        name="claude-platform",
+        index_url="https://platform.claude.com/llms.txt",
+        index_kind="llms_txt",
+        page_format="markdown",
+        include_patterns=["https://platform.claude.com/docs/en/*"],
+        name_prefix="Claude Platform",
+        authority_score=0.85,
+        refresh_ttl_days=7,
+    ),
+    # claude.com/docs, developer subset: building connectors (incl. MCP Apps),
+    # skills, plugins, the directory, Cowork. The rest of the site is admin
+    # and end-user material (government, Claude in Slack, desktop deployment,
+    # Claude for Science gallery).
+    "claude-docs": Site(
+        name="claude-docs",
+        index_url="https://claude.com/docs/llms.txt",
+        index_kind="llms_txt",
+        page_format="markdown",
+        include_patterns=[f"https://claude.com/docs/{p}" for p in (
+            "index.md", "extend/*", "build/*", "connectors/*", "plugins/*",
+            "skills/*", "directory/*", "cowork/*")],
+        name_prefix="Claude Docs",
+        authority_score=0.85,
+        refresh_ttl_days=7,
+    ),
+    # modelcontextprotocol.io: MCP docs, extensions and the specification.
+    # Only the current spec revision — older dated revisions and the draft
+    # would put three or four near-copies of every spec page in search.
+    # When a new revision ships, add the old one to the excludes.
+    "mcp": Site(
+        name="mcp",
+        index_url="https://modelcontextprotocol.io/llms.txt",
+        index_kind="llms_txt",
+        page_format="markdown",
+        md_url_suffix=".md",
+        include_patterns=["https://modelcontextprotocol.io/*"],
+        exclude_patterns=["*/specification/2024-*", "*/specification/2025-*",
+                          "*/specification/draft*", "*/community/*"],
+        name_prefix="MCP",
+        authority_score=0.85,
+        refresh_ttl_days=14,
+    ),
+    # agentskills.io: the open Agent Skills specification and guides.
+    "agent-skills": Site(
+        name="agent-skills",
+        index_url="https://agentskills.io/llms.txt",
+        index_kind="llms_txt",
+        page_format="markdown",
+        md_url_suffix=".md",
+        include_patterns=["https://agentskills.io/*"],
+        name_prefix="Agent Skills",
+        authority_score=0.85,
+        refresh_ttl_days=14,
+    ),
 }
 
 
@@ -686,6 +744,8 @@ def _now() -> datetime:
 # A site section that is its own product gets its own name prefix.
 PREFIX_BY_URL = {
     "https://code.claude.com/docs/en/agent-sdk/": "Claude Agent SDK",
+    "https://platform.claude.com/docs/en/api/": "Claude API",
+    "https://platform.claude.com/docs/en/managed-agents/": "Claude Managed Agents",
 }
 
 
