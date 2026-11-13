@@ -840,19 +840,41 @@ def generate_section_embeddings(
     if not section_ids:
         return
     vectors = embedder.encode(contents, show_progress_bar=False)
-    rows = []
-    for sid, vec in zip(section_ids, vectors):
-        # numpy → python list of floats so duckdb can bind to FLOAT[384]
-        as_list = [float(x) for x in vec]
+    write_section_embeddings(conn, section_ids, vectors)
+
+
+def write_section_embeddings(
+    conn: duckdb.DuckDBPyConnection, section_ids: Sequence[int], vectors: Any,
+) -> None:
+    """Bulk-insert (section_id, vector) rows into doc_section_embedding.
+
+    Through an Arrow table when pyarrow is available — executemany with
+    FLOAT[384] lists managed ~32 rows/s on the real catalog.
+    """
+    rows = [[float(x) for x in vec] for vec in vectors]
+    for as_list in rows:
         if len(as_list) != EMBEDDING_DIM:
             raise ValueError(
                 f"embedding dimension mismatch: got {len(as_list)}, expected {EMBEDDING_DIM}"
             )
-        rows.append([sid, as_list, EMBEDDING_MODEL])
-    conn.executemany(
-        "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) VALUES (?, ?, ?)",
-        rows,
-    )
+    ids = [int(i) for i in section_ids]
+    if not ids:
+        return
+    try:
+        import pyarrow as pa
+    except ImportError:
+        conn.executemany(
+            "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) "
+            "VALUES (?, ?, ?)", [[i, v, EMBEDDING_MODEL] for i, v in zip(ids, rows)])
+        return
+    _emb_batch = pa.table({  # noqa: F841 — referenced by name in the SQL below
+        "doc_section_id": pa.array(ids, type=pa.int64()),
+        "embedding": pa.array(rows, type=pa.list_(pa.float32(), EMBEDDING_DIM)),
+    })
+    conn.execute(
+        "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) "
+        "SELECT doc_section_id, embedding::FLOAT[384], ? FROM _emb_batch",
+        [EMBEDDING_MODEL])
 
 
 def rebuild_doc_section_fts_index(conn: duckdb.DuckDBPyConnection) -> None:
@@ -863,7 +885,7 @@ def rebuild_doc_section_fts_index(conn: duckdb.DuckDBPyConnection) -> None:
     O(total sections); fine at our scale.
     """
     conn.execute(
-        "PRAGMA create_fts_index('doc_section', 'doc_section_id', 'content', "
+        "PRAGMA create_fts_index('doc_section', 'doc_section_id', 'heading_text', 'content', "
         "stemmer='porter', stopwords='english', ignore='(\\\\.|[^a-z])+', "
         "strip_accents=1, lower=1, overwrite=1)"
     )
@@ -1031,57 +1053,56 @@ def _prior_sections(
     ).fetchall()
 
 
-def _carry_over_section(conn: duckdb.DuckDBPyConnection, old_id: int, new_id: int) -> None:
-    """Move embedding + extraction provenance from ``old_id`` to ``new_id``."""
+def _carry_over_sections(
+    conn: duckdb.DuckDBPyConnection, pairs: Sequence[tuple[int, int]],
+    *, copy_embeddings: bool = True,
+) -> None:
+    """Move embeddings + extraction provenance from old to new section ids.
+
+    Set-based: one statement per table over a temp old→new map (the
+    per-section version spent ~0.15 s a section on a large catalog).
+    ``copy_embeddings=False`` re-points provenance only, for callers that
+    re-embed the carried sections.
+    """
+    if not pairs:
+        return
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _carry (old_id BIGINT, new_id BIGINT)")
+    conn.execute("DELETE FROM _carry")
+    conn.executemany("INSERT INTO _carry VALUES (?, ?)", [list(p) for p in pairs])
+    if copy_embeddings:
+        conn.execute(
+            "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) "
+            "SELECT m.new_id, e.embedding, e.model FROM doc_section_embedding e "
+            "JOIN _carry m ON e.doc_section_id = m.old_id")
+    # procedure: indexed source_id on an FK-referenced row — lift the
+    # procedure_concept links, update, put them back (autocommit only; see
+    # ingest_snapshot).
+    links = conn.execute(
+        "SELECT pc.procedure_id, pc.concept_id FROM procedure_concept pc "
+        "JOIN procedure p ON p.procedure_id = pc.procedure_id "
+        "JOIN _carry m ON p.source_type = 'doc_section' AND p.source_id = m.old_id").fetchall()
+    if links:
+        conn.execute(
+            "DELETE FROM procedure_concept WHERE procedure_id IN (SELECT p.procedure_id "
+            "FROM procedure p JOIN _carry m ON p.source_type = 'doc_section' "
+            "AND p.source_id = m.old_id)")
     conn.execute(
-        "INSERT INTO doc_section_embedding (doc_section_id, embedding, model) "
-        "SELECT ?, embedding, model FROM doc_section_embedding WHERE doc_section_id = ?",
-        [new_id, old_id],
-    )
-    _repoint_procedures(conn, old_id, new_id)
+        "UPDATE procedure SET source_id = m.new_id FROM _carry m "
+        "WHERE procedure.source_type = 'doc_section' AND procedure.source_id = m.old_id")
+    if links:
+        conn.executemany("INSERT INTO procedure_concept (procedure_id, concept_id) VALUES (?, ?)",
+                         [list(l) for l in links])
     for table, col, cond in _PROVENANCE_REPOINTS:
         if _table_exists(conn, table):
             conn.execute(
-                f"UPDATE {table} SET {col} = ? WHERE {cond} AND {col} = ?",
-                [new_id, old_id],
-            )
+                f"UPDATE {table} SET {col} = m.new_id FROM _carry m "
+                f"WHERE {table}.{cond} AND {table}.{col} = m.old_id")
     if _table_exists(conn, "alignment_edge"):
-        conn.execute(
-            "UPDATE alignment_edge SET from_doc_section_id = ? WHERE from_doc_section_id = ?",
-            [new_id, old_id],
-        )
-        conn.execute(
-            "UPDATE alignment_edge SET to_doc_section_id = ? WHERE to_doc_section_id = ?",
-            [new_id, old_id],
-        )
-
-
-def _repoint_procedures(conn: duckdb.DuckDBPyConnection, old_id: int, new_id: int) -> None:
-    """Point a section's procedures at ``new_id``.
-
-    procedure.source_id is indexed and procedure is referenced by
-    procedure_concept, so DuckDB turns the UPDATE into delete + insert and
-    rejects it while link rows exist. Lift the links, update, put them back.
-    This only works outside an explicit transaction (DuckDB checks FKs
-    against the transaction's start state), which is why ingest_snapshot
-    callers run in autocommit mode.
-    """
-    proc_ids = [r[0] for r in conn.execute(
-        "SELECT procedure_id FROM procedure WHERE source_type = 'doc_section' "
-        "AND source_id = ?", [old_id]).fetchall()]
-    if not proc_ids:
-        return
-    ph = ",".join("?" * len(proc_ids))
-    links = conn.execute(
-        f"SELECT procedure_id, concept_id FROM procedure_concept WHERE procedure_id IN ({ph})",
-        proc_ids).fetchall()
-    if links:
-        conn.execute(f"DELETE FROM procedure_concept WHERE procedure_id IN ({ph})", proc_ids)
-    conn.execute(f"UPDATE procedure SET source_id = ? WHERE procedure_id IN ({ph})",
-                 [new_id, *proc_ids])
-    if links:
-        conn.executemany("INSERT INTO procedure_concept (procedure_id, concept_id) VALUES (?, ?)",
-                         links)
+        for col in ("from_doc_section_id", "to_doc_section_id"):
+            conn.execute(
+                f"UPDATE alignment_edge SET {col} = m.new_id FROM _carry m "
+                f"WHERE alignment_edge.{col} = m.old_id")
+    conn.execute("DELETE FROM _carry")
 
 
 def purge_sections(conn: duckdb.DuckDBPyConnection, section_ids: Sequence[int]) -> int:
@@ -1158,6 +1179,7 @@ def ingest_snapshot(
     rebuild_fts: bool = True,
     supersede: Optional[bool] = None,
     embed_context: bool = False,
+    reembed: bool = False,
 ) -> IngestResult:
     """Steps 3–6 of §6.2 for already-fetched content, with supersession.
 
@@ -1195,13 +1217,17 @@ def ingest_snapshot(
     by_key: dict[str, list[int]] = {}
     for old_id, heading, content in prior:
         by_key.setdefault(_section_key(heading, content), []).append(int(old_id))
+    pairs: list[tuple[int, int]] = []
     for sid, fs in zip(section_ids, flat):
         candidates = by_key.get(_section_key(fs.heading_text, fs.content))
         if candidates:
-            _carry_over_section(conn, candidates.pop(0), sid)
+            pairs.append((candidates.pop(0), sid))
             kept.append(sid)
+            if reembed:
+                to_embed.append((sid, fs.content))
         else:
             to_embed.append((sid, fs.content))
+    _carry_over_sections(conn, pairs, copy_embeddings=not reembed)
 
     # Step 5: embed only what's new. With ``embed_context`` the text
     # embedded is "page › heading path" + body, so a section titled
@@ -1231,10 +1257,11 @@ def ingest_snapshot(
         rebuild_doc_section_fts_index(conn)
 
     _update_source_metadata(conn, doc_source_id, content_changed=True)
+    kept_set = set(kept)
     return IngestResult(
         snapshot_id=snapshot_id,
         section_count=len(section_ids),
-        new_section_ids=[sid for sid, _ in to_embed],
+        new_section_ids=[sid for sid, _ in to_embed if sid not in kept_set],
         kept_section_ids=kept,
         dropped_sections=dropped,
     )

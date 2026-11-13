@@ -435,21 +435,29 @@ def _split_table(block: str, max_chars: int) -> list[str]:
 def _split_body(body: str, max_chars: int) -> list[str]:
     if len(body) <= max_chars:
         return [body]
-    pieces: list[str] = []
+    # (text, separator before it): blocks re-join with a blank line, lines
+    # of a split-up block with a single newline.
+    pieces: list[tuple[str, str]] = []
     for b in _blocks(body):
         if len(b) > max_chars and b.lstrip().startswith("|"):
-            pieces.extend(_split_table(b, max_chars))
+            pieces.extend((t, "\n\n") for t in _split_table(b, max_chars))
+        elif len(b) > max_chars and not b.lstrip().startswith("```"):
+            # One long block with no blank lines (a 2,700-item release-note
+            # list, a changelog version): cut between lines.
+            lines = b.split("\n")
+            pieces.append((lines[0], "\n\n"))
+            pieces.extend((ln, "\n") for ln in lines[1:])
         else:
-            pieces.append(b)
-    parts, cur, size = [], [], 0
-    for p in pieces:
-        if cur and size + len(p) > max_chars:
-            parts.append("\n\n".join(cur))
-            cur, size = [], 0
-        cur.append(p)
-        size += len(p) + 2
+            pieces.append((b, "\n\n"))
+    parts: list[str] = []
+    cur = ""
+    for text, sep in pieces:
+        if cur and len(cur) + len(text) > max_chars:
+            parts.append(cur)
+            cur = ""
+        cur = text if not cur else cur + sep + text
     if cur:
-        parts.append("\n\n".join(cur))
+        parts.append(cur)
     return parts
 
 

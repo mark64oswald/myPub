@@ -941,6 +941,52 @@ def sync_site(
     return report
 
 
+def reembed_site(conn: duckdb.DuckDBPyConnection, site: Site, *, embedder: Any,
+                 batch: int = 512) -> int:
+    """Re-embed every live section of a site as 'page › heading path' + body.
+
+    For sections that were embedded before context embeddings existed (or
+    carried over from such a section), and after a change to the embedding
+    text. Provenance is untouched; only vectors are replaced.
+    """
+    import refresh_docs
+    rows = conn.execute(
+        """
+        SELECT s.doc_section_id, s.parent_id, s.heading_text, s.content, src.name
+          FROM doc_section s
+          JOIN doc_snapshot sn USING (snapshot_id)
+          JOIN doc_source src ON src.doc_source_id = sn.doc_source_id
+          JOIN doc_fetch_state f ON f.doc_source_id = sn.doc_source_id
+         WHERE f.site_id = ? AND f.retired_at IS NULL
+         ORDER BY s.doc_section_id
+        """, [site.site_id]).fetchall()
+    by_id = {r[0]: r for r in rows}
+
+    def path(sid: int) -> list[str]:
+        out, seen = [], set()
+        while sid in by_id and sid not in seen:
+            seen.add(sid)
+            _, parent, heading, _, _ = by_id[sid]
+            if heading:
+                out.append(heading)
+            sid = parent
+        return out[::-1]
+
+    done = 0
+    for start in range(0, len(rows), batch):
+        chunk = rows[start:start + batch]
+        ids = [r[0] for r in chunk]
+        texts = [refresh_docs.section_embedding_text(r[4], path(r[0]), r[3] or "") for r in chunk]
+        vectors = embedder.encode(texts, show_progress_bar=False)
+        ph = ",".join("?" * len(ids))
+        conn.execute(f"DELETE FROM doc_section_embedding WHERE doc_section_id IN ({ph})", ids)
+        refresh_docs.write_section_embeddings(conn, ids, vectors)
+        done += len(ids)
+        if (start // batch) % 20 == 0:
+            log.info("%s: re-embedded %d/%d sections", site.name, done, len(rows))
+    return done
+
+
 # ---------------------------------------------------------------------------
 # Status / stale (read-only)
 # ---------------------------------------------------------------------------
@@ -1098,6 +1144,19 @@ def cmd_sync(args) -> int:
     return 0
 
 
+def cmd_reembed(args) -> int:
+    import refresh_docs
+    conn = refresh_docs.open_writer(args.catalog, auto_stop=not args.no_auto_stop)
+    try:
+        embedder = refresh_docs._load_default_embedder()
+        for site in _sites_or_die(conn, args):
+            n = reembed_site(conn, site, embedder=embedder)
+            print(json.dumps({"site": site.name, "reembedded": n}))
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_status(args) -> int:
     conn = _ro(args.catalog)
     try:
@@ -1167,6 +1226,12 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                            help="write sub-agent extraction manifests for new/changed sections")
             s.add_argument("--no-auto-stop", action="store_true")
 
+    re_ = sub.add_parser("reembed", help="re-embed a site's live sections with page/heading context")
+    g = re_.add_mutually_exclusive_group(required=True)
+    g.add_argument("--site")
+    g.add_argument("--all", action="store_true")
+    re_.add_argument("--no-auto-stop", action="store_true")
+
     st = sub.add_parser("status")
     st.add_argument("--site")
 
@@ -1182,7 +1247,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                         datefmt="%H:%M:%S")
     args = _parse_args(argv)
     return {"add-site": cmd_add_site, "plan": cmd_plan, "sync": cmd_sync,
-            "status": cmd_status, "stale": cmd_stale}[args.cmd](args)
+            "status": cmd_status, "stale": cmd_stale,
+            "reembed": cmd_reembed}[args.cmd](args)
 
 
 if __name__ == "__main__":

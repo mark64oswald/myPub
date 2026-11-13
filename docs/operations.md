@@ -46,7 +46,12 @@ Two kinds of live-doc source:
   pages are sectioned with the `site_md` rule: split at H2–H4, then any
   section over 4 KB is cut at paragraph / code-fence / table-row
   boundaries (table header repeated) into "Heading (part k/n)" sections,
-  because the embedder reads only the first ~1 KB of a section.
+  because the embedder reads only the first ~1 KB of a section. Site
+  sections are embedded as "page › heading path" + body (the stored text
+  is unchanged; the heading is also in the FTS index), and link-only
+  "Additional resources" / "Next steps" blocks are skipped. `doc_sites.py
+  reembed --site NAME` re-embeds a site's live sections that way, e.g.
+  after pages were carried over from an earlier embedding style.
 - **Single sources** (`refresh_docs.py`): Context7, DeepWiki, GitHub raw,
   single web pages. `--all`, `--tier` and `--stale` leave site pages out.
 

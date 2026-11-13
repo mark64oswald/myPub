@@ -505,3 +505,52 @@ def test_embedding_text_carries_page_and_heading_path(conn):
     assert "T: Page › Title › Beta\n\nbeta body" in emb.seen
     stored = [r[0] for r in conn.execute("SELECT content FROM doc_section").fetchall()]
     assert "beta body" in stored               # stored content has no prefix
+
+
+def test_site_sectionizer_splits_one_long_list():
+    from sectionizer import sectionize
+    items = "\n".join(f"- November {i}: feature {'f' * 50}" for i in range(300))
+    md = f"# Release notes\n\n## Platform\n\nIntro para.\n\n{items}\n"
+    flat = refresh_docs.flatten_section_tree(sectionize({"source_type": "site_md", "content": md}))
+    parts = [f for f in flat if (f.heading_text or "").startswith("Platform (part")]
+    assert len(parts) >= 4
+    assert all(len(f.content) <= 4000 for f in parts)
+    assert parts[0].content.startswith("Intro para.\n\n- November 0")
+    assert "\n- November 1:" in parts[0].content          # list lines keep single newlines
+    joined = "\n".join(f.content for f in parts)
+    assert joined.count("- November") == 300
+
+
+def test_reembed_keeps_provenance_but_refreshes_vectors(conn):
+    dsid = _source(conn)
+    _ingest(conn, dsid, V1)
+    old = dict((h, i) for i, h in _sections(conn, dsid))
+    conn.execute("INSERT INTO concept (concept_id, name) VALUES (1, 'a'), (2, 'b')")
+    conn.execute("INSERT INTO concept_relation VALUES (1, 2, 'REQUIRES', 1.0, 'doc_section', ?, now())",
+                 [old["Beta"]])
+    emb = FakeEmbedder()
+    fetched = refresh_docs.FetchResult(url="u", content=V1, source_type="site_md")
+    res = refresh_docs.ingest_snapshot(conn, dsid, fetched, snapshot_source_type="web_md",
+                                       content_hash="h2", embedder=emb, rebuild_fts=False,
+                                       reembed=True)
+    assert emb.texts == 3 and res.new_section_ids == []
+    new = dict((h, i) for i, h in _sections(conn, dsid))
+    assert conn.execute("SELECT source_id FROM concept_relation").fetchall() == [(new["Beta"],)]
+    assert conn.execute("SELECT COUNT(*) FROM doc_section_embedding").fetchone()[0] == 3
+
+
+def test_reembed_site_uses_page_and_heading_path(conn):
+    site = _site(conn)
+    web = FakeWeb(_pages(1))
+    doc_sites.sync_site(conn, site, embedder=FakeEmbedder(), index_urls=list(web.pages),
+                        rebuild_fts=False, fetcher=web)
+
+    class Capture(FakeEmbedder):
+        def encode(self, texts, *, show_progress_bar=False):
+            self.seen = list(texts)
+            return super().encode(texts)
+
+    emb = Capture()
+    assert doc_sites.reembed_site(conn, site, embedder=emb) == 2
+    assert any(t.startswith("T: Page 0 › Part\n\n") for t in emb.seen)
+    assert conn.execute("SELECT COUNT(*) FROM doc_section_embedding").fetchone()[0] == 2
