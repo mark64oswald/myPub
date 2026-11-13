@@ -315,6 +315,63 @@ TITLE_COVERAGE_BOOST = 0.8
 FULL_TITLE_MATCH_FLOOR = 0.95
 
 
+# Above RELEVANCE_KNEE, relevance approaches 1.0 gradually instead of
+# clamping. A hard clamp put every decent match on a 127k-section catalog
+# at exactly 1.0 (BM25 ≥ ~10, or any title-boosted match), so relevance
+# stopped separating results and ties fell to RRF. Values up to the knee
+# are unchanged, so cosine similarity still passes straight through.
+RELEVANCE_KNEE = 0.85
+RELEVANCE_SOFT_SPAN = 0.5
+
+
+def soft_cap(x: float, knee: float = RELEVANCE_KNEE,
+             span: float = RELEVANCE_SOFT_SPAN) -> float:
+    """Identity up to ``knee``, then a strictly increasing approach to 1.0.
+
+    A stronger signal always scores higher: 0.95 → ~0.88, 1.0 → ~0.89,
+    1.4 → ~0.95, 1.8 → ~0.98.
+    """
+    if x <= knee:
+        return max(0.0, x)
+    return knee + (1.0 - knee) * (1.0 - math.exp(-(x - knee) / span))
+
+
+# Release notes and changelogs mention every product name in their
+# headings, so they out-match the guide a concept query is looking for.
+# Their relevance is scaled down unless the query is about releases.
+RELEASE_NOTES_RELEVANCE_FACTOR = 0.7
+_RELEASE_URL_MARKERS = ("/release-notes", "/releasenotes", "/changelog", "/whats-new",
+                        "/what-s-new", "/release_notes")
+_RELEASE_NAME_MARKERS = ("release notes", "changelog", "what's new", "whats new")
+_RELEASE_QUERY_TOKENS = {
+    "release", "releases", "released", "changelog", "new", "whats", "latest",
+    "deprecated", "deprecation", "deprecations", "renamed", "announced",
+    "announcement", "version", "versions", "ga", "preview", "upgrade",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+}
+
+
+def query_has_release_intent(query: Optional[str]) -> bool:
+    """True when the query asks about releases, versions or changes."""
+    if not query:
+        return False
+    q = query.lower()
+    if "release note" in q or "what's new" in q:
+        return True
+    tokens = set(re.findall(r"[a-z0-9']+", q))
+    if tokens & _RELEASE_QUERY_TOKENS:
+        return True
+    return any(re.fullmatch(r"20\d\d(\.\d+)?", t) for t in tokens)
+
+
+def is_release_notes(identifier: Optional[str], name: Optional[str]) -> bool:
+    ident = (identifier or "").lower()
+    nm = (name or "").lower()
+    return (any(m in ident for m in _RELEASE_URL_MARKERS)
+            or any(m in nm for m in _RELEASE_NAME_MARKERS))
+
+
 def relevance_score(
     modality_scores: Optional[dict[str, Any]] = None,
     *, title_coverage: float = 0.0,
@@ -379,7 +436,7 @@ def relevance_score(
     if base <= 0.0:
         return 0.0
     cov = max(0.0, min(1.0, float(title_coverage)))
-    boosted = min(1.0, base * (1.0 + TITLE_COVERAGE_BOOST * cov))
+    boosted = soft_cap(base * (1.0 + TITLE_COVERAGE_BOOST * cov))
     # Full title match (caller-asserted: every significant query token in
     # title AND ≥2 tokens) floors relevance at FULL_TITLE_MATCH_FLOOR.
     # This decisively rewards chapters whose title IS the query topic.
@@ -519,6 +576,23 @@ def chapter_raw_authority(conn: duckdb.DuckDBPyConnection,
     return authority_score_from_publisher(publisher)
 
 
+def doc_section_source_info(conn: duckdb.DuckDBPyConnection,
+                            doc_section_id: int) -> tuple[Optional[float], bool]:
+    """(doc_source.authority_score, is-release-notes) for a section."""
+    row = conn.execute(
+        """
+        SELECT src.authority_score, src.identifier, src.name FROM doc_section s
+          JOIN doc_snapshot sn  ON s.snapshot_id  = sn.snapshot_id
+          JOIN doc_source   src ON sn.doc_source_id = src.doc_source_id
+         WHERE s.doc_section_id = ?
+        """, [doc_section_id],
+    ).fetchone()
+    if row is None:
+        return None, False
+    auth = None if row[0] is None else float(row[0])
+    return auth, is_release_notes(row[1], row[2])
+
+
 def doc_section_raw_authority(conn: duckdb.DuckDBPyConnection,
                               doc_section_id: int) -> Optional[float]:
     """Pull doc_source.authority_score for the source this section came from."""
@@ -575,6 +649,7 @@ def compute_components_for_result(
     rid = int(result["result_id"])
     modality_scores = result.get("modality_scores") or {}
 
+    release_notes = False
     if kind == "chapter":
         age = chapter_age_days(conn, rid, now=now)
         corr_n, contr_n = chapter_alignment_stats(conn, rid)
@@ -582,20 +657,24 @@ def compute_components_for_result(
     elif kind == "doc_section":
         age = doc_section_age_days(conn, rid, now=now)
         corr_n, contr_n = doc_section_alignment_stats(conn, rid)
-        auth_raw = doc_section_raw_authority(conn, rid)
+        auth_raw, release_notes = doc_section_source_info(conn, rid)
     else:
         raise ValueError(f"unknown result kind {kind!r}")
+
+    relevance = relevance_score(
+        modality_scores,
+        title_coverage=float(result.get("title_coverage") or 0.0),
+        full_title_match=bool(result.get("full_title_match")),
+    )
+    if release_notes and not result.get("release_intent"):
+        relevance *= RELEASE_NOTES_RELEVANCE_FACTOR
 
     return ComponentScores(
         recency=recency_score(age_days=age),
         doc_alignment=doc_alignment_score(
             corroborates=corr_n, contradicts=contr_n,
         ),
-        relevance=relevance_score(
-            modality_scores,
-            title_coverage=float(result.get("title_coverage") or 0.0),
-            full_title_match=bool(result.get("full_title_match")),
-        ),
+        relevance=relevance,
         corroboration=corroboration_score(corroborator_count=corr_n),
         authority=authority_score_from_raw(auth_raw),
     )

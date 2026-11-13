@@ -456,6 +456,20 @@ def _full_significant_title_match(query: str, title: Optional[str]) -> bool:
     return all(t in title_lower for t in tokens)
 
 
+def _doc_title(page_name: Optional[str], heading: Optional[str]) -> Optional[str]:
+    """Page title + section heading, the "title" of a doc section.
+
+    Whole-site docs split a page into many sections whose headings are
+    local ("Parameters", "Limitations"); the page name says what the page
+    is about. Without it, release notes — whose headings repeat product
+    names — out-cover the guide a query is actually looking for.
+    """
+    if heading and heading.strip().lower().startswith(("http://", "https://", "www.")):
+        heading = None
+    parts = [p for p in (page_name, heading) if p]
+    return " / ".join(parts) or None
+
+
 def _title_token_coverage(query: str, title: Optional[str]) -> float:
     """Fraction of significant query tokens that appear in the title.
 
@@ -747,7 +761,7 @@ def _fts_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "doc_source_name": r[2],
             "heading_text": r[3],
             "excerpt": _clean_excerpt(r[4]),
-            "title_coverage": _title_token_coverage(query, r[3]),
+            "title_coverage": _title_token_coverage(query, _doc_title(r[2], r[3])),
             "full_title_match": _full_significant_title_match(query, r[3]),
         }
         for r in rows
@@ -794,7 +808,7 @@ def _vss_doc_section_search(
             "doc_source_name": r[2],
             "heading_text": r[3],
             "excerpt": _clean_excerpt(r[4]),
-            "title_coverage": _title_token_coverage(query, r[3]),
+            "title_coverage": _title_token_coverage(query, _doc_title(r[2], r[3])),
             "full_title_match": _full_significant_title_match(query, r[3]),
         }
         for r in rows
@@ -856,7 +870,7 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
             "heading_text": r[4],
             "excerpt": _clean_excerpt(r[5]),
             "score": float(r[1]) + 0.1 * float(r[2]),
-            "title_coverage": _title_token_coverage(query, r[4]),
+            "title_coverage": _title_token_coverage(query, _doc_title(r[3], r[4])),
             "full_title_match": _full_significant_title_match(query, r[4]),
         }
         for r in rows
@@ -1191,6 +1205,9 @@ def search_chapters(
     # / authority are looked up per-result and combined under the chosen
     # weight profile.
     weights = ranking.WEIGHT_PROFILES[weight_profile]
+    release_intent = ranking.query_has_release_intent(query)
+    for r in merged:
+        r["release_intent"] = release_intent
 
     if mode == "generation":
         gen_ranker = ranking.GenerationRanker(_CONN, weights, top_k=limit)
