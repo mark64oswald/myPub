@@ -336,40 +336,89 @@ def soft_cap(x: float, knee: float = RELEVANCE_KNEE,
     return knee + (1.0 - knee) * (1.0 - math.exp(-(x - knee) / span))
 
 
-# Release notes and changelogs mention every product name in their
-# headings, so they out-match the guide a concept query is looking for.
-# Their relevance is scaled down unless the query is about releases.
+# Page-kind priors for whole-site docs. Release notes mention every
+# product name in their headings; error-code pages and per-endpoint API
+# reference pages are short, keyword-dense and title-matched by single
+# words ("Events", "ROW_COLUMN_ACCESS"). All three out-match the guide a
+# concept query is looking for, so their relevance is scaled down — unless
+# the query is itself about releases, errors or the API.
 RELEASE_NOTES_RELEVANCE_FACTOR = 0.7
-_RELEASE_URL_MARKERS = ("/release-notes", "/releasenotes", "/changelog", "/whats-new",
-                        "/what-s-new", "/release_notes")
-_RELEASE_NAME_MARKERS = ("release notes", "changelog", "what's new", "whats new")
-_RELEASE_QUERY_TOKENS = {
-    "release", "releases", "released", "changelog", "new", "whats", "latest",
-    "deprecated", "deprecation", "deprecations", "renamed", "announced",
-    "announcement", "version", "versions", "ga", "preview", "upgrade",
-    "january", "february", "march", "april", "may", "june", "july", "august",
-    "september", "october", "november", "december",
+ERROR_REFERENCE_RELEVANCE_FACTOR = 0.8
+API_REFERENCE_RELEVANCE_FACTOR = 0.85
+_MONTHS = {"january", "february", "march", "april", "may", "june", "july", "august",
+           "september", "october", "november", "december"}
+_PAGE_KINDS: dict[str, dict[str, Any]] = {
+    "release_notes": {
+        "factor": RELEASE_NOTES_RELEVANCE_FACTOR,
+        "url": ("/release-notes", "/releasenotes", "/release_notes", "/changelog",
+                "/whats-new", "/what-s-new"),
+        "name": ("release notes", "changelog", "what's new", "whats new"),
+        "intent": {"release", "releases", "released", "changelog", "new", "whats",
+                   "latest", "deprecated", "deprecation", "deprecations", "renamed",
+                   "announced", "announcement", "version", "versions", "ga",
+                   "preview", "upgrade"} | _MONTHS,
+        "intent_phrases": ("release note", "what's new"),
+    },
+    "error_reference": {
+        "factor": ERROR_REFERENCE_RELEVANCE_FACTOR,
+        "url": ("/error-messages/", "/errors/", "/error-codes/"),
+        "name": ("error class", "error condition", "error code"),
+        "intent": {"error", "errors", "exception", "exceptions", "fails", "failed",
+                   "failure", "failing", "sqlstate", "troubleshoot", "troubleshooting"},
+        "intent_phrases": (),
+    },
+    "api_reference": {
+        "factor": API_REFERENCE_RELEVANCE_FACTOR,
+        "url": ("platform.claude.com/docs/en/api/",),
+        "name": (),
+        "intent": {"api", "endpoint", "endpoints", "request", "response", "parameter",
+                   "parameters", "rest", "http", "curl", "sdk", "payload", "schema"},
+        "intent_phrases": (),
+    },
 }
+
+
+def page_kind(identifier: Optional[str], name: Optional[str]) -> Optional[str]:
+    """'release_notes' | 'error_reference' | 'api_reference' | None (a guide)."""
+    ident = (identifier or "").lower()
+    nm = (name or "").lower()
+    for kind, spec in _PAGE_KINDS.items():
+        if any(m in ident for m in spec["url"]) or any(m in nm for m in spec["name"]):
+            return kind
+    return None
+
+
+def query_intents(query: Optional[str]) -> frozenset[str]:
+    """The page kinds a query is explicitly about."""
+    if not query:
+        return frozenset()
+    q = query.lower()
+    tokens = set(re.findall(r"[a-z0-9_']+", q))
+    out = set()
+    for kind, spec in _PAGE_KINDS.items():
+        if tokens & spec["intent"] or any(ph in q for ph in spec["intent_phrases"]):
+            out.add(kind)
+    if any(re.fullmatch(r"20\d\d(\.\d+)?", t) for t in tokens):
+        out.add("release_notes")
+    # an ERROR_CODE-style token (SCREAMING_SNAKE) is an error lookup
+    if re.search(r"\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+\b", query):
+        out.add("error_reference")
+    return frozenset(out)
+
+
+def page_kind_factor(kind: Optional[str], intents: Any) -> float:
+    if kind is None or kind in (intents or ()):
+        return 1.0
+    return float(_PAGE_KINDS[kind]["factor"])
 
 
 def query_has_release_intent(query: Optional[str]) -> bool:
     """True when the query asks about releases, versions or changes."""
-    if not query:
-        return False
-    q = query.lower()
-    if "release note" in q or "what's new" in q:
-        return True
-    tokens = set(re.findall(r"[a-z0-9']+", q))
-    if tokens & _RELEASE_QUERY_TOKENS:
-        return True
-    return any(re.fullmatch(r"20\d\d(\.\d+)?", t) for t in tokens)
+    return "release_notes" in query_intents(query)
 
 
 def is_release_notes(identifier: Optional[str], name: Optional[str]) -> bool:
-    ident = (identifier or "").lower()
-    nm = (name or "").lower()
-    return (any(m in ident for m in _RELEASE_URL_MARKERS)
-            or any(m in nm for m in _RELEASE_NAME_MARKERS))
+    return page_kind(identifier, name) == "release_notes"
 
 
 def relevance_score(
@@ -577,8 +626,8 @@ def chapter_raw_authority(conn: duckdb.DuckDBPyConnection,
 
 
 def doc_section_source_info(conn: duckdb.DuckDBPyConnection,
-                            doc_section_id: int) -> tuple[Optional[float], bool]:
-    """(doc_source.authority_score, is-release-notes) for a section."""
+                            doc_section_id: int) -> tuple[Optional[float], Optional[str]]:
+    """(doc_source.authority_score, page kind) for a section."""
     row = conn.execute(
         """
         SELECT src.authority_score, src.identifier, src.name FROM doc_section s
@@ -588,9 +637,9 @@ def doc_section_source_info(conn: duckdb.DuckDBPyConnection,
         """, [doc_section_id],
     ).fetchone()
     if row is None:
-        return None, False
+        return None, None
     auth = None if row[0] is None else float(row[0])
-    return auth, is_release_notes(row[1], row[2])
+    return auth, page_kind(row[1], row[2])
 
 
 def doc_section_raw_authority(conn: duckdb.DuckDBPyConnection,
@@ -649,7 +698,7 @@ def compute_components_for_result(
     rid = int(result["result_id"])
     modality_scores = result.get("modality_scores") or {}
 
-    release_notes = False
+    kind_of_page = None
     if kind == "chapter":
         age = chapter_age_days(conn, rid, now=now)
         corr_n, contr_n = chapter_alignment_stats(conn, rid)
@@ -657,7 +706,7 @@ def compute_components_for_result(
     elif kind == "doc_section":
         age = doc_section_age_days(conn, rid, now=now)
         corr_n, contr_n = doc_section_alignment_stats(conn, rid)
-        auth_raw, release_notes = doc_section_source_info(conn, rid)
+        auth_raw, kind_of_page = doc_section_source_info(conn, rid)
     else:
         raise ValueError(f"unknown result kind {kind!r}")
 
@@ -666,8 +715,7 @@ def compute_components_for_result(
         title_coverage=float(result.get("title_coverage") or 0.0),
         full_title_match=bool(result.get("full_title_match")),
     )
-    if release_notes and not result.get("release_intent"):
-        relevance *= RELEASE_NOTES_RELEVANCE_FACTOR
+    relevance *= page_kind_factor(kind_of_page, result.get("query_intents"))
 
     return ComponentScores(
         recency=recency_score(age_days=age),

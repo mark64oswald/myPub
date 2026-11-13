@@ -815,3 +815,20 @@ def test_is_release_notes():
     assert ranking.is_release_notes("https://code.claude.com/docs/en/changelog.md", None)
     assert ranking.is_release_notes(None, "Claude Platform: Release notes")
     assert not ranking.is_release_notes("https://docs.databricks.com/aws/en/ldp/expectations", "Databricks: Manage data quality")
+
+
+
+def test_page_kind_and_intents():
+    pk = ranking.page_kind
+    assert pk("https://docs.databricks.com/aws/en/error-messages/row-column-access-error-class", None) == "error_reference"
+    assert pk("https://platform.claude.com/docs/en/api/beta/events.md", "Claude API: Events") == "api_reference"
+    assert pk("https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md", None) is None
+    qi = ranking.query_intents
+    assert qi("event sourcing") == frozenset()
+    assert "api_reference" in qi("messages API request parameters")
+    assert "error_reference" in qi("ROW_COLUMN_ACCESS error")
+    assert "error_reference" in qi("DELTA_MISSING_COLUMN")
+    f = ranking.page_kind_factor
+    assert f(None, frozenset()) == 1.0
+    assert f("api_reference", frozenset()) == ranking.API_REFERENCE_RELEVANCE_FACTOR
+    assert f("api_reference", frozenset({"api_reference"})) == 1.0

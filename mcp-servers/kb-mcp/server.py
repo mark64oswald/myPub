@@ -1205,9 +1205,9 @@ def search_chapters(
     # / authority are looked up per-result and combined under the chosen
     # weight profile.
     weights = ranking.WEIGHT_PROFILES[weight_profile]
-    release_intent = ranking.query_has_release_intent(query)
+    intents = ranking.query_intents(query)
     for r in merged:
-        r["release_intent"] = release_intent
+        r["query_intents"] = intents
 
     if mode == "generation":
         gen_ranker = ranking.GenerationRanker(_CONN, weights, top_k=limit)
