@@ -332,6 +332,18 @@ def test_sync_force_and_path_reingest_selected_pages(conn):
     assert rep.kept_sections == 2 and rep.new_sections == 0 and emb.texts == 0
 
 
+
+def test_sync_force_skips_never_fetched_pages(conn):
+    site = _site(conn)
+    web = FakeWeb(_pages(3))
+    first = list(web.pages)[:2]
+    doc_sites.sync_site(conn, site, embedder=FakeEmbedder(), index_urls=first,
+                        rebuild_fts=False, fetcher=web)
+    # p2 is new in the index; --force with a cap must still reach a fetched page.
+    rep = doc_sites.sync_site(conn, site, embedder=FakeEmbedder(), index_urls=list(web.pages),
+                              rebuild_fts=False, fetcher=web, force=True, max_pages=1)
+    assert rep.counts == {"registered": 1, "changed": 1}
+
 def test_sync_registers_ingests_then_skips_unchanged(conn):
     site = _site(conn)
     web = FakeWeb(_pages(3))

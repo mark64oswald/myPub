@@ -855,6 +855,10 @@ def sync_site(
                       if any(fnmatch.fnmatchcase(st.page_url, p) for p in pats)]
     if "changed" not in only:
         candidates = [st for st in candidates if st.content_hash is None]
+    if force:
+        # --force re-ingests pages already in the catalog; never-fetched pages
+        # would otherwise sort first and use up --max-pages.
+        candidates = [st for st in candidates if st.content_hash is not None]
     candidates.sort(key=lambda st: (st.content_hash is not None,
                                     st.last_checked_at or datetime.min))
     if max_pages is not None:
@@ -1219,7 +1223,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
             s.add_argument("--path", action="append",
                            help="only pages whose URL matches (glob, or a fragment like 'sql/')")
             s.add_argument("--force", action="store_true",
-                           help="re-ingest the selected pages even if unchanged")
+                           help="re-ingest already-fetched pages even if unchanged (skips never-fetched pages)")
             s.add_argument("--only", action="append", choices=("new", "changed", "removed"))
             s.add_argument("--force-retire", action="store_true")
             s.add_argument("--prep-extract", action="store_true",
