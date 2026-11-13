@@ -219,7 +219,9 @@ MINIFIED = """<html><body><article><div class="theme-doc-markdown">
 <tbody><tr><td>UI-based pipeline authoring<td><img alt="Green check icon"> Supported
 <tr><td>API-based pipeline authoring<td><img alt="Red X icon"> Not supported
 <tr><td>Long<td>""" + "x" * 300 + """</tbody></table>
-<pre><code><div class="token-line">SELECT a<br></div><div class="token-line">FROM t<br></div><div class="token-line">WHERE x</div></code></pre>
+<ul role="tablist"><li>Python</li><li>SQL</li></ul>
+<div class="theme-admonition"><div class="admonitionHeading_x">note</div><div><p>Heads up.</p></div></div>
+<pre class="language-sql"><code><div class="token-line">SELECT a<br></div><div class="token-line">FROM t<br></div><div class="token-line">WHERE x</div></code></pre>
 <ul><li>can be any one of:<ul><li>a timestamp</li><li>a date</li></ul></li><li>last</li></ul>
 </div></article></body></html>"""
 
@@ -233,6 +235,30 @@ def test_minified_html_tables_code_and_nested_lists():
     assert md.count("a timestamp") == 1 and md.count("a date") == 1
     assert "- can be any one of:" in md
     assert "Databricks." in md and "Databricks ." not in md
+    assert "```sql\nSELECT a" in md and "\x00" not in md
+    assert "- Python" not in md
+    assert "Note:\n\nHeads up." in md
+
+
+def test_site_sectionizer_splits_deep_and_long_sections():
+    from sectionizer import sectionize
+    rows = "\n".join(f"| event_{i} | {'d' * 60} |" for i in range(200))
+    md = (f"# Audit logs\n\nintro\n\n## Workspace events\n\n### Clusters\n\n"
+          f"| action | description |\n|---|---|\n{rows}\n\n"
+          f"### Jobs\n\n```python\n" + "x = 1\n\n" * 5 + "```\n\n#### Deep\n\ntext\n")
+    flat = refresh_docs.flatten_section_tree(sectionize({"source_type": "site_md", "content": md}))
+    heads = [f.heading_text for f in flat]
+    assert "Jobs" in heads and "Deep" in heads
+    parts = [f for f in flat if (f.heading_text or "").startswith("Clusters (part")]
+    assert len(parts) >= 3
+    for f in parts:
+        assert len(f.content) <= 4200
+        assert f.content.startswith("| action | description |\n|---|---|")
+    jobs = next(f for f in flat if f.heading_text == "Jobs")
+    assert jobs.content.count("```") == 2       # the fence was not cut
+    # Old dispatch keys are untouched: github_md still splits at H2 only.
+    old = refresh_docs.flatten_section_tree(sectionize({"source_type": "github_md", "content": md}))
+    assert "Jobs" not in [f.heading_text for f in old]
 
 
 def test_docusaurus_article_is_cleaned():
@@ -243,7 +269,7 @@ def test_docusaurus_article_is_cleaned():
     assert "| Streaming | ✓ |" in md
     assert "# SELECT (subselect)" in md
     assert "\u200b" not in md
-    assert "Preview\n\nThis feature is in Beta." in md
+    assert "Preview:\n\nThis feature is in Beta." in md
     for junk in ("On this page", "SQL language reference", "Last updated", "Expand", "Back"):
         assert junk not in md
     assert doc_sites.selector_for(
@@ -292,6 +318,18 @@ def _site(conn, **kw):
 def _pages(n):
     return {f"https://d.test/p{i}.md": f"# Page {i}\n\n{BODY}\n\n## Part\n\n{BODY} {i}\n"
             for i in range(n)}
+
+
+def test_sync_force_and_path_reingest_selected_pages(conn):
+    site = _site(conn)
+    web = FakeWeb(_pages(3))
+    doc_sites.sync_site(conn, site, embedder=FakeEmbedder(), index_urls=list(web.pages),
+                        rebuild_fts=False, fetcher=web)
+    emb = FakeEmbedder()
+    rep = doc_sites.sync_site(conn, site, embedder=emb, index_urls=list(web.pages),
+                              rebuild_fts=False, fetcher=web, paths=["p1"], force=True)
+    assert rep.counts == {"changed": 1}
+    assert rep.kept_sections == 2 and rep.new_sections == 0 and emb.texts == 0
 
 
 def test_sync_registers_ingests_then_skips_unchanged(conn):

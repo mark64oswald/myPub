@@ -386,7 +386,7 @@ class WebHtmlFetcher:
         pf = doc_sites.fetch_page(site, url)
         if pf.status != "ok":
             raise FetchError(f"{url}: {pf.status} {pf.error or pf.http_status or ''}".strip())
-        return FetchResult(url=url, content=pf.content, source_type="github_md")
+        return FetchResult(url=url, content=pf.content, source_type="site_md")
 
 
 # ---- MCP-SDK-based fetchers (Context7, DeepWiki) -------------------------

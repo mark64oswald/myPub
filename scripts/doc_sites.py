@@ -390,6 +390,13 @@ def _clean_article(el) -> None:
     # html_doc skips; they carry release status, so make them paragraphs.
     for head in el.select("div.theme-admonition [class*=admonitionHeading]"):
         head.name = "p"
+        label = head.get_text(" ", strip=True)
+        if label:
+            head.string = label[:1].upper() + label[1:] + ":"
+    # Code-tab widgets: the tab labels ("Python", "SQL") would become stray
+    # bullets; the language moves onto the fence instead (see _tidy_spacing).
+    for tablist in el.select("[role=tablist]"):
+        tablist.decompose()
     # Feature tables mark support with check-icon images; keep the meaning.
     for img in el.find_all("img"):
         alt = (img.get("alt") or "").strip()
@@ -402,6 +409,11 @@ def _clean_article(el) -> None:
     # Prism renders code one <div class="token-line"> per line with <br>;
     # get_text() would fuse the lines.
     for pre in el.find_all("pre"):
+        classes = " ".join(pre.get("class", []) + sum(
+            (c.get("class", []) for c in pre.find_all("code")), []))
+        m = re.search(r"language-([\w+-]+)", classes)
+        if m:
+            pre.insert(0, f"\x00lang={m.group(1)}\n")
         for br in pre.find_all("br"):
             br.replace_with("\n")
         for line in pre.select("div.token-line, span.token-line"):
@@ -461,14 +473,23 @@ _SPACE_AFTER_OPEN = re.compile(r"([(\[]) +(?=\S)")
 def _tidy_spacing(md: str) -> str:
     """Undo the space html_doc puts before punctuation after inline elements
     ("in Databricks ." → "in Databricks."), outside code fences only."""
+    md = _FENCE_LANG.sub(r"```\1\n", md)
     out, in_fence = [], False
     for line in md.split("\n"):
         if line.lstrip().startswith("```"):
             in_fence = not in_fence
         elif not in_fence:
             line = _SPACE_AFTER_OPEN.sub(r"\1", _SPACE_BEFORE_PUNCT.sub(r"\1", line))
+            # A paragraph right after a list item needs a blank line, or
+            # Markdown reads it as part of the item.
+            if (out and line.strip() and out[-1].startswith("- ")
+                    and not line.startswith(("- ", "  ", "|", "#"))):
+                out.append("")
         out.append(line)
     return "\n".join(out)
+
+
+_FENCE_LANG = re.compile(r"```\n\x00lang=([\w+-]+)\n")
 
 
 def markdown_title(md: str) -> Optional[str]:
@@ -781,6 +802,8 @@ def sync_site(
     force_retire: bool = False,
     prep_extract_dir: Optional[Path] = None,
     rebuild_fts: bool = True,
+    paths: Optional[list[str]] = None,
+    force: bool = False,
     fetcher=fetch_many,
 ) -> SyncReport:
     """Bring one site's pages in line with its index. See module docstring."""
@@ -825,6 +848,11 @@ def sync_site(
     # 3. Fetch: new + never fetched first, then oldest-checked.
     in_index = set(index_urls)
     candidates = [st for u, st in states.items() if u in in_index and st.retired_at is None]
+    if paths:
+        # Glob on the page URL; a bare fragment like "sql/" matches anywhere.
+        pats = [p if any(c in p for c in "*?[") else f"*{p}*" for p in paths]
+        candidates = [st for st in candidates
+                      if any(fnmatch.fnmatchcase(st.page_url, p) for p in pats)]
     if "changed" not in only:
         candidates = [st for st in candidates if st.content_hash is None]
     candidates.sort(key=lambda st: (st.content_hash is not None,
@@ -832,8 +860,10 @@ def sync_site(
     if max_pages is not None:
         candidates = candidates[:max_pages]
     by_url = {st.page_url: st for st in candidates}
-    jobs = [(st.page_url, st.etag if st.content_hash else None,
-             st.last_modified if st.content_hash else None) for st in candidates]
+    # --force: no conditional headers and no hash short-cut, so every selected
+    # page is re-ingested (unchanged sections still carry over — it's cheap).
+    jobs = [(st.page_url, st.etag if st.content_hash and not force else None,
+             st.last_modified if st.content_hash and not force else None) for st in candidates]
 
     for pf in fetcher(site, jobs):
         st = by_url[pf.page_url]
@@ -854,7 +884,7 @@ def sync_site(
             report.errors.append({"url": pf.page_url, "error": pf.error or ""})
             continue
         content_hash = refresh_docs.compute_content_hash(pf.content)
-        if content_hash == st.content_hash:
+        if content_hash == st.content_hash and not force:
             _record(conn, dsid, pf, "unchanged")
             conn.execute("UPDATE doc_source SET last_refresh_at = CURRENT_TIMESTAMP "
                          "WHERE doc_source_id = ?", [dsid])
@@ -874,7 +904,7 @@ def sync_site(
             ing = refresh_docs.ingest_snapshot(
                 conn, dsid,
                 refresh_docs.FetchResult(url=pf.fetch_url, content=pf.content,
-                                         source_type="github_md"),
+                                         source_type="site_md"),
                 snapshot_source_type=site.source_type, content_hash=content_hash,
                 embedder=embedder, rebuild_fts=False)
             _record(conn, dsid, pf, "changed" if st.content_hash else "new",
@@ -1048,6 +1078,7 @@ def cmd_sync(args) -> int:
                 conn, site, embedder=embedder,
                 only=set(args.only) if args.only else None,
                 max_pages=args.max_pages, force_retire=args.force_retire,
+                paths=args.path, force=args.force,
                 prep_extract_dir=(d / site.name) if args.prep_extract else None,
                 rebuild_fts=False,
             )
@@ -1126,6 +1157,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
             s.add_argument("--limit", type=int, help="with --check: oldest-checked N pages only")
         else:
             s.add_argument("--max-pages", type=int)
+            s.add_argument("--path", action="append",
+                           help="only pages whose URL matches (glob, or a fragment like 'sql/')")
+            s.add_argument("--force", action="store_true",
+                           help="re-ingest the selected pages even if unchanged")
             s.add_argument("--only", action="append", choices=("new", "changed", "removed"))
             s.add_argument("--force-retire", action="store_true")
             s.add_argument("--prep-extract", action="store_true",

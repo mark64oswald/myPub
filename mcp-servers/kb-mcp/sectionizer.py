@@ -163,40 +163,9 @@ def sectionize_markdown(
     """
     if not content.strip():
         return sectionize_shapeless(content)
-
-    md = MarkdownIt()
-    tokens = md.parse(content)
-    lines = content.splitlines(keepends=True)
-
-    breaks: list[tuple[int, str, int, int]] = []  # (level, text, hstart, hend)
-    i = 0
-    while i < len(tokens):
-        tok = tokens[i]
-        if tok.type == "heading_open" and tok.map is not None:
-            level = int(tok.tag[1:])  # 'h2' -> 2
-            if level <= split_level:
-                heading_text = ""
-                if i + 1 < len(tokens) and tokens[i + 1].type == "inline":
-                    heading_text = tokens[i + 1].content
-                hstart, hend = tok.map  # markdown-it: [start, end) line indices
-                breaks.append((level, heading_text, hstart, hend))
-        i += 1
-
-    if not breaks:
+    flat = _markdown_flat(content, split_level)
+    if not flat:
         return sectionize_shapeless(content)
-
-    flat: list[tuple[int, Optional[str], str]] = []
-    for j, (level, heading_text, _hstart, hend) in enumerate(breaks):
-        next_start = breaks[j + 1][2] if j + 1 < len(breaks) else len(lines)
-        body = "".join(lines[hend:next_start]).strip("\n")
-        # Replace URL-shaped headings with a body-derived alternative.
-        # If no alternative surfaces, leave the heading None — None
-        # already disables title-coverage scoring cleanly, whereas a
-        # URL string would have to be filtered downstream.
-        if _is_url_heading(heading_text):
-            heading_text = _derive_body_heading(body)
-        flat.append((level, heading_text, body))
-
     return _build_tree(flat)
 
 
@@ -329,6 +298,137 @@ def sectionize_apt(content: str) -> list[Section]:
     return _build_tree(flat)
 
 
+def _markdown_flat(content: str, split_level: int) -> list[tuple[int, Optional[str], str]]:
+    """(level, heading, body) per heading of level ≤ split_level; [] if none."""
+    md = MarkdownIt()
+    tokens = md.parse(content)
+    lines = content.splitlines(keepends=True)
+
+    breaks: list[tuple[int, str, int, int]] = []  # (level, text, hstart, hend)
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.type == "heading_open" and tok.map is not None:
+            level = int(tok.tag[1:])  # 'h2' -> 2
+            if level <= split_level:
+                heading_text = ""
+                if i + 1 < len(tokens) and tokens[i + 1].type == "inline":
+                    heading_text = tokens[i + 1].content
+                hstart, hend = tok.map  # markdown-it: [start, end) line indices
+                breaks.append((level, heading_text, hstart, hend))
+        i += 1
+
+    if not breaks:
+        return []
+
+    flat: list[tuple[int, Optional[str], str]] = []
+    for j, (level, heading_text, _hstart, hend) in enumerate(breaks):
+        next_start = breaks[j + 1][2] if j + 1 < len(breaks) else len(lines)
+        body = "".join(lines[hend:next_start]).strip("\n")
+        # Replace URL-shaped headings with a body-derived alternative.
+        # If no alternative surfaces, leave the heading None — None
+        # already disables title-coverage scoring cleanly, whereas a
+        # URL string would have to be filtered downstream.
+        if _is_url_heading(heading_text):
+            heading_text = _derive_body_heading(body)
+        flat.append((level, heading_text, body))
+
+    return flat
+
+
+SITE_SPLIT_LEVEL = 4
+SITE_MAX_CHARS = 4000
+
+
+def sectionize_site_markdown(
+    content: str,
+    *,
+    split_level: int = SITE_SPLIT_LEVEL,
+    max_chars: int = SITE_MAX_CHARS,
+) -> list[Section]:
+    """Sections sized for retrieval, for whole-site doc pages.
+
+    Vendor reference pages (Databricks audit-log tables, Claude Code hooks
+    and env-var references, changelogs) run to 100 KB+ under one H2, while
+    the embedder reads only the first ~1 KB of a section. So: split at
+    H2–H4, then cut any section longer than ``max_chars`` at block
+    boundaries — paragraphs, whole code fences, and table rows (the table
+    header is repeated in each part). Parts become siblings titled
+    "Heading (part 2/3)".
+    """
+    if not content.strip():
+        return sectionize_shapeless(content)
+    flat = _markdown_flat(content, split_level)
+    if not flat:
+        flat = [(1, None, content.strip("\n"))]
+    out: list[tuple[int, Optional[str], str]] = []
+    for level, heading, body in flat:
+        parts = _split_body(body, max_chars)
+        if len(parts) == 1:
+            out.append((level, heading, body))
+            continue
+        for k, part in enumerate(parts, 1):
+            title = f"{heading or 'Section'} (part {k}/{len(parts)})"
+            out.append((level, title, part))
+    return _build_tree(out)
+
+
+def _blocks(body: str) -> list[str]:
+    """Paragraph-level blocks; a code fence is one block even with blank lines."""
+    blocks: list[str] = []
+    cur: list[str] = []
+    in_fence = False
+    for line in body.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        if not in_fence and not line.strip() and cur:
+            blocks.append("\n".join(cur))
+            cur = []
+            continue
+        cur.append(line)
+    if cur:
+        blocks.append("\n".join(cur))
+    return [b for b in blocks if b.strip()]
+
+
+def _split_table(block: str, max_chars: int) -> list[str]:
+    lines = block.split("\n")
+    if len(lines) < 3 or not lines[1].lstrip().startswith("|-") and "---" not in lines[1]:
+        return [block]
+    header, rows = lines[:2], lines[2:]
+    out, cur, size = [], [], 0
+    for row in rows:
+        if cur and size + len(row) > max_chars:
+            out.append("\n".join(header + cur))
+            cur, size = [], 0
+        cur.append(row)
+        size += len(row) + 1
+    if cur:
+        out.append("\n".join(header + cur))
+    return out
+
+
+def _split_body(body: str, max_chars: int) -> list[str]:
+    if len(body) <= max_chars:
+        return [body]
+    pieces: list[str] = []
+    for b in _blocks(body):
+        if len(b) > max_chars and b.lstrip().startswith("|"):
+            pieces.extend(_split_table(b, max_chars))
+        else:
+            pieces.append(b)
+    parts, cur, size = [], [], 0
+    for p in pieces:
+        if cur and size + len(p) > max_chars:
+            parts.append("\n\n".join(cur))
+            cur, size = [], 0
+        cur.append(p)
+        size += len(p) + 2
+    if cur:
+        parts.append("\n\n".join(cur))
+    return parts
+
+
 def sectionize(snapshot: dict[str, Any]) -> list[Section]:
     """Dispatch on ``snapshot['source_type']``.
 
@@ -350,6 +450,9 @@ def sectionize(snapshot: dict[str, Any]) -> list[Section]:
 
     if source_type in {"markdown", "github_md", "github"}:
         return sectionize_markdown(content)
+
+    if source_type == "site_md":
+        return sectionize_site_markdown(content)
 
     if source_type == "apt":
         return sectionize_apt(content)
