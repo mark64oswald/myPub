@@ -566,3 +566,21 @@ def test_reembed_site_uses_page_and_heading_path(conn):
     assert doc_sites.reembed_site(conn, site, embedder=emb) == 2
     assert any(t.startswith("T: Page 0 › Part\n\n") for t in emb.seen)
     assert conn.execute("SELECT COUNT(*) FROM doc_section_embedding").fetchone()[0] == 2
+
+
+def test_claude_developer_presets_scope():
+    P = doc_sites.PRESETS
+    assert P["claude-platform"].wants("https://platform.claude.com/docs/en/api/messages.md")
+    assert not P["claude-platform"].wants("https://platform.claude.com/docs/de/home.md")
+    assert not P["claude-platform"].wants("https://platform.claude.com/llms-full.txt")
+    assert P["claude-docs"].wants("https://claude.com/docs/connectors/building/mcp-apps/overview.md")
+    assert not P["claude-docs"].wants("https://claude.com/docs/government/overview.md")
+    mcp = P["mcp"]
+    assert mcp.wants("https://modelcontextprotocol.io/specification/2026-07-28/server/tools")
+    assert not mcp.wants("https://modelcontextprotocol.io/specification/2025-06-18/server/tools")
+    assert not mcp.wants("https://modelcontextprotocol.io/specification/draft/server/tools")
+    assert mcp.fetch_url("https://modelcontextprotocol.io/docs/learn/architecture") \
+        == "https://modelcontextprotocol.io/docs/learn/architecture.md"
+    assert doc_sites._page_name(P["claude-platform"], "Create a Message",
+                                "https://platform.claude.com/docs/en/api/messages/create.md") \
+        == "Claude API: Create a Message"
