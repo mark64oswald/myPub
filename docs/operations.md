@@ -41,7 +41,12 @@ Two kinds of live-doc source:
   `web_md` sources seeded earlier under a site's URL prefix are adopted.
   State lives in `doc_site`, `doc_fetch_state` (per page: ETag, hash,
   last checked / changed, the page's own "last updated" date,
-  retired_at) and `doc_refresh_run`.
+  retired_at) and `doc_refresh_run`. `sync --path FRAGMENT` limits a run
+  to part of a site and `--force` re-ingests even unchanged pages. Site
+  pages are sectioned with the `site_md` rule: split at H2–H4, then any
+  section over 4 KB is cut at paragraph / code-fence / table-row
+  boundaries (table header repeated) into "Heading (part k/n)" sections,
+  because the embedder reads only the first ~1 KB of a section.
 - **Single sources** (`refresh_docs.py`): Context7, DeepWiki, GitHub raw,
   single web pages. `--all`, `--tier` and `--stale` leave site pages out.
 
