@@ -461,6 +461,32 @@ def _split_body(body: str, max_chars: int) -> list[str]:
     return parts
 
 
+_FRONT_MATTER = re.compile(r"\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
+_FM_FIELD = re.compile(r"^(title|description):[ \t]*(.*)$", re.M)
+
+
+def strip_front_matter(content: str) -> str:
+    """Drop a leading YAML front-matter block.
+
+    Left in, markdown-it reads the closing ``---`` as a setext H2 underline
+    and the ``title:/url:/description:`` lines become the first section's
+    heading. ``title`` becomes an H1 when the body has none, and
+    ``description`` is kept as the paragraph under the H1.
+    """
+    m = _FRONT_MATTER.match(content)
+    if not m:
+        return content
+    fields = {k: v.strip().strip("'\"") for k, v in _FM_FIELD.findall(m.group(1))}
+    body = content[m.end():].lstrip("\r\n")
+    h1 = None
+    if body.startswith("# "):
+        h1, _, body = body.partition("\n")
+    elif fields.get("title"):
+        h1 = f"# {fields['title']}"
+    parts = [p for p in (h1, fields.get("description"), body.lstrip("\r\n")) if p]
+    return "\n\n".join(parts)
+
+
 def sectionize(snapshot: dict[str, Any]) -> list[Section]:
     """Dispatch on ``snapshot['source_type']``.
 
@@ -481,10 +507,10 @@ def sectionize(snapshot: dict[str, Any]) -> list[Section]:
     content = snapshot.get("content") or ""
 
     if source_type in {"markdown", "github_md", "github"}:
-        return sectionize_markdown(content)
+        return sectionize_markdown(strip_front_matter(content))
 
     if source_type == "site_md":
-        return sectionize_site_markdown(content)
+        return sectionize_site_markdown(strip_front_matter(content))
 
     if source_type == "apt":
         return sectionize_apt(content)
