@@ -181,6 +181,38 @@ def test_title_doc_section_search_finds_rare_title(server_state):
     assert out[0]["title_coverage"] > 0.4
 
 
+def test_api_doc_section_search_needs_api_intent(monkeypatch):
+    """No API words in the query → the API modality stays quiet and never
+    touches the catalog."""
+    monkeypatch.setattr(server, "_CONN", None, raising=False)
+    assert server._api_doc_section_search("install cluster libraries", 5) == []
+
+
+def test_api_doc_section_search_only_returns_api_pages(server_state):
+    import duckdb as _d
+    server._close_catalog()
+    w = _d.connect(str(server_state))
+    w.execute("""
+        INSERT INTO doc_source (doc_source_id, name, source_type, mcp_server, identifier) VALUES
+          (1, 'Databricks API: Add a library (POST /api/2.0/libraries/install)', 'web_md', 'web',
+              'https://docs.databricks.com/api/workspace/libraries/install.md'),
+          (2, 'Databricks: Install libraries on clusters', 'web_html', 'web',
+              'https://docs.databricks.com/aws/en/libraries/cluster-libraries')
+    """)
+    w.execute("INSERT INTO doc_snapshot (snapshot_id, doc_source_id, content_hash) "
+              "VALUES (1, 1, 'a'), (2, 2, 'b')")
+    w.execute("INSERT INTO doc_section (doc_section_id, snapshot_id, heading_text, content) VALUES "
+              "(1, 1, 'Add a library', 'Install libraries on a cluster. cluster_id is required.'), "
+              "(2, 2, 'Install libraries', 'Install libraries on a cluster from the UI.')")
+    w.execute("INSTALL fts; LOAD fts")
+    w.execute("PRAGMA create_fts_index('doc_section', 'doc_section_id', 'heading_text', 'content', "
+              "stemmer='porter', stopwords='english', overwrite=1)")
+    w.close()
+    server._bootstrap()
+    out = server._api_doc_section_search("install cluster libraries with the REST API", 5)
+    assert [r["doc_section_id"] for r in out] == [1]
+
+
 def test_title_coverage_handles_none_or_empty_title():
     assert server._title_token_coverage("anything", None) == 0.0
     assert server._title_token_coverage("anything", "") == 0.0
@@ -697,7 +729,7 @@ def test_run_auto_discovery_returns_empty_when_writer_unavailable(server_state, 
 
 def test_search_chapters_skips_discovery_when_auto_discover_false(server_state):
     """auto_discover=False bypasses the orchestrator entirely."""
-    fake_fanout = ([], [], [], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [], [])
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout), \
          patch.object(server, "_run_auto_discovery") as mock_run, \
          patch.object(server.ranking, "InteractiveRanker"):
@@ -717,7 +749,7 @@ def test_search_chapters_skips_discovery_when_results_are_not_thin(server_state)
     fake_fanout = (
         [{"kind": "chapter", "result_id": 1, "rrf_score": 0.5,
           "chapter_id": 1, "doc_section_id": None, "score": 5.0}],  # strong fts_chapter
-        [], [], [], [], [], [], [],  # vss/graph chapter, fts/vss/graph section, title chapter/section
+        [], [], [], [], [], [], [], [],  # vss/graph chapter, fts/vss/graph section, title chapter/section, api section
     )
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout), \
          patch.object(server, "_run_auto_discovery") as mock_run, \
@@ -733,7 +765,7 @@ def test_search_chapters_skips_discovery_when_results_are_not_thin(server_state)
 
 def test_search_chapters_runs_discovery_when_results_are_thin(server_state):
     """All-empty FTS + graph triggers _run_auto_discovery."""
-    fake_fanout = ([], [], [], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [], [])
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout), \
          patch.object(server, "_run_auto_discovery", return_value=[]) as mock_run, \
          patch.object(server.ranking, "InteractiveRanker"):
@@ -747,7 +779,7 @@ def test_search_chapters_runs_discovery_when_results_are_thin(server_state):
 def test_search_chapters_re_fans_out_after_successful_ingest(server_state):
     """If discovery returns at least one 'ingested' outcome, the modality
     fan-out runs a second time so the new content is included in ranking."""
-    fake_fanout = ([], [], [], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [], [])
     ingested_outcome = [{"query_term": "Zippy", "decision": "ingested",
                          "source": "context7", "doc_source_id": 42,
                          "chosen_match": None, "candidates": [], "note": ""}]
@@ -767,7 +799,7 @@ def test_search_chapters_re_fans_out_after_successful_ingest(server_state):
 def test_search_chapters_does_not_re_fanout_when_only_asked_user(server_state):
     """An ambiguous outcome (asked_user) doesn't trigger re-fanout — there's
     nothing new in the corpus to find."""
-    fake_fanout = ([], [], [], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [], [])
     asked_outcome = [{"query_term": "spark", "decision": "asked_user",
                       "source": "context7", "doc_source_id": None,
                       "chosen_match": None, "candidates": [], "note": ""}]
@@ -801,7 +833,7 @@ def test_search_chapters_feeds_wider_pool_to_ranker_than_final_limit(server_stat
          "excerpt": f"unique content for chapter {i}"}
         for i in range(1, pool_size + 6)
     ]
-    fake_fanout = (fts_hits, [], [], [], [], [], [], [])
+    fake_fanout = (fts_hits, [], [], [], [], [], [], [], [])
     captured: dict = {}
 
     class _RecordingRanker:
@@ -828,7 +860,7 @@ def test_search_chapters_generation_mode_with_strategy_calls_generation_ranker(
 ):
     """selection_strategy='consensus_synthesis' must route through
     GenerationRanker.select(...) and surface dropped-source provenance."""
-    fake_fanout = ([], [], [], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [], [])
     captured = {}
 
     class _RecordingGen:
@@ -858,7 +890,7 @@ def test_search_chapters_generation_mode_without_strategy_returns_sorted_view(
     server_state,
 ):
     """No strategy → return combined-score-sorted ranking; dropped is []."""
-    fake_fanout = ([], [], [], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [], [])
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout):
         result = server.search_chapters(
             "kafka", mode="generation", auto_discover=False,
@@ -891,7 +923,7 @@ def test_search_chapters_surfaces_discovery_outcomes_in_response(server_state):
     """The 'discovery' field in the response carries the orchestrator's
     per-term outcomes so callers (Claude Code) can show the user what
     happened."""
-    fake_fanout = ([], [], [], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [], [])
     outcomes = [{"query_term": "Zippy", "decision": "ingested",
                  "source": "context7", "doc_source_id": 99,
                  "chosen_match": {"name": "z", "identifier": "/z/z"},
