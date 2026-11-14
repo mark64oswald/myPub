@@ -3849,6 +3849,57 @@ def generate_plugin_scaffold(
                          tools=tools or [], domain=domain, ui=ui, hooks=hooks, author=author)
 
 
+@mcp.tool
+@_release_catalog
+def generate_guided_conversation(
+    goal: str,
+    output: str,
+    output_type: Optional[str] = None,
+    topics: Optional[list[str]] = None,
+    audience: Optional[str] = None,
+    max_steps: int = 8,
+    skill_name: Optional[str] = None,
+    invocation: str = "user",
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate a Guided Conversation: an Agent Skill that drives a chat from a goal
+    to a finished output, one question at a time.
+
+    Steps come from the KB: frame the goal, check prerequisites (REQUIRES
+    edges), settle decisions (CONTRASTS_WITH alternatives), work through
+    linked procedures, produce the output from a per-type template, and
+    review it. Prerequisites and alternatives pass the topic gate. Writes
+    ``<skill>/SKILL.md`` + ``references/``, ``conversation.json`` (the same
+    flow, machine-readable), README, provenance and a refine prompt.
+
+    Args:
+        goal: What the user wants to achieve.
+        output: What they want at the end ("a design doc", "an ADR").
+        output_type: ``document | plan | decision | code | checklist``;
+            detected from ``output`` when omitted.
+        topics: KB concepts the goal is about; found in the goal text when omitted.
+        audience: Default audience for the output.
+        max_steps: Upper bound on steps (prerequisite and procedure steps are trimmed).
+        skill_name: Skill slug; defaults to ``guide-<goal slug>``.
+        invocation: ``user`` (slash command only, the default) or ``auto``
+            (Claude may also start it when the goal comes up).
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import guided_conversation  # pylint: disable=import-outside-toplevel
+
+    try:
+        guided_conversation.detect_output_type(output, output_type)
+    except ValueError as e:
+        return {"package_id": -1, "validation_issues": [
+            {"severity": "error", "message": str(e)}], "notes": []}
+    return _run_scaffold(guided_conversation.make_guided_conversation_generator(), goal,
+                         output_root, overwrite, output=output, output_type=output_type,
+                         topics=topics or [], audience=audience, max_steps=max_steps,
+                         skill_name=skill_name, invocation=invocation)
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------

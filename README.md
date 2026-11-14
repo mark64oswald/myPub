@@ -511,11 +511,12 @@ Outputs land under `data/generated-packages/<name>_<timestamp>/`. Each entry bel
 | | [Currency Report](docs/generators.md#currency-report) | `/kb-currency-report` | Where books and live docs disagree |
 | Voice & character | [Dialog](docs/generators.md#dialog) | `/kb-dialog` | Two-character conversation (Architect vs Practitioner) |
 | | [Author Panel](docs/generators.md#author-panel) | `/kb-author-panel` | Multi-author roundtable |
-| Bootstrap & refactor | [**Project Bootstrap**](docs/generators.md#project-bootstrap) ★ | `/kb-bootstrap` | Runnable project scaffold for any of 8 language stacks (python / rust / node / typescript / java / go / csharp / ruby) — detected from request keywords or set via the `stack` parameter |
+| Bootstrap & refactor | [**Project Bootstrap**](docs/generators.md#project-bootstrap) ★ | `/kb-bootstrap` | Runnable project scaffold for any of 8 language stacks (python / rust / node / typescript / java / go / csharp / ruby) — detected from request keywords or set via the `stack` parameter; profiles for Databricks bundles, HealthSim and Lexa projects |
 | | [Refactoring Playbook](docs/generators.md#refactoring-playbook) | `/kb-refactoring` | Targeted refactor with before/after |
 | Agent Skills, MCP & plugins | [Agent Skill](docs/generators.md#agent-skills-mcp-servers-and-plugins) | `/kb-skill-from-kb` | One spec-valid Agent Skill from a KB concept |
 | | [MCP Server](docs/generators.md#agent-skills-mcp-servers-and-plugins) | `/kb-mcp-server` | MCP server skeleton (Python or TypeScript, optional MCP Apps and skills) |
 | | [Plugin Scaffold](docs/generators.md#agent-skills-mcp-servers-and-plugins) | `/kb-plugin-scaffold` | Claude Code plugin with KB skills, commands, hooks and an optional MCP server |
+| | [Guided Conversation](docs/generators.md#reference--teaching) | `/kb-guided-conversation` | Workflow skill that drives a chat from a goal to an output, with KB-grounded prerequisite checks, decisions and procedures |
 | Healthcare interop | [EDI Round-Trip](docs/generators.md#edi-round-trip-test) | `/kb-edi-roundtrip` | X12 transaction-set fixtures + parse/round-trip tests (270/271, 834, 835, 837, 997, 999) |
 | | [De-identification Bundle](docs/generators.md#de-identification-procedure-bundle) | `/kb-deid-bundle` | HIPAA Safe-Harbor de-id pipeline scaffold + audit trail (FHIR / DICOM / HL7v2 / clinical trial) |
 | | [Standards Translator](docs/generators.md#standards-translator) | `/kb-standards-translator` | Cross-standard mapping package (HL7v2↔FHIR, X12↔FHIR, DICOM→FHIR) — table + transformer + tests |

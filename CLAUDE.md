@@ -100,6 +100,7 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-skill-from-kb` | Agent Skill (2026-11) | One spec-valid Agent Skill (SKILL.md + references/) from a KB concept |
 | `/kb-mcp-server` | MCP Server (2026-11) | MCP 2026-07-28 server skeleton; python or typescript; `ui` adds an MCP App, `skill_topics` serves skills |
 | `/kb-plugin-scaffold` | Plugin Scaffold (2026-11) | Claude Code plugin as a local marketplace: KB skills, workflow skills, hooks, optional MCP server |
+| `/kb-guided-conversation` | Guided Conversation (2026-11) | Workflow skill that drives a chat from a goal to an output: frame → prerequisite checks (REQUIRES) → decisions (CONTRASTS_WITH) → procedures → produce → review; topic-gated; `conversation.json` for other hosts |
 
 ## Other MCP servers
 
