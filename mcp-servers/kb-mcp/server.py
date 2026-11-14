@@ -1084,6 +1084,62 @@ def _graph_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
     ]
 
 
+def _api_url_patterns() -> tuple[str, ...]:
+    return tuple(ranking._PAGE_KINDS["api_reference"]["url"])
+
+
+def _api_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
+    """API-reference modality: BM25 restricted to API reference pages, only
+    for queries that ask about an API ("REST API", "endpoint", "request").
+
+    Guides outnumber API pages and share their vocabulary, so a question
+    like "install cluster libraries with the REST API" fills every general
+    modality with guides and the matching endpoint page never reaches the
+    ranker. This bucket gives the API pages their own seats in the pool;
+    the ranker still decides the order.
+    """
+    if "api_reference" not in ranking.query_intents(query):
+        return []
+    if not _doc_section_fts_index_exists():
+        return []
+    pats = _api_url_patterns()
+    if not pats:
+        return []
+    like = " OR ".join(["lower(src.identifier) LIKE ?"] * len(pats))
+    rows = _CONN.execute(
+        f"""
+        SELECT s.doc_section_id,
+               fts_main_doc_section.match_bm25(s.doc_section_id, ?) AS score,
+               src.name AS doc_source_name,
+               s.heading_text,
+               substring(s.content, 1, ?) AS raw_prefix
+          FROM doc_section s
+          JOIN doc_snapshot sn ON s.snapshot_id = sn.snapshot_id
+          JOIN doc_source   src ON sn.doc_source_id = src.doc_source_id
+         WHERE ({like})
+           AND fts_main_doc_section.match_bm25(s.doc_section_id, ?) IS NOT NULL
+         ORDER BY score DESC
+         LIMIT ?
+        """,
+        [query, EXCERPT_FETCH_CHARS, *[f"%{p}%" for p in pats], query, limit],
+    ).fetchall()
+    return [
+        {
+            "kind": "doc_section",
+            "result_id": int(r[0]),
+            "doc_section_id": int(r[0]),
+            "chapter_id": None,
+            "score": float(r[1]),
+            "doc_source_name": r[2],
+            "heading_text": r[3],
+            "excerpt": _clean_excerpt(r[4]),
+            "title_coverage": _title_token_coverage(query, _doc_title(r[2], r[3])),
+            "full_title_match": _full_significant_title_match(query, r[3]),
+        }
+        for r in rows
+    ]
+
+
 def _doc_section_fts_index_exists() -> bool:
     """True if the doc_section FTS index has been built (any refresh ran)."""
     row = _CONN.execute(
@@ -1255,7 +1311,7 @@ def _is_thin_retrieval(
 
 
 def _run_modality_fanout(query: str, qvec: list[float]):
-    """Helper: fan out to all eight modality functions and normalize chapter rows.
+    """Helper: fan out to all nine modality functions and normalize chapter rows.
 
     Extracted from search_chapters so the auto-discovery re-retrieval path
     can call it again without copy-pasting the per-modality call list.
@@ -1272,9 +1328,10 @@ def _run_modality_fanout(query: str, qvec: list[float]):
     title_chapter = [_normalize_chapter_row(r)
                      for r in _title_chapter_search(query, PER_MODALITY_LIMIT)]
     title_section = _title_doc_section_search(query, PER_MODALITY_LIMIT)
+    api_section = _api_doc_section_search(query, PER_MODALITY_LIMIT)
     return (fts_chapter, vss_chapter, graph_chapter,
             fts_section, vss_section, graph_section,
-            title_chapter, title_section)
+            title_chapter, title_section, api_section)
 
 
 def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
@@ -1366,7 +1423,7 @@ def search_chapters(
     qvec = _embed(query)
     (fts_chapter, vss_chapter, graph_chapter,
      fts_section, vss_section, graph_section,
-     title_chapter, title_section) = _run_modality_fanout(query, qvec)
+     title_chapter, title_section, api_section) = _run_modality_fanout(query, qvec)
 
     # Auto-discovery fires under two conditions (Phase 4.5b + Pattern B):
     #   (a) Retrieval is thin — FTS + graph too weak to confidently answer
@@ -1390,9 +1447,9 @@ def search_chapters(
             # new doc_section rows are visible.
             (fts_chapter, vss_chapter, graph_chapter,
              fts_section, vss_section, graph_section,
-             title_chapter, title_section) = _run_modality_fanout(query, qvec)
+             title_chapter, title_section, api_section) = _run_modality_fanout(query, qvec)
 
-    # Merge across all eight buckets — RRF keys on (kind, result_id) so
+    # Merge across all nine buckets — RRF keys on (kind, result_id) so
     # chapter and doc_section rows can co-occur in the merged ranking.
     # We collect a wider pool than ``limit`` so the five-factor ranker can
     # promote a candidate that ranks lower on RRF but higher on combined
@@ -1407,6 +1464,7 @@ def search_chapters(
             "fts_doc_section": fts_section, "vss_doc_section": vss_section,
             "graph_doc_section": graph_section,
             "title_chapter": title_chapter, "title_doc_section": title_section,
+            "api_doc_section": api_section,
         },
         limit=scoring_pool,
     )

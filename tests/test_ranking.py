@@ -843,3 +843,13 @@ def test_year_factor():
     assert yf(ys, "Databricks SQL release notes / Changes in 2025.35") == 1.0
     assert yf(ys, "Databricks SQL release notes") == 1.0
     assert yf(frozenset(), "Changes in 2024.40") == 1.0
+
+
+def test_relevance_counts_api_and_title_only_modalities():
+    """A row found only by the API-reference or title modality still has
+    relevance; before, both scored 0 and sank to the bottom of the pool."""
+    api = ranking.relevance_score({"api_doc_section": 8.5}, title_coverage=0.5)
+    fts = ranking.relevance_score({"fts_doc_section": 8.5}, title_coverage=0.5)
+    assert api == pytest.approx(fts) and api > 0
+    title_only = ranking.relevance_score({"title_doc_section": 0.8}, title_coverage=0.8)
+    assert 0 < title_only < ranking.relevance_score({"fts_doc_section": 8.5}, title_coverage=0.8)
