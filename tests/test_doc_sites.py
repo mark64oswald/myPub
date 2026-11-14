@@ -611,6 +611,15 @@ def test_databricks_api_preset_scope():
         == "https://docs.databricks.com/api/workspace/libraries/install.md"
 
 
+def test_with_endpoint_appends_single_rest_path():
+    page = "# Add a library\n\n`POST /api/2.0/libraries/install`\n\nAdds libraries to a cluster.\n"
+    assert doc_sites.with_endpoint("Add a library", page) \
+        == "Add a library (POST /api/2.0/libraries/install)"
+    many = page + "\nGET /api/2.0/libraries/cluster-status\n"
+    assert doc_sites.with_endpoint("Libraries", many) == "Libraries"
+    assert doc_sites.with_endpoint("Guide", "# Guide\n\nNo endpoints here.") == "Guide"
+
+
 def test_front_matter_is_not_a_heading():
     import sectionizer
     page = ("---\ntitle: Tool use with prompt caching\nurl: https://x.test/p.md\n"
