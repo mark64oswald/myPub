@@ -44,6 +44,7 @@ from typing import Any, Optional
 import duckdb
 
 import bootstrap_profiles as bp
+import kb_scaffold as ks
 from generator import (
     GenFile,
     GenPlan,
@@ -812,6 +813,11 @@ class StackComposeDecomposer:
                          f"({prof.delegate}); writing a plain stack scaffold here")
             prof = None
         anchors = list(prof.anchors) if prof else []
+        if prof is not None and not (techs or pats):
+            # Profile requests are often lower-case prose ("ingests member claims"):
+            # add the concepts the description names, not just capitalised words.
+            all_named += [n for n in ks.concepts_in_text(conn, resolver, query)
+                          if n not in all_named]
         all_named += [a for a in anchors if a not in all_named]
 
         elements: list[_StackElement] = []
@@ -871,6 +877,14 @@ class StackComposeDecomposer:
                 doc_section_ids=sec_ids,
             ))
 
+        if not (techs or pats):
+            # Drop one-word elements gleaned from capitalised words when a longer
+            # element contains them ("Unity" and "Catalog" next to "Unity Catalog").
+            multi = [set(re.findall(r"[a-z0-9]+", el.name.lower()))
+                     for el in elements if len(el.name.split()) > 1]
+            elements = [el for el in elements
+                        if len(el.name.split()) > 1
+                        or not any(el.name.lower() in m for m in multi)]
         if anchors:
             hit = [a for a in anchors if any(
                 el.name.lower() == a.lower() for el in elements)]

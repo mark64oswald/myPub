@@ -354,6 +354,100 @@ def topic_material(
     return tm
 
 
+# Words too generic to stand for a topic on their own, and too generic to make a
+# procedure relevant to a goal. Capitalisation doesn't rescue them: a goal's
+# first word ("Design ...") is capitalised too.
+GENERIC_WORDS = {
+    "data", "design", "system", "systems", "service", "services", "project", "model",
+    "process", "user", "users", "team", "build", "plan", "code", "test", "tests",
+    "document", "app", "application", "guide", "help", "work", "output", "goal", "new",
+    "simple", "pipeline", "pipelines", "backbone", "event", "events", "table", "tables",
+    "job", "jobs", "platform", "architecture", "tool", "tools", "file", "files", "choose",
+    "choice", "between", "migrate", "migration", "create", "write", "make", "set", "setup",
+    "run", "add", "our", "their", "approach", "option", "options", "solution", "framework",
+    "member", "members", "order", "orders", "source", "sources", "layer", "step", "steps",
+}
+
+
+def stem(word: str) -> str:
+    """Crude stem so 'sourced', 'sourcing' and 'sources' meet: strip ing / ed / es / s."""
+    w = word.lower()
+    for suf in ("ing", "ed", "es", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            return w[: -len(suf)]
+    return w
+
+
+def stems(text: Optional[str], *, drop_generic: bool = True) -> set[str]:
+    out = set()
+    for w in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(w) < 3 or w in _STOP or (drop_generic and w in GENERIC_WORDS):
+            continue
+        out.add(stem(w))
+    return out
+
+
+def _phrase_variants(words: Sequence[str]) -> list[str]:
+    """'event sourced' -> also 'event sourcing'; 'domain events' -> 'domain event'."""
+    base = " ".join(words)
+    out = [base]
+    last = words[-1]
+    if last.lower().endswith("ed") and len(last) > 4:
+        out.append(" ".join([*words[:-1], last[:-2] + "ing"]))
+        out.append(" ".join([*words[:-1], last[:-1] + "ing"]))
+    if last.lower().endswith("s") and len(last) > 4:
+        out.append(" ".join([*words[:-1], last[:-1]]))
+    return out
+
+
+def concepts_in_text(conn: duckdb.DuckDBPyConnection, resolver: Any, text: str,
+                     limit: int = 3) -> list[str]:
+    """Concept names a sentence mentions: the longest n-grams (1-4 words, hyphens
+    split) that resolve by name or alias and have KB coverage. A phrase made only
+    of generic words (``GENERIC_WORDS``) never counts, capitalised or not."""
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#.]*", (text or "").replace("-", " "))
+    found: list[tuple[int, int, int, str]] = []          # (-n, -coverage, position, name)
+    taken: set[int] = set()
+    for n in (4, 3, 2, 1):
+        for i in range(len(words) - n + 1):
+            span = set(range(i, i + n))
+            if span & taken:
+                continue
+            chunk = [w.strip(".") for w in words[i:i + n]]
+            low = [w.lower() for w in chunk]
+            if low[0] in _STOP or low[-1] in _STOP:
+                continue
+            if all(w in GENERIC_WORDS or w in _STOP for w in low):
+                continue
+            if n == 1 and len(chunk[0]) < 3:
+                continue
+            cid = None
+            for phrase in _phrase_variants(chunk):
+                cid = resolver.resolve_lookup_only(phrase)
+                if cid is not None:
+                    break
+            if cid is None:
+                continue
+            cov = conn.execute(
+                "SELECT (SELECT COUNT(*) FROM procedure_concept WHERE concept_id = ?)"
+                " + (SELECT COUNT(*) FROM concept_relation"
+                "     WHERE from_concept_id = ? OR to_concept_id = ?)",
+                [int(cid)] * 3).fetchone()[0] or 0
+            if cov == 0:
+                continue
+            taken |= span
+            name = conn.execute("SELECT name FROM concept WHERE concept_id = ?",
+                                [int(cid)]).fetchone()[0]
+            found.append((-n, -int(cov), i, name))
+    out: list[str] = []
+    for _n, _c, _i, name in sorted(found):
+        if name.lower() not in {o.lower() for o in out}:
+            out.append(name)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def first_sentence(text: Optional[str], max_chars: int = 300) -> str:
     t = " ".join((text or "").split())
     if not t:

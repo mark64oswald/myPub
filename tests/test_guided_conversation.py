@@ -119,7 +119,63 @@ def test_steps_follow_the_kb(catalog, corpus):
     assert {s.title for s in c.steps if s.kind == "work"} == {
         "Design an event store", "Replay events into a projection"}
     work = next(s for s in c.steps if s.title == "Design an event store")
+    # A design doc uses procedures as input; it doesn't run them.
+    assert "not running it" in work.purpose
+
+
+def test_hands_on_output_walks_the_procedure(catalog, corpus):
+    c = gc.ConversationDecomposer().decompose(
+        catalog, _resolver(catalog), "Build an event-sourced order service", output="code")
+    work = next(s for s in c.steps if s.title == "Design an event store")
     assert "You know your aggregates." in work.ask[0]
+    assert "one at a time" in work.do[0]
+
+
+def test_generic_words_and_hyphens_in_topic_picking(catalog, corpus):
+    _concept(catalog, "Design", "Concept", "Shaping a thing.")
+    _rel(catalog, _concept(catalog, "Canva"), catalog.execute(
+        "SELECT concept_id FROM concept WHERE name = 'Design'").fetchone()[0], "REQUIRES")
+    names = gc.topics_from_goal(catalog, _resolver(catalog),
+                                "Design an event-sourced order service")
+    assert names == ["Event Sourcing"]
+
+
+def test_comparison_goal_makes_one_decision(catalog, corpus):
+    kafka = _concept(catalog, "Apache Kafka", "Tool", "A log-based event broker.")
+    pulsar = _concept(catalog, "Apache Pulsar", "Tool", "A tiered event broker.")
+    topic = _concept(catalog, "Topic", "Concept", "A Kafka stream unit.")
+    _rel(catalog, kafka, topic, "CONTRASTS_WITH")
+    _rel(catalog, kafka, pulsar, "CONTRASTS_WITH")
+    _proc(catalog, kafka, "Download and extract Apache Kafka", "1. Download\n2. Extract")
+    c = gc.ConversationDecomposer().decompose(
+        catalog, _resolver(catalog),
+        "Choose between Apache Kafka and Apache Pulsar for our event backbone",
+        output="an ADR")
+    assert c.output_type == "decision" and c.comparison
+    decides = [s for s in c.steps if s.kind == "decide"]
+    assert [s.title for s in decides] == ["Compare Apache Kafka and Apache Pulsar"]
+    assert not [s for s in c.steps if s.kind == "work"]       # ADR: no how-to steps
+
+
+def test_alternatives_drop_parts_and_other_kinds(catalog, corpus):
+    kafka = _concept(catalog, "Apache Kafka", "Tool", "A log-based event broker.")
+    for name, ctype in (("Transactions in Kafka", "Tool"), ("kafka-topics.sh", "Tool"),
+                        ("Topic", "Concept"), ("RabbitMQ", "Tool")):
+        _rel(catalog, kafka, _concept(catalog, name, ctype), "CONTRASTS_WITH")
+    tm = gc.ks.topic_material(catalog, _resolver(catalog), "Apache Kafka")
+    opts, dropped = gc.alternatives(catalog, tm)
+    assert [o.name for o in opts] == ["RabbitMQ"]
+    assert dropped == 3
+
+
+def test_procedures_ranked_by_goal_words(catalog, corpus):
+    es = corpus["es"]
+    _proc(catalog, es, "Add a Slack hook to the event store", "1. Create webhook")
+    _proc(catalog, es, "Migrate a CRUD table to event sourcing", "1. Backfill events")
+    c = gc.ConversationDecomposer().decompose(
+        catalog, _resolver(catalog), "Migrate a CRUD orders table to event sourcing",
+        output="a migration plan", topics=["Event Sourcing"], max_procedures=1)
+    assert [p.name for p in c.procedures] == ["Migrate a CRUD table to event sourcing"]
 
 
 def test_max_steps_trims_assess_then_work(catalog, corpus):
