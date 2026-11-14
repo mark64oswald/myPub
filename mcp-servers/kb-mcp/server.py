@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 import os
 import re
 import sys
@@ -470,14 +471,108 @@ def _doc_title(page_name: Optional[str], heading: Optional[str]) -> Optional[str
     return " / ".join(parts) or None
 
 
+def _token_in_title(token: str, title_lower: str) -> bool:
+    """Substring match with a light plural fold: "pipelines" also matches a
+    title that says "pipeline", "expectations" one that says "expectation"."""
+    if token in title_lower:
+        return True
+    if len(token) > 4 and token.endswith("s"):
+        return token[:-1] in title_lower
+    return False
+
+
+# Title document frequencies, cached per catalog for the life of the
+# process. A stale count only nudges a weight, so no invalidation.
+_TITLE_DF_CACHE: dict[str, int] = {}
+_TITLE_DF_CATALOG: Optional[str] = None
+_TITLE_N: Optional[int] = None
+
+
+def _title_corpus_size() -> int:
+    """Number of titled units: chapters plus doc sections."""
+    global _TITLE_N
+    _sync_title_df_cache()
+    if _TITLE_N is None:
+        row = _CONN.execute(
+            "SELECT (SELECT count(*) FROM chapter) + (SELECT count(*) FROM doc_section)"
+        ).fetchone()
+        _TITLE_N = int(row[0] or 0)
+    return _TITLE_N
+
+
+def _sync_title_df_cache() -> None:
+    global _TITLE_DF_CATALOG, _TITLE_N
+    key = str(_CATALOG_PATH)
+    if _TITLE_DF_CATALOG != key:
+        _TITLE_DF_CACHE.clear()
+        _TITLE_N = None
+        _TITLE_DF_CATALOG = key
+
+
+def _title_df(token: str) -> int:
+    """How many chapter titles and doc-section titles (page name + heading)
+    contain ``token`` (with the same plural fold as matching)."""
+    _sync_title_df_cache()
+    if token in _TITLE_DF_CACHE:
+        return _TITLE_DF_CACHE[token]
+    stem = token[:-1] if len(token) > 4 and token.endswith("s") else token
+    pat = f"%{stem}%"
+    row = _CONN.execute(
+        """
+        SELECT (SELECT count(*) FROM chapter WHERE lower(title) LIKE ?)
+             + (SELECT count(*)
+                  FROM doc_section s
+                  JOIN doc_snapshot sn ON s.snapshot_id = sn.snapshot_id
+                  JOIN doc_source  src ON sn.doc_source_id = src.doc_source_id
+                 WHERE lower(coalesce(src.name, '') || ' ' || coalesce(s.heading_text, ''))
+                       LIKE ?)
+        """,
+        [pat, pat],
+    ).fetchone()
+    df = int(row[0] or 0)
+    _TITLE_DF_CACHE[token] = df
+    return df
+
+
+def _token_weights(tokens: list[str]) -> dict[str, float]:
+    """IDF weight per query token, measured over titles in the catalog.
+
+    A query like "Lakeflow pipelines expectations drop invalid records" is
+    mostly product name: "lakeflow" and "pipelines" sit in thousands of
+    page titles (release notes repeat them), "expectations" in a handful.
+    Plain coverage gives a release-notes page titled "Lakeflow pipelines
+    release notes" 2/6, the same as the expectations guide. IDF weighting
+    lets the rare word carry the title match.
+
+    Uniform weights (1.0) when no catalog is open or it is empty.
+    """
+    if not tokens:
+        return {}
+    if _CONN is None:
+        return {t: 1.0 for t in tokens}
+    try:
+        n = _title_corpus_size()
+        if n <= 0:
+            return {t: 1.0 for t in tokens}
+        return {t: math.log(1.0 + n / (1.0 + _title_df(t))) for t in tokens}
+    except duckdb.Error as e:  # pragma: no cover - defensive
+        LOG.warning("title idf lookup failed, using uniform weights: %s", e)
+        return {t: 1.0 for t in tokens}
+
+
 def _title_token_coverage(query: str, title: Optional[str]) -> float:
-    """Fraction of significant query tokens that appear in the title.
+    """IDF-weighted fraction of significant query tokens that appear in the title.
 
     Strong signal for ranking: a chapter titled "What Is Terraform State?"
-    has coverage 0.67 against query "Terraform state locking", while a
-    tangential doc_section with heading "Delta Lake bench" has coverage
-    0.0. Title coverage rewards results that are ABOUT the topic over
-    results that just BM25-match individual tokens of generic content.
+    covers 2 of 3 tokens of "Terraform state locking", while a tangential
+    doc_section with heading "Delta Lake bench" covers none. Title coverage
+    rewards results that are ABOUT the topic over results that just
+    BM25-match individual tokens of generic content.
+
+    Each token counts by its title IDF (see ``_token_weights``), so a title
+    that matches the rare, specific word outranks one that only matches the
+    common product name. With no catalog open the weights are uniform and
+    this is the plain fraction.
 
     URL-shaped "titles" return 0.0: the doc_section sectionizer falls back
     to GitHub URLs when the source markdown lacks clean headings, and
@@ -497,8 +592,116 @@ def _title_token_coverage(query: str, title: Optional[str]) -> float:
     if not tokens:
         return 0.0
     title_lower = title_stripped.lower()
-    hits = sum(1 for t in tokens if t in title_lower)
-    return hits / len(tokens)
+    weights = _token_weights(tokens)
+    total = sum(weights.values())
+    if total <= 0:
+        return 0.0
+    hits = sum(w for t, w in weights.items() if _token_in_title(t, title_lower))
+    return hits / total
+
+
+# A token is "rare" enough to seed the title modality when at most this
+# share of titled units contain it.
+TITLE_SEED_MAX_DF_SHARE = 0.01
+
+
+def _title_seed_token(query: str) -> Optional[str]:
+    """The rarest significant query token that occurs in some title, if it
+    is rare enough to be discriminating; else None."""
+    if _CONN is None:
+        return None
+    tokens = list(dict.fromkeys(_query_significant_tokens(query)))
+    if len(tokens) < 2:
+        return None
+    n = _title_corpus_size()
+    if n <= 0:
+        return None
+    dfs = [(_title_df(t), t) for t in tokens if len(t) >= 4]
+    dfs = [(df, t) for df, t in dfs if 0 < df <= max(1, n * TITLE_SEED_MAX_DF_SHARE)]
+    if not dfs:
+        return None
+    return min(dfs)[1]
+
+
+def _title_doc_section_search(query: str, limit: int) -> list[dict[str, Any]]:
+    """Title modality for doc sections: sections whose page name or heading
+    contains the query's rarest word, ordered by weighted title coverage.
+
+    FTS and vectors score the body, so a guide whose title names the rare
+    concept can sit below rank 50 when the query is mostly a product name
+    that hundreds of pages repeat. This modality puts it in the candidate
+    pool; the ranker's title-coverage boost then decides.
+    """
+    seed = _title_seed_token(query)
+    if seed is None:
+        return []
+    stem = seed[:-1] if len(seed) > 4 and seed.endswith("s") else seed
+    rows = _CONN.execute(
+        """
+        SELECT s.doc_section_id, src.name, s.heading_text,
+               substring(s.content, 1, ?) AS raw_prefix
+          FROM doc_section s
+          JOIN doc_snapshot sn ON s.snapshot_id = sn.snapshot_id
+          JOIN doc_source  src ON sn.doc_source_id = src.doc_source_id
+         WHERE lower(coalesce(src.name, '') || ' ' || coalesce(s.heading_text, ''))
+               LIKE ?
+         LIMIT 2000
+        """,
+        [EXCERPT_FETCH_CHARS, f"%{stem}%"],
+    ).fetchall()
+    scored = sorted(
+        ((_title_token_coverage(query, _doc_title(r[1], r[2])), r) for r in rows),
+        key=lambda x: x[0], reverse=True,
+    )
+    out = []
+    for cov, r in scored[:limit]:
+        out.append({
+            "kind": "doc_section",
+            "result_id": int(r[0]),
+            "doc_section_id": int(r[0]),
+            "chapter_id": None,
+            "score": cov,
+            "doc_source_name": r[1],
+            "heading_text": r[2],
+            "excerpt": _clean_excerpt(r[3]),
+            "title_coverage": cov,
+            "full_title_match": _full_significant_title_match(query, r[2]),
+        })
+    return out
+
+
+def _title_chapter_search(query: str, limit: int) -> list[dict[str, Any]]:
+    """Title modality for book chapters (same seed as the doc-section one)."""
+    seed = _title_seed_token(query)
+    if seed is None:
+        return []
+    stem = seed[:-1] if len(seed) > 4 and seed.endswith("s") else seed
+    rows = _CONN.execute(
+        """
+        SELECT c.chapter_id, b.title, c.title, substring(c.content, 1, ?)
+          FROM chapter c
+          JOIN book b ON c.book_id = b.book_id
+         WHERE lower(c.title) LIKE ?
+         LIMIT 2000
+        """,
+        [EXCERPT_FETCH_CHARS, f"%{stem}%"],
+    ).fetchall()
+    scored = sorted(
+        ((_title_token_coverage(query, r[2]), r) for r in rows),
+        key=lambda x: x[0], reverse=True,
+    )
+    return [
+        {
+            "chapter_id": r[0],
+            "score": cov,
+            "book_title": _clean_book_title(r[1]),
+            "chapter_title": r[2],
+            "excerpt": _clean_excerpt(r[3]),
+            "title_coverage": cov,
+            "full_title_match": _full_significant_title_match(query, r[2]),
+        }
+        for cov, r in scored[:limit]
+    ]
 
 
 def _required_acronyms(query: str) -> list[str]:
@@ -1048,7 +1251,7 @@ def _is_thin_retrieval(
 
 
 def _run_modality_fanout(query: str, qvec: list[float]):
-    """Helper: fan out to all six modality functions and normalize chapter rows.
+    """Helper: fan out to all eight modality functions and normalize chapter rows.
 
     Extracted from search_chapters so the auto-discovery re-retrieval path
     can call it again without copy-pasting the per-modality call list.
@@ -1062,8 +1265,12 @@ def _run_modality_fanout(query: str, qvec: list[float]):
     fts_section = _fts_doc_section_search(query, PER_MODALITY_LIMIT)
     vss_section = _vss_doc_section_search(qvec, PER_MODALITY_LIMIT, query=query)
     graph_section = _graph_doc_section_search(query, PER_MODALITY_LIMIT)
+    title_chapter = [_normalize_chapter_row(r)
+                     for r in _title_chapter_search(query, PER_MODALITY_LIMIT)]
+    title_section = _title_doc_section_search(query, PER_MODALITY_LIMIT)
     return (fts_chapter, vss_chapter, graph_chapter,
-            fts_section, vss_section, graph_section)
+            fts_section, vss_section, graph_section,
+            title_chapter, title_section)
 
 
 def _scored_to_dict(s: "ranking.ScoredResult") -> dict[str, Any]:
@@ -1154,7 +1361,8 @@ def search_chapters(
 
     qvec = _embed(query)
     (fts_chapter, vss_chapter, graph_chapter,
-     fts_section, vss_section, graph_section) = _run_modality_fanout(query, qvec)
+     fts_section, vss_section, graph_section,
+     title_chapter, title_section) = _run_modality_fanout(query, qvec)
 
     # Auto-discovery fires under two conditions (Phase 4.5b + Pattern B):
     #   (a) Retrieval is thin — FTS + graph too weak to confidently answer
@@ -1177,9 +1385,10 @@ def search_chapters(
             # already swapped back to RO inside the writer context, so the
             # new doc_section rows are visible.
             (fts_chapter, vss_chapter, graph_chapter,
-             fts_section, vss_section, graph_section) = _run_modality_fanout(query, qvec)
+             fts_section, vss_section, graph_section,
+             title_chapter, title_section) = _run_modality_fanout(query, qvec)
 
-    # Merge across all six buckets — RRF keys on (kind, result_id) so
+    # Merge across all eight buckets — RRF keys on (kind, result_id) so
     # chapter and doc_section rows can co-occur in the merged ranking.
     # We collect a wider pool than ``limit`` so the five-factor ranker can
     # promote a candidate that ranks lower on RRF but higher on combined
@@ -1193,6 +1402,7 @@ def search_chapters(
             "graph_chapter": graph_chapter,
             "fts_doc_section": fts_section, "vss_doc_section": vss_section,
             "graph_doc_section": graph_section,
+            "title_chapter": title_chapter, "title_doc_section": title_section,
         },
         limit=scoring_pool,
     )

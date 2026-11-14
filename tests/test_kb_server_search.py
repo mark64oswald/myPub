@@ -111,6 +111,76 @@ def test_title_coverage_strips_stop_words():
     assert out == pytest.approx(2 / 3)
 
 
+def test_title_coverage_matches_plural_fold():
+    """"pipelines" in the query matches a title that says "pipeline"."""
+    out = server._title_token_coverage("pipelines expectations",
+                                        "Manage data quality with pipeline expectations")
+    assert out == 1.0
+
+
+def _fake_title_df(monkeypatch, dfs: dict[str, int], n: int = 100_000):
+    monkeypatch.setattr(server, "_CONN", object(), raising=False)
+    monkeypatch.setattr(server, "_title_corpus_size", lambda: n)
+    monkeypatch.setattr(server, "_title_df", lambda t: dfs.get(t, 0))
+
+
+def test_title_coverage_weights_rare_tokens(monkeypatch):
+    """The rare word carries the title match: the expectations guide beats a
+    release-notes page that only repeats the product name."""
+    _fake_title_df(monkeypatch, {"lakeflow": 3000, "pipelines": 6000,
+                                 "expectations": 12, "drop": 400,
+                                 "invalid": 300, "records": 900})
+    q = "Lakeflow pipelines expectations drop invalid records"
+    guide = server._title_token_coverage(
+        q, "Databricks: Manage data quality with pipeline expectations")
+    notes = server._title_token_coverage(
+        q, "Databricks: Lakeflow Spark Declarative Pipelines release notes")
+    assert guide > notes
+    # Unweighted, both cover the same share; weighted, they don't.
+    assert notes < 2 / 6
+
+
+def test_title_seed_token_picks_rarest_discriminating_word(monkeypatch):
+    _fake_title_df(monkeypatch, {"lakeflow": 3000, "pipelines": 6000,
+                                 "expectations": 12, "records": 900})
+    assert server._title_seed_token(
+        "Lakeflow pipelines expectations records") == "expectations"
+    # Every token common (> 1% of titles) → no seed, the modality stays quiet.
+    _fake_title_df(monkeypatch, {"lakeflow": 3000, "pipelines": 6000})
+    assert server._title_seed_token("Lakeflow pipelines") is None
+    # Single-token queries don't seed.
+    assert server._title_seed_token("expectations") is None
+
+
+def test_title_doc_section_search_finds_rare_title(server_state):
+    """End to end on a tiny catalog: the title modality returns the section
+    whose page name holds the rare query word."""
+    server._TITLE_DF_CACHE.clear()
+    server._TITLE_N = None
+    # Read-only connection: run against a writable one, then reopen.
+    server._close_catalog()
+    import duckdb as _d
+    w = _d.connect(str(server_state))
+    w.execute("""
+        INSERT INTO doc_source (doc_source_id, name, source_type, mcp_server, identifier)
+        SELECT i,
+               CASE i WHEN 1 THEN 'Databricks: Pipeline expectations'
+                      ELSE 'Databricks: Lakeflow pipelines release notes ' || i END,
+               'web_md', 'web', 'https://x.test/' || i
+          FROM range(1, 400) t(i)
+    """)
+    w.execute("INSERT INTO doc_snapshot (snapshot_id, doc_source_id, content_hash) "
+              "SELECT i, i, 'h' || i FROM range(1, 400) t(i)")
+    w.execute("INSERT INTO doc_section (doc_section_id, snapshot_id, heading_text, content) "
+              "SELECT i, i, 'Overview', 'body text' FROM range(1, 400) t(i)")
+    w.close()
+    server._bootstrap()
+    out = server._title_doc_section_search(
+        "lakeflow pipelines expectations drop invalid records", 5)
+    assert [r["doc_section_id"] for r in out] == [1]
+    assert out[0]["title_coverage"] > 0.4
+
+
 def test_title_coverage_handles_none_or_empty_title():
     assert server._title_token_coverage("anything", None) == 0.0
     assert server._title_token_coverage("anything", "") == 0.0
@@ -627,7 +697,7 @@ def test_run_auto_discovery_returns_empty_when_writer_unavailable(server_state, 
 
 def test_search_chapters_skips_discovery_when_auto_discover_false(server_state):
     """auto_discover=False bypasses the orchestrator entirely."""
-    fake_fanout = ([], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [])
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout), \
          patch.object(server, "_run_auto_discovery") as mock_run, \
          patch.object(server.ranking, "InteractiveRanker"):
@@ -647,7 +717,7 @@ def test_search_chapters_skips_discovery_when_results_are_not_thin(server_state)
     fake_fanout = (
         [{"kind": "chapter", "result_id": 1, "rrf_score": 0.5,
           "chapter_id": 1, "doc_section_id": None, "score": 5.0}],  # strong fts_chapter
-        [], [], [], [], [],  # vss_chapter, graph_chapter, fts/vss/graph_section
+        [], [], [], [], [], [], [],  # vss/graph chapter, fts/vss/graph section, title chapter/section
     )
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout), \
          patch.object(server, "_run_auto_discovery") as mock_run, \
@@ -663,7 +733,7 @@ def test_search_chapters_skips_discovery_when_results_are_not_thin(server_state)
 
 def test_search_chapters_runs_discovery_when_results_are_thin(server_state):
     """All-empty FTS + graph triggers _run_auto_discovery."""
-    fake_fanout = ([], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [])
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout), \
          patch.object(server, "_run_auto_discovery", return_value=[]) as mock_run, \
          patch.object(server.ranking, "InteractiveRanker"):
@@ -677,7 +747,7 @@ def test_search_chapters_runs_discovery_when_results_are_thin(server_state):
 def test_search_chapters_re_fans_out_after_successful_ingest(server_state):
     """If discovery returns at least one 'ingested' outcome, the modality
     fan-out runs a second time so the new content is included in ranking."""
-    fake_fanout = ([], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [])
     ingested_outcome = [{"query_term": "Zippy", "decision": "ingested",
                          "source": "context7", "doc_source_id": 42,
                          "chosen_match": None, "candidates": [], "note": ""}]
@@ -697,7 +767,7 @@ def test_search_chapters_re_fans_out_after_successful_ingest(server_state):
 def test_search_chapters_does_not_re_fanout_when_only_asked_user(server_state):
     """An ambiguous outcome (asked_user) doesn't trigger re-fanout — there's
     nothing new in the corpus to find."""
-    fake_fanout = ([], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [])
     asked_outcome = [{"query_term": "spark", "decision": "asked_user",
                       "source": "context7", "doc_source_id": None,
                       "chosen_match": None, "candidates": [], "note": ""}]
@@ -731,7 +801,7 @@ def test_search_chapters_feeds_wider_pool_to_ranker_than_final_limit(server_stat
          "excerpt": f"unique content for chapter {i}"}
         for i in range(1, pool_size + 6)
     ]
-    fake_fanout = (fts_hits, [], [], [], [], [])
+    fake_fanout = (fts_hits, [], [], [], [], [], [], [])
     captured: dict = {}
 
     class _RecordingRanker:
@@ -758,7 +828,7 @@ def test_search_chapters_generation_mode_with_strategy_calls_generation_ranker(
 ):
     """selection_strategy='consensus_synthesis' must route through
     GenerationRanker.select(...) and surface dropped-source provenance."""
-    fake_fanout = ([], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [])
     captured = {}
 
     class _RecordingGen:
@@ -788,7 +858,7 @@ def test_search_chapters_generation_mode_without_strategy_returns_sorted_view(
     server_state,
 ):
     """No strategy → return combined-score-sorted ranking; dropped is []."""
-    fake_fanout = ([], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [])
     with patch.object(server, "_run_modality_fanout", return_value=fake_fanout):
         result = server.search_chapters(
             "kafka", mode="generation", auto_discover=False,
@@ -821,7 +891,7 @@ def test_search_chapters_surfaces_discovery_outcomes_in_response(server_state):
     """The 'discovery' field in the response carries the orchestrator's
     per-term outcomes so callers (Claude Code) can show the user what
     happened."""
-    fake_fanout = ([], [], [], [], [], [])
+    fake_fanout = ([], [], [], [], [], [], [], [])
     outcomes = [{"query_term": "Zippy", "decision": "ingested",
                  "source": "context7", "doc_source_id": 99,
                  "chosen_match": {"name": "z", "identifier": "/z/z"},
