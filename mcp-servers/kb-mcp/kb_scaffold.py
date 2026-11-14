@@ -366,6 +366,9 @@ GENERIC_WORDS = {
     "choice", "between", "migrate", "migration", "create", "write", "make", "set", "setup",
     "run", "add", "our", "their", "approach", "option", "options", "solution", "framework",
     "member", "members", "order", "orders", "source", "sources", "layer", "step", "steps",
+    # verbs and fillers that resolve to stray concepts ("tutor built on Lexa" -> "Built")
+    "built", "building", "using", "used", "based", "made", "tested", "testing", "running",
+    "want", "need", "needs", "like", "into", "onto", "via", "about",
 }
 
 

@@ -227,3 +227,25 @@ def test_unknown_goal_still_generates_a_generic_flow(catalog, tmp_path):
     assert any("no KB topics" in i.message for i in issues)
     flow = json.loads((tmp_path / report.package_name / "conversation.json").read_text())
     assert [s["kind"] for s in flow["steps"]] == ["frame", "produce", "review"]
+
+
+def test_migration_goal_has_no_decision_and_prefers_migration_procedures(catalog, corpus):
+    es, crud = corpus["es"], corpus["crud"]
+    _rel(catalog, crud, _concept(catalog, "Active Record", "Pattern"), "CONTRASTS_WITH")
+    _proc(catalog, crud, "Add an index to a CRUD table", "1. Create index on the crud table")
+    _proc(catalog, es, "Convert a CRUD model to event sourcing", "1. Emit events")
+    c = gc.ConversationDecomposer().decompose(
+        catalog, _resolver(catalog), "Migrate a CRUD service to event sourcing",
+        output="a migration plan", topics=["CRUD", "Event Sourcing"], max_procedures=1)
+    assert not [s for s in c.steps if s.kind == "decide"]
+    assert [p.name for p in c.procedures] == ["Convert a CRUD model to event sourcing"]
+
+
+def test_stray_verbs_are_not_topics(catalog):
+    built = _concept(catalog, "Built", "Concept", "Past tense.")
+    lexa = _concept(catalog, "Variant Interpretation", "Concept", "Reading variants.")
+    for a, b in ((built, lexa), (lexa, built)):
+        _rel(catalog, a, b, "REQUIRES")
+    assert gc.topics_from_goal(catalog, _resolver(catalog),
+                               "Variant interpretation tutor built on Lexa") == [
+        "Variant Interpretation"]

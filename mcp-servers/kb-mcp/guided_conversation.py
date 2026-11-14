@@ -159,6 +159,17 @@ def is_comparison(goal: str, n_topics: int) -> bool:
     return n_topics >= 2 and bool(_COMPARE_RE.search(goal or ""))
 
 
+_MIGRATE_RE = re.compile(r"\b(migrat\w*|upgrad\w*|port(?:ing)?|mov(?:e|ing)|convert\w*|"
+                         r"replac\w*)\b.*\bto\b", re.I)
+_MIGRATE_WORDS = re.compile(r"\b(migrat\w*|upgrad\w*|convert\w*|port(?:ing)?|replac\w*|"
+                            r"mov(?:e|ing))\b", re.I)
+
+
+def is_migration(goal: str, n_topics: int) -> bool:
+    """'Migrate X to Y', 'move from X to Y': source and target are already chosen."""
+    return n_topics >= 1 and bool(_MIGRATE_RE.search(goal or ""))
+
+
 def relevance(goal: str, text: str) -> int:
     """Specific goal words (generic ones excluded, crude stems) that ``text`` shares."""
     return len(ks.stems(goal) & ks.stems(text))
@@ -339,6 +350,9 @@ def plan_steps(c: Conversation, max_steps: int = 8) -> list[Step]:
             + (["Compare them on the criteria the user named, one criterion at a time, "
                 "from the references; mark where the sources say nothing."]
                if topic == "comparison" else [])
+            + ([] if topic == "comparison" else
+               ["Leave out any option that is not a real alternative for this goal (the "
+                "sources' links can be loose) and say which you left out."])
             + ["Recommend one option against the user's constraints, and say why."],
             done_when="The user has picked an option and the reason is recorded.",
             captures=[_field("decision", topic)],
@@ -610,9 +624,12 @@ class ConversationDecomposer:
         if dropped:
             notes.append(f"topic gate dropped {dropped} off-topic prerequisite(s)")
 
-        comparison = is_comparison(goal, len(topics))
+        migration = is_migration(goal, len(topics))
+        comparison = not migration and is_comparison(goal, len(topics))
         decisions: list[tuple[str, list[Option]]] = []
-        if comparison:
+        if migration:
+            notes.append("migration goal: source and target are set, so no approach decision")
+        elif comparison:
             decisions.append(("comparison", [Option(t.concept_id, t.name, t.description)
                                              for t in topics]))
             notes.append("comparison goal: one decision across "
@@ -620,6 +637,8 @@ class ConversationDecomposer:
         else:
             for t in topics:
                 opts, d = alternatives(conn, t)
+                pre_names = {p.name.lower() for p in prereqs}
+                opts = [o for o in opts if o.name.lower() not in pre_names]
                 if d:
                     notes.append(f"dropped {d} alternative(s) to {t.name} "
                                  "(off topic, a different kind of thing, or a part of it)")
@@ -643,6 +662,8 @@ class ConversationDecomposer:
                     gated += 1
                     continue
                 score = relevance(goal, p.name + " " + (p.steps or "")[:400])
+                if migration and _MIGRATE_WORDS.search(p.name):
+                    score += 3     # a migration procedure beats one that only names the tools
                 pool.append((score, ti, p))
         if gated:
             notes.append(f"topic gate dropped {gated} off-topic procedure(s)")
