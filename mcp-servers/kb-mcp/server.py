@@ -3199,6 +3199,7 @@ def generate_project_bootstrap(
     project_name: Optional[str] = None,
     stack: Optional[str] = None,
     profile: Optional[str] = None,
+    plugin_path: Optional[str] = None,
     output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
@@ -3232,6 +3233,10 @@ def generate_project_bootstrap(
             ``mcp-app`` (routed to generate_plugin_scaffold /
             generate_mcp_server), or ``none``. Detected from the
             description when omitted.
+        plugin_path: ``lexa`` only. Folder of the installed lexa-bioscience
+            plugin (or a Lexa checkout). Defaults to ``$LEXA_PLUGIN_ROOT``,
+            then Claude Code's plugin folders. Its skills and MCP tools are
+            read at generation time and written into the agent.
     """
     # pylint: disable=import-outside-toplevel
     import bootstrap_profiles
@@ -3254,7 +3259,7 @@ def generate_project_bootstrap(
             rw_conn, rw_resolver, description,
             technologies=technologies, patterns=patterns,
             project_name=project_name, stack=stack,
-            profile=prof.name if prof else "none",
+            profile=prof.name if prof else "none", plugin_path=plugin_path,
             output_root=output_root, overwrite=overwrite,
         )
         if package_id == -1:
@@ -3274,6 +3279,7 @@ def generate_project_bootstrap(
         "n_files": metadata.get("n_files", 0),
         "stack": metadata.get("stack"),
         "profile": metadata.get("profile"),
+        "profile_data": metadata.get("profile_data"),
         "stack_description": metadata.get("stack_description"),
         "file_paths": report.file_paths,
         "validation_issues": [

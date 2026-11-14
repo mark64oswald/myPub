@@ -53,7 +53,14 @@ Call `generate_project_bootstrap` with:
     workflow skill and a cohort reader.
   - `lexa` — a custom Claude Code agent on the Lexa BioScience plugin:
     settings, `CLAUDE.md` with Lexa's guard rails, a workflow skill and
-    eval prompts. Takes an optional `stack` for code.
+    eval prompts. Takes an optional `stack` for code. Lexa's skills and
+    MCP tools are read from the installed plugin when the package is
+    generated (`plugin_path`, else `$LEXA_PLUGIN_ROOT`, else
+    `~/.claude/plugins`), not from the catalog: the ones that fit the
+    request go into `CLAUDE.md` and the workflow skill, and the full list
+    into `.claude/lexa-capabilities.json`. Enabling the plugin in
+    `.claude/settings.json` is what starts Lexa's MCP servers in the new
+    project. With no plugin installed it uses a built-in snapshot and says so.
   - `claude-plugin`, `mcp-server`, `mcp-app` — routed to
     `generate_plugin_scaffold` / `generate_mcp_server` (`ui=True` for an
     app). The response says `routed_to`; call those tools directly for
