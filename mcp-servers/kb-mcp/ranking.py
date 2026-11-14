@@ -369,7 +369,7 @@ _PAGE_KINDS: dict[str, dict[str, Any]] = {
     },
     "api_reference": {
         "factor": API_REFERENCE_RELEVANCE_FACTOR,
-        "url": ("platform.claude.com/docs/en/api/",),
+        "url": ("platform.claude.com/docs/en/api/", "docs.databricks.com/api/"),
         "name": (),
         "intent": {"api", "endpoint", "endpoints", "request", "response", "parameter",
                    "parameters", "rest", "http", "curl", "sdk", "payload", "schema"},

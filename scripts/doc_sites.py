@@ -223,6 +223,23 @@ PRESETS: dict[str, Site] = {
         max_workers=2,
         request_interval_s=1.0,      # 2 requests/second overall
     ),
+    # Databricks REST API reference: one unified page per endpoint or object
+    # (the old /api/workspace|gcp|azure URLs redirect to it; cloud
+    # differences are noted inline). /api/llms.txt lists ~1,580 pages, each
+    # with a Markdown twin at <url>.md. Not in the main sitemap.
+    "databricks-api": Site(
+        name="databricks-api",
+        index_url="https://docs.databricks.com/api/llms.txt",
+        index_kind="llms_txt",
+        page_format="markdown",
+        md_url_suffix=".md",
+        include_patterns=["https://docs.databricks.com/api/*"],
+        name_prefix="Databricks API",
+        authority_score=0.85,
+        refresh_ttl_days=14,
+        max_workers=2,
+        request_interval_s=1.0,      # 2 requests/second overall
+    ),
     # Claude Code docs: llms.txt lists every page as a Markdown URL.
     "claude-code": Site(
         name="claude-code",

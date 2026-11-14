@@ -590,6 +590,18 @@ def test_claude_developer_presets_scope():
         == "Claude API: Create a Message"
 
 
+def test_databricks_api_preset_scope():
+    api = doc_sites.PRESETS["databricks-api"]
+    assert api.wants("https://docs.databricks.com/api/workspace/libraries/install.md")
+    assert not api.wants("https://docs.databricks.com/aws/en/delta/optimize")
+    assert not doc_sites.PRESETS["databricks"].wants(
+        "https://docs.databricks.com/api/workspace/libraries/install")
+    assert api.fetch_url("https://docs.databricks.com/api/workspace/libraries/install") \
+        == "https://docs.databricks.com/api/workspace/libraries/install.md"
+    assert api.fetch_url("https://docs.databricks.com/api/workspace/libraries/install.md") \
+        == "https://docs.databricks.com/api/workspace/libraries/install.md"
+
+
 def test_front_matter_is_not_a_heading():
     import sectionizer
     page = ("---\ntitle: Tool use with prompt caching\nurl: https://x.test/p.md\n"
