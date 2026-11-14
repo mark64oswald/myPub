@@ -544,7 +544,8 @@ def _token_weights(tokens: list[str]) -> dict[str, float]:
     release notes" 2/6, the same as the expectations guide. IDF weighting
     lets the rare word carry the title match.
 
-    Uniform weights (1.0) when no catalog is open or it is empty.
+    Tokens that occur in no title get weight 0. Uniform weights (1.0)
+    when no catalog is open or it is empty.
     """
     if not tokens:
         return {}
@@ -554,7 +555,10 @@ def _token_weights(tokens: list[str]) -> dict[str, float]:
         n = _title_corpus_size()
         if n <= 0:
             return {t: 1.0 for t in tokens}
-        return {t: math.log(1.0 + n / (1.0 + _title_df(t))) for t in tokens}
+        # A token no title contains can't tell titles apart; weighting it
+        # would only shrink every coverage, so it gets weight 0.
+        return {t: (math.log(1.0 + n / (1.0 + df)) if df > 0 else 0.0)
+                for t in tokens for df in (_title_df(t),)}
     except duckdb.Error as e:  # pragma: no cover - defensive
         LOG.warning("title idf lookup failed, using uniform weights: %s", e)
         return {t: 1.0 for t in tokens}
