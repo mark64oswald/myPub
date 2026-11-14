@@ -59,9 +59,20 @@ class StackRuntime:
     test: list[str]
     smoke: Optional[list[str]]          # entry-point run; None = no smoke step
     setup: Optional[list[str]] = None   # dependency install before tests
+    smoke_tool: Optional[str] = None    # smoke needs another binary; skipped if absent
 
 
 STACK_RUNTIMES: dict[str, StackRuntime] = {
+    # Databricks bundle (bootstrap profile "databricks"): offline unit tests
+    # through uv, then `databricks bundle validate` when the CLI is installed
+    # (it needs a configured workspace host and auth).
+    "databricks": StackRuntime(
+        "databricks", "databricks.yml", "uv",
+        setup=["uv", "sync"],
+        test=["uv", "run", "pytest", "-q"],
+        smoke=["databricks", "bundle", "validate"],
+        smoke_tool="databricks",
+    ),
     "python": StackRuntime(
         "python", "pyproject.toml", "python3",
         test=["python3", "-m", "pytest", "-q"],
@@ -109,7 +120,7 @@ STACK_RUNTIMES: dict[str, StackRuntime] = {
 
 # Detection order matters: tsconfig.json before package.json so a
 # TypeScript project isn't treated as plain Node.
-_DETECT_ORDER = ("typescript", "node", "python", "rust", "java", "go",
+_DETECT_ORDER = ("databricks", "typescript", "node", "python", "rust", "java", "go",
                  "csharp", "ruby")
 
 
@@ -287,7 +298,12 @@ def validate_project(
 
     steps.append(_run_step("test", rt.test, project_dir, timeout, runner))
 
-    if rt.smoke:
+    if rt.smoke and rt.smoke_tool and which(rt.smoke_tool) is None:
+        steps.append(StepResult(
+            name="smoke", status="skipped", command=rt.smoke,
+            detail=f"`{rt.smoke_tool}` not on PATH — install it to run this check",
+        ))
+    elif rt.smoke:
         smoke = _run_step("smoke", rt.smoke, project_dir, timeout, runner)
         expect = _smoke_expectation(project_dir)
         if smoke.status == "pass" and expect and expect not in smoke.output:

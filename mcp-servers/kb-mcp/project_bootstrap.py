@@ -43,6 +43,7 @@ from typing import Any, Optional
 
 import duckdb
 
+import bootstrap_profiles as bp
 from generator import (
     GenFile,
     GenPlan,
@@ -105,6 +106,11 @@ class _Stack:
     description: str                       # human-readable
     files: list[tuple[str, str]]
     required_files: list[str]
+    # Set when a category profile (bootstrap_profiles) shapes the project.
+    profile: Optional[str] = None
+    renderers: dict[str, Any] = field(default_factory=dict)   # path -> Renderer
+    guidance: list[str] = field(default_factory=list)
+    gitignore: Optional[str] = None
 
 
 # Each stack has its own canonical file set. The ``generic`` stack is
@@ -617,6 +623,38 @@ def _detect_stack(query: str, stack_hint: Optional[str]) -> _Stack:
     return _STACKS["generic"]
 
 
+def _compose_stack(profile: "bp.Profile", base: Optional[_Stack],
+                   pkg: str, slug: str) -> _Stack:
+    """Merge a category profile onto an (optional) language stack.
+
+    The base stack's files come first; a profile file with the same path
+    replaces the base purpose, and profile renderers win over the base
+    stack's. Paths are expanded for the project's package name.
+    """
+    def ex(p: str) -> str:
+        return bp.expand(p, pkg, slug)
+
+    files: list[tuple[str, str]] = []
+    prof_files = {ex(p): purpose for p, purpose in profile.files}
+    for path, purpose in (base.files if base else []):
+        files.append((path, prof_files.pop(path, purpose)))
+    files += [(p, purpose) for p, purpose in
+              ((ex(p), purpose) for p, purpose in profile.files) if p in prof_files]
+    required = list(dict.fromkeys(
+        (base.required_files if base else []) + [ex(p) for p in profile.required_files]))
+    return _Stack(
+        name=base.name if base else profile.name,
+        description=(f"{profile.description} ({base.description})" if base
+                     else profile.description),
+        files=files,
+        required_files=required,
+        profile=profile.name,
+        renderers={ex(k): v for k, v in profile.renderers.items()},
+        guidance=list(profile.guidance),
+        gitignore=profile.gitignore,
+    )
+
+
 def _slugify(name: str) -> str:
     s = name.lower().replace(" ", "-")
     keep = "abcdefghijklmnopqrstuvwxyz0123456789-"
@@ -755,6 +793,7 @@ class StackComposeDecomposer:
         patterns: Optional[list[str]] = None,
         project_name: Optional[str] = None,
         stack: Optional[str] = None,
+        profile: Optional[str] = None,
         **_: Any,
     ) -> _Decomposition:
         techs = technologies or []
@@ -764,14 +803,23 @@ class StackComposeDecomposer:
             # Try to glean names from the description: any capitalized
             # word that resolves to a concept.
             tokens = re.findall(r"[A-Z][A-Za-z+#0-9.-]{2,}", query or "")
-            all_named = list(set(tokens))
+            all_named = sorted(set(tokens))
+
+        notes: list[str] = []
+        prof = bp.detect_profile(query, profile)
+        if prof is not None and prof.delegate:
+            notes.append(f"profile {prof.name!r} is built by its own generator "
+                         f"({prof.delegate}); writing a plain stack scaffold here")
+            prof = None
+        anchors = list(prof.anchors) if prof else []
+        all_named += [a for a in anchors if a not in all_named]
 
         elements: list[_StackElement] = []
-        notes: list[str] = []
         for name in all_named:
             cid, why = _disambiguate(conn, name, query, resolver.resolve_lookup_only(name))
             if cid is None:
-                notes.append(f"named element {name!r} not found; skipped")
+                if name not in anchors:
+                    notes.append(f"named element {name!r} not found; skipped")
                 continue
             if why:
                 notes.append(why)
@@ -823,9 +871,32 @@ class StackComposeDecomposer:
                 doc_section_ids=sec_ids,
             ))
 
+        if anchors:
+            hit = [a for a in anchors if any(
+                el.name.lower() == a.lower() for el in elements)]
+            notes.append(f"profile {prof.name}: anchored on "
+                         f"{', '.join(hit) if hit else 'no catalog concepts'}")
+
+        name_out = project_name or _slugify(query)[:50] or "project"
+        pkg = bp.pkg_name(name_out)
+        slug = bp.slug_name(name_out)
+
         # Detect (or honor explicit) target stack
-        chosen_stack = _detect_stack(query, stack)
-        if stack is None and chosen_stack.name == "generic":
+        if prof is not None:
+            base_hint = (stack if (stack and prof.accepts_stack) else None) or prof.base_stack
+            base = _detect_stack(query, base_hint) if base_hint else None
+            if base is not None and base.name == "generic":
+                base = None
+            chosen_stack = _compose_stack(prof, base, pkg, slug)
+            notes.append(f"profile: {prof.name} ({prof.description})"
+                         + (f" on the {base.name} stack" if base else "")
+                         + (" — detected from the request; pass profile=... to override"
+                            if profile is None else ""))
+        else:
+            chosen_stack = _detect_stack(query, stack)
+        if chosen_stack.profile:
+            pass  # the profile note above says what was chosen
+        elif stack is None and chosen_stack.name == "generic":
             notes.append(
                 "no language signal found in request; emitting a minimal "
                 "generic skeleton. Pass `stack=python|rust|node|typescript|"
@@ -843,11 +914,12 @@ class StackComposeDecomposer:
         ctx_summary = self._render_context_summary(conn, elements)
         for rel_path, purpose in chosen_stack.files:
             placeholder = self._render_placeholder(
-                rel_path, purpose, project_name or "project",
-                ctx_summary, chosen_stack,
+                rel_path, purpose, project_name or name_out,
+                ctx_summary, chosen_stack, request=query, pkg=pkg, slug=slug,
             )
             prompt = self._render_subagent_prompt(
                 rel_path, purpose, query, elements, ctx_summary,
+                guidance=chosen_stack.guidance,
             )
             planned.append(_PlannedFile(
                 relative_path=rel_path, purpose=purpose,
@@ -862,7 +934,7 @@ class StackComposeDecomposer:
             )
 
         return _Decomposition(
-            project_name=project_name or _slugify(query)[:50] or "project",
+            project_name=name_out,
             description=query,
             stack=chosen_stack,
             elements=elements,
@@ -890,14 +962,22 @@ class StackComposeDecomposer:
     @staticmethod
     def _render_placeholder(
         rel_path: str, purpose: str, project_name: str,
-        ctx_summary: str, stack: "_Stack",
+        ctx_summary: str, stack: "_Stack", *, request: str = "",
+        pkg: Optional[str] = None, slug: Optional[str] = None,
     ) -> str:
         """Render the placeholder body for one planned file.
 
-        README.md is universal; everything else dispatches by stack
-        name. Any path the stack defines but this method doesn't have
-        a template for falls through to a generic comment header.
+        A profile's renderers win; then README.md is universal and
+        everything else dispatches by stack name. Any path the stack
+        defines but this method doesn't have a template for falls
+        through to a generic comment header.
         """
+        prof_render = stack.renderers.get(rel_path)
+        if prof_render is not None:
+            return prof_render(bp.ProfileContext(
+                project_name=project_name, pkg=pkg or bp.pkg_name(project_name),
+                slug=slug or bp.slug_name(project_name), purpose=purpose,
+                ctx_summary=ctx_summary, request=request or project_name))
         if rel_path == "README.md":
             return (
                 f"# {project_name}\n\n"
@@ -911,7 +991,7 @@ class StackComposeDecomposer:
                 f"see `_sub_agent_prompts/` for per-file prompts.)_\n"
             )
         if rel_path == ".gitignore":
-            return _GITIGNORE_BY_STACK.get(stack.name, _GITIGNORE_GENERIC)
+            return stack.gitignore or _GITIGNORE_BY_STACK.get(stack.name, _GITIGNORE_GENERIC)
         render = _PLACEHOLDER_RENDERERS.get((stack.name, rel_path))
         if render is not None:
             return render(project_name, purpose, ctx_summary)
@@ -928,7 +1008,9 @@ class StackComposeDecomposer:
     def _render_subagent_prompt(
         rel_path: str, purpose: str, request: str,
         elements: list[_StackElement], ctx_summary: str,
+        guidance: Optional[list[str]] = None,
     ) -> str:
+        extra = "".join(f"- {g}\n" for g in (guidance or []))
         return (
             f"Generate the file at `{rel_path}` for the following project request:\n\n"
             f"{request}\n\n"
@@ -940,6 +1022,9 @@ class StackComposeDecomposer:
             f"- Match current vendor doc semantics (the corpus tracks recent docs)\n"
             f"- Keep the file self-contained; cross-references go in the README\n"
             f"- Do NOT hallucinate APIs that aren't in the corpus\n"
+            f"{extra}"
+            f"- The file may already hold a working template; keep its structure "
+            f"and replace every TODO marker\n"
             f"\nWrite ONLY the file content — no prose explanation, no fences.\n"
         )
 
@@ -952,6 +1037,7 @@ def _render_build_plan(d: _Decomposition) -> str:
         "",
         f"**Target stack:** `{d.stack.name}` — {d.stack.description}",
         "",
+        *([f"**Profile:** `{d.stack.profile}`", ""] if d.stack.profile else []),
         f"**Stack elements resolved:** {len(d.elements)}",
         "",
     ]
@@ -1001,6 +1087,7 @@ class ProjectBootstrapPlanner:
                 "n_files": len(d.planned_files),
                 "element_concept_ids": [el.concept_id for el in d.elements],
                 "stack": d.stack.name,
+                "profile": d.stack.profile,
                 "stack_description": d.stack.description,
                 "required_files": list(d.stack.required_files),
             },

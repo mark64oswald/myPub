@@ -41,6 +41,24 @@ Call `generate_project_bootstrap` with:
   stack from keywords in `description` (e.g., "Rust async server"
   → rust, "Spring Boot" → java, "Node.js Express" → node).
 
+- `profile` (optional) — project category, on top of the stack. Detected
+  from the description when omitted; pass `none` to turn it off.
+  - `databricks` — Declarative Automation Bundle (formerly Asset Bundles):
+    `databricks.yml`, a Lakeflow Spark Declarative Pipeline, a job, a
+    wheel package and offline unit tests. Keywords: Databricks, Lakeflow,
+    DLT, asset bundle, Unity Catalog.
+  - `healthsim` — a Python project that gets synthetic healthcare test data
+    from the HealthSim plugin: `.claude/settings.json` enabling
+    `healthsim@healthsim`, `CLAUDE.md` rules, a `/<name>-test-data`
+    workflow skill and a cohort reader.
+  - `lexa` — a custom Claude Code agent on the Lexa BioScience plugin:
+    settings, `CLAUDE.md` with Lexa's guard rails, a workflow skill and
+    eval prompts. Takes an optional `stack` for code.
+  - `claude-plugin`, `mcp-server`, `mcp-app` — routed to
+    `generate_plugin_scaffold` / `generate_mcp_server` (`ui=True` for an
+    app). The response says `routed_to`; call those tools directly for
+    their full options.
+
 Surface:
 - the package folder
 - `_build_plan.md` — file-by-file build plan with the resolved stack
@@ -56,6 +74,15 @@ If no language signal appears in the request AND no `stack` argument
 is passed, the output is a minimal language-neutral skeleton (README
 + .gitignore only) rather than a Python-by-default scaffold. The
 notes field on the response will say which stack was chosen and why.
+
+## Profiles and validation
+
+Profile files that depend on the request carry the marker
+`TODO: populate from stack context`, so `scripts/bootstrap_v2.py status`
+lists them for sub-agents; config files (bundle YAML, settings) ship
+complete. `bootstrap_v2.py validate` knows the Databricks layout: it runs
+`uv sync` and `uv run pytest`, then `databricks bundle validate` when the
+CLI is installed (set the workspace host in `databricks.yml` first).
 
 ## Sub-agent dispatch (manual v1 workflow)
 
