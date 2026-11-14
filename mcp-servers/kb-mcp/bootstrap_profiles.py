@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import agent_skills
+import lexa_plugin
 
 MARKER = "TODO: populate from stack context"
 
@@ -53,6 +54,7 @@ class ProfileContext:
     ctx_summary: str             # resolved stack elements (markdown)
     request: str                 # the user's description
     slug: str = ""               # kebab-case name for skills and commands
+    data: dict = field(default_factory=dict)   # what the profile's prepare() found
 
 
 Renderer = Callable[[ProfileContext], str]
@@ -72,6 +74,10 @@ class Profile:
     accepts_stack: bool = False          # may a `stack` argument add language files?
     delegate: Optional[str] = None
     gitignore: Optional[str] = None
+    # Called once per generation: (request, options) -> (data, notes). ``data``
+    # reaches every renderer as ProfileContext.data and lands in the package
+    # metadata under ``profile_data``.
+    prepare: Optional[Callable[[str, dict], tuple[dict, list[str]]]] = None
 
 
 def pkg_name(project_name: str) -> str:
@@ -669,28 +675,59 @@ HEALTHSIM = Profile(
 # Lexa BioScience
 # ---------------------------------------------------------------------------
 
-LEXA_SKILLS = (
-    "cross-cutting: education, education-domain-rules, education-family-rules, "
-    "education-routing, literature, multi-omics, pipeline-builder, provenance, "
-    "resistance-reasoning; domains: cancer-genomics, clinical, drug-discovery, "
-    "epigenomics, genomics, immuno-oncology, metabolomics, metagenomics, oncology, "
-    "pharmacogenomics, precision-oncology, proteomics, single-cell, spatial-bio, "
-    "structural-bio, synbio, systems-bio, transcriptomics; generative: molecularsim, "
-    "molecularsim-outputs; data patterns: graph, image-spatial, longitudinal-clinical, "
-    "matrix, sequence, spectra-signal, structure-3d, tabular")
-LEXA_SERVERS = ("cbioportal, chembl, clinvar, cosmic, ensembl, gdc, geo, learner, "
-                "molecularsim, ncbi, ontology, pathway, pdb, string, uniprot")
+def _lexa_sel(c: ProfileContext) -> "lexa_plugin.LexaSelection":
+    sel = c.data.get("selection")
+    if sel is None:          # renderer called outside a generation run
+        sel = lexa_plugin.select(lexa_plugin.fallback_capabilities(), c.request)
+    return sel
+
+
+def _lexa_prepare(request: str, options: dict) -> tuple[dict, list[str]]:
+    caps, notes = lexa_plugin.load(options.get("plugin_path"))
+    sel = lexa_plugin.select(caps, request)
+    notes += sel.notes
+    if sel.skills:
+        notes.append("lexa: picked skills " + ", ".join(s.folder for s in sel.skills)
+                     + ("; MCP servers " + ", ".join(sel.servers) if sel.servers else ""))
+    return {"selection": sel,
+            "metadata": {"plugin_version": caps.version, "plugin_source": caps.source,
+                         "installed": caps.installed,
+                         "skills": [s.folder for s in sel.skills],
+                         "mcp_servers": sel.servers}}, notes
 
 
 def _lexa_settings(c: ProfileContext) -> str:
     return _json({
         "extraKnownMarketplaces": {"lexa": {"source": {
             "source": "github", "repo": "mark64oswald/lexa-bioscience"}}},
+        # Enabling the plugin is what wires in Lexa's MCP servers: Claude Code
+        # starts every server in the plugin's .mcp.json for this project.
         "enabledPlugins": {"lexa-bioscience@lexa": True},
     })
 
 
+def _lexa_capabilities(c: ProfileContext) -> str:
+    sel = _lexa_sel(c)
+    out = sel.caps.to_json()
+    out["selected"] = {"skills": [s.folder for s in sel.skills], "mcp_servers": sel.servers}
+    out["note"] = ("Snapshot taken when this project was generated. The live list "
+                   "comes from the enabled plugin; regenerate after Lexa updates.")
+    return _json(out)
+
+
 def _lexa_claude_md(c: ProfileContext) -> str:
+    sel = _lexa_sel(c)
+    caps = sel.caps
+    origin = (f"Read from lexa-bioscience {caps.version} at generation time."
+              if caps.installed else
+              "The Lexa plugin was not installed when this was generated, so this is "
+              "a built-in snapshot; check the tools Claude Code lists.")
+    tool_hint = ""
+    if sel.servers and caps.tools:
+        t = caps.tools_for(sel.servers[0])[:1]
+        if t:
+            tool_hint = (f" In Claude Code they appear as `{t[0].qualified}` and so on; "
+                         "don't build these names by hand, use what the session lists.")
     return f"""\
 # {c.project_name}
 
@@ -699,10 +736,21 @@ def _lexa_claude_md(c: ProfileContext) -> str:
 ## Built on Lexa BioScience
 
 This agent runs on the **lexa-bioscience** plugin, enabled in
-`.claude/settings.json`. Lexa provides skills ({LEXA_SKILLS}) and MCP servers
-({LEXA_SERVERS}). Prefer Lexa's skills and tools over new ones: load the
-matching Lexa skill before calling its tools, since the skill decides what
-the records mean.
+`.claude/settings.json`. Enabling it gives this project all of Lexa's skills
+and starts its MCP servers; nothing here re-implements database access.
+{origin} The full inventory is in `.claude/lexa-capabilities.json`.
+
+Load the matching Lexa skill before calling its tools: the tool returns
+records, the skill decides what they mean.
+
+### Lexa skills for this agent
+
+{lexa_plugin.skills_table(sel)}
+
+### Lexa MCP tools for this agent
+
+{lexa_plugin.tools_table(sel)}
+{tool_hint}
 
 ## Guard rails (inherited from Lexa; do not weaken)
 
@@ -723,7 +771,21 @@ the records mean.
 
 
 def _lexa_skill(c: ProfileContext) -> str:
+    sel = _lexa_sel(c)
     name = agent_skills.skill_name(f"{c.slug}-workflow")
+    domain = [s for s in sel.skills if s.folder not in lexa_plugin.ALWAYS_SKILLS]
+    if domain:
+        skill_list = ", ".join(f"`/{lexa_plugin.PLUGIN_NAME}:{s.folder}`" for s in domain)
+        step2 = (f"Load the Lexa skill that owns the domain ({skill_list}), then "
+                 "call its tools")
+        if sel.servers:
+            step2 += " on " + ", ".join(f"`{s}`" for s in sel.servers)
+        step2 += (".\n   Pick by the question; if none fits, read "
+                  "`.claude/lexa-capabilities.json` for the full list.")
+    else:
+        step2 = (f"Load the Lexa skill that owns the domain, then call its tools.\n"
+                 f"   {MARKER}: name the skills and tools this workflow uses, in order "
+                 "(see `.claude/lexa-capabilities.json`).")
     body = f"""\
 # {c.project_name} workflow
 
@@ -733,8 +795,7 @@ Run when the user types `/{name}`. `$ARGUMENTS` holds the question.
 
 1. Restate the question; ask one clarifying question if the organism,
    gene, disease or data type is unclear.
-2. Load the Lexa skill that owns the domain, then call its tools.
-   {MARKER}: name the skills and tools this workflow uses, in order.
+2. {step2}
 3. Record provenance with Lexa's `provenance` skill: databases, record IDs,
    parameters, dates.
 4. Answer with citations; label any synthetic data as synthetic; keep
@@ -771,15 +832,17 @@ def _lexa_readme(c: ProfileContext) -> str:
 
 A custom Claude Code agent built on **Lexa BioScience**. Open this folder in
 Claude Code, trust it, and run `claude plugin install lexa-bioscience@lexa`
-(once). The Lexa repository is private until it is published; with a local
-Lexa checkout instead of GitHub, change the
+(once). Enabling the plugin brings Lexa's skills and starts its MCP servers;
+run `/mcp` to check they are connected. The Lexa repository is private until
+it is published; with a local Lexa checkout instead of GitHub, change the
 marketplace source in `.claude/settings.json` to
 `{{"source": "directory", "path": "/absolute/path/to/lexa-bioscience"}}`.
 
 | Path | What it is |
 |---|---|
-| `CLAUDE.md` | Agent instructions and Lexa's guard rails |
-| `.claude/settings.json` | Lexa marketplace + plugin |
+| `CLAUDE.md` | Agent instructions, the Lexa skills and tools it uses, guard rails |
+| `.claude/settings.json` | Lexa marketplace + plugin (skills and MCP servers) |
+| `.claude/lexa-capabilities.json` | Lexa's skills and tools when this was generated |
 | `.claude/skills/{c.slug}-workflow/SKILL.md` | The agent's workflow skill |
 | `evals/prompts.md` | Prompts to check behaviour and guard rails |
 | `DISCLAIMER.md` | Educational-use statement |
@@ -804,8 +867,9 @@ LEXA = Profile(
     keywords=["lexa"],
     files=[
         ("README.md", "project overview + setup"),
-        ("CLAUDE.md", "agent instructions + Lexa guard rails"),
+        ("CLAUDE.md", "agent instructions, Lexa skills/tools + guard rails"),
         (".claude/settings.json", "registers the Lexa marketplace + enables the plugin"),
+        (".claude/lexa-capabilities.json", "Lexa skills + MCP tools read from the plugin"),
         (".claude/skills/{slug}-workflow/SKILL.md", "the agent's workflow skill"),
         ("evals/prompts.md", "behaviour + guard-rail eval prompts"),
         ("DISCLAIMER.md", "educational-use statement"),
@@ -817,18 +881,21 @@ LEXA = Profile(
         "README.md": _lexa_readme,
         "CLAUDE.md": _lexa_claude_md,
         ".claude/settings.json": _lexa_settings,
+        ".claude/lexa-capabilities.json": _lexa_capabilities,
         ".claude/skills/{slug}-workflow/SKILL.md": _lexa_skill,
         "evals/prompts.md": _lexa_evals,
         "DISCLAIMER.md": lambda c: _LEXA_DISCLAIMER,
     },
     guidance=[
-        "Build on Lexa's existing skills and MCP tools; don't re-implement database access.",
+        "Build on Lexa's existing skills and MCP tools (listed in CLAUDE.md and "
+        ".claude/lexa-capabilities.json); don't re-implement database access.",
         "Keep Lexa's guard rails: educational use, no personal medical decisions, "
         "synthetic data labelled, licensing named but not adjudicated, citations required.",
     ],
     anchors=[],
     accepts_stack=True,
     gitignore=".claude/settings.local.json\noutput/\n.DS_Store\n",
+    prepare=_lexa_prepare,
 )
 
 

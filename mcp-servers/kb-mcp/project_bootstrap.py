@@ -112,6 +112,7 @@ class _Stack:
     renderers: dict[str, Any] = field(default_factory=dict)   # path -> Renderer
     guidance: list[str] = field(default_factory=list)
     gitignore: Optional[str] = None
+    profile_data: dict[str, Any] = field(default_factory=dict)   # from Profile.prepare
 
 
 # Each stack has its own canonical file set. The ``generic`` stack is
@@ -795,6 +796,7 @@ class StackComposeDecomposer:
         project_name: Optional[str] = None,
         stack: Optional[str] = None,
         profile: Optional[str] = None,
+        plugin_path: Optional[str] = None,
         **_: Any,
     ) -> _Decomposition:
         techs = technologies or []
@@ -902,6 +904,10 @@ class StackComposeDecomposer:
             if base is not None and base.name == "generic":
                 base = None
             chosen_stack = _compose_stack(prof, base, pkg, slug)
+            if prof.prepare is not None:
+                data, prep_notes = prof.prepare(query, {"plugin_path": plugin_path})
+                chosen_stack.profile_data = data
+                notes.extend(prep_notes)
             notes.append(f"profile: {prof.name} ({prof.description})"
                          + (f" on the {base.name} stack" if base else "")
                          + (" — detected from the request; pass profile=... to override"
@@ -991,7 +997,8 @@ class StackComposeDecomposer:
             return prof_render(bp.ProfileContext(
                 project_name=project_name, pkg=pkg or bp.pkg_name(project_name),
                 slug=slug or bp.slug_name(project_name), purpose=purpose,
-                ctx_summary=ctx_summary, request=request or project_name))
+                ctx_summary=ctx_summary, request=request or project_name,
+                data=stack.profile_data))
         if rel_path == "README.md":
             return (
                 f"# {project_name}\n\n"
@@ -1102,6 +1109,7 @@ class ProjectBootstrapPlanner:
                 "element_concept_ids": [el.concept_id for el in d.elements],
                 "stack": d.stack.name,
                 "profile": d.stack.profile,
+                "profile_data": d.stack.profile_data.get("metadata"),
                 "stack_description": d.stack.description,
                 "required_files": list(d.stack.required_files),
             },

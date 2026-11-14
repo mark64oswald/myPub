@@ -19,6 +19,7 @@ if str(KB_MCP) not in sys.path:
 import agent_skills  # noqa: E402
 import bootstrap_profiles as bp  # noqa: E402
 import bootstrap_runtime as br  # noqa: E402
+import lexa_plugin  # noqa: E402
 import project_bootstrap as pb  # noqa: E402
 
 
@@ -227,6 +228,98 @@ def test_healthsim_profile_adds_plugin_and_reader_to_python(catalog, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_installed_lexa(tmp_path_factory, monkeypatch):
+    """Keep tests off any lexa-bioscience plugin installed on this machine."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    monkeypatch.delenv(lexa_plugin.ENV_VAR, raising=False)
+
+
+def _fake_lexa(root: Path, version="9.9.0") -> Path:
+    """A minimal lexa-bioscience plugin: three skills, two servers."""
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin/plugin.json").write_text(json.dumps(
+        {"name": "lexa-bioscience", "version": version, "skills": "./skills/",
+         "mcpServers": "./.mcp.json"}))
+    for folder, name, desc in (
+        ("genomics", "genomics-analysis",
+         "Variant annotation and pathogenicity. Load it BEFORE calling clinvar or ensembl tools."),
+        ("drug-discovery", "drug-discovery-analysis",
+         "Drug targets and compounds. Load it BEFORE calling the chembl tools."),
+        ("provenance", "data-provenance", "Record provenance. Mentions clinvar in passing."),
+        ("education", "education-mode", "Teach concepts. Uses the learner tools."),
+    ):
+        (root / "skills" / folder).mkdir(parents=True)
+        (root / "skills" / folder / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: \"{desc}\"\n---\n\n# {name}\n")
+    (root / "runtime").mkdir()
+    ops = {f"lexa:{srv}:{tool}": {"server": f"{srv}-mcp", "tool": tool, "parameters": [
+        {"name": "query", "required": True}, {"name": "limit", "required": False}]}
+        for srv, tool in (("clinvar", "search_variant"), ("clinvar", "batch_classify"),
+                          ("chembl", "search_compound"), ("learner", "learner_state"))}
+    (root / "runtime/operation-contract.json").write_text(json.dumps({"operations": ops}))
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        s: {"command": "python3"} for s in ("clinvar-mcp", "chembl-mcp", "learner-mcp",
+                                             "ensembl-mcp")}}))
+    return root
+
+
+def test_lexa_plugin_is_found_in_claude_plugin_folders(tmp_path):
+    home = tmp_path / "home"
+    _fake_lexa(home / ".claude/plugins/cache/lexa/lexa-bioscience/0.1.0", "0.1.0")
+    newer = _fake_lexa(home / ".claude/plugins/cache/lexa/lexa-bioscience/0.3.0", "0.3.0")
+    assert lexa_plugin.find_plugin(home=home, env={}) == newer
+    explicit = _fake_lexa(tmp_path / "checkout" / "lexa-bioscience")
+    assert lexa_plugin.find_plugin(str(tmp_path / "checkout"), home=home, env={}) == explicit
+    assert lexa_plugin.find_plugin(home=tmp_path / "nobody", env={}) is None
+
+
+def test_lexa_capabilities_and_selection(tmp_path):
+    caps = lexa_plugin.read_capabilities(_fake_lexa(tmp_path / "lx"))
+    assert caps.version == "9.9.0"
+    assert {s.folder for s in caps.skills} == {"genomics", "drug-discovery", "provenance",
+                                               "education"}
+    assert caps.servers == ["chembl-mcp", "clinvar-mcp", "ensembl-mcp", "learner-mcp"]
+    t = caps.tools_for("clinvar-mcp")[1]
+    assert t.qualified == "mcp__plugin_lexa-bioscience_clinvar-mcp__search_variant"
+    assert t.params == ["query", "limit?"]
+    sel = lexa_plugin.select(caps, "Agent that checks variant pathogenicity")
+    assert [s.folder for s in sel.skills] == ["genomics", "provenance"]
+    # Provenance's passing mention of clinvar doesn't count; genomics' does.
+    assert sel.servers == ["clinvar-mcp", "ensembl-mcp"]
+    tutor = lexa_plugin.select(caps, "A tutor for drug targets and compounds")
+    assert [s.folder for s in tutor.skills][:2] == ["education", "drug-discovery"]
+    assert "learner-mcp" in tutor.servers and "chembl-mcp" in tutor.servers
+
+
+def test_lexa_profile_reads_the_installed_plugin(catalog, tmp_path):
+    root = _fake_lexa(tmp_path / "lx")
+    g = pb.make_project_bootstrap_generator()
+    pid, report, _ = g.run_deterministic(
+        catalog, _resolver({}), "Lexa agent that classifies variant pathogenicity",
+        project_name="vc", output_root=str(tmp_path / "out"), plugin_path=str(root))
+    pkg = tmp_path / "out" / "vc"
+    claude_md = (pkg / "CLAUDE.md").read_text()
+    assert "`/lexa-bioscience:genomics`" in claude_md
+    assert "| `clinvar-mcp` | `batch_classify`, `search_variant` |" in claude_md
+    assert "mcp__plugin_lexa-bioscience_clinvar-mcp__batch_classify" in claude_md
+    skill = (pkg / ".claude/skills/vc-workflow/SKILL.md").read_text()
+    assert "`/lexa-bioscience:genomics`" in skill and "`clinvar-mcp`" in skill
+    assert bp.MARKER not in skill
+    inv = json.loads((pkg / ".claude/lexa-capabilities.json").read_text())
+    assert inv["version"] == "9.9.0" and inv["selected"]["skills"] == ["genomics", "provenance"]
+    assert set(inv["mcp_servers"]) == {"chembl-mcp", "clinvar-mcp", "ensembl-mcp", "learner-mcp"}
+    # The MCP servers come in through the enabled plugin.
+    settings = json.loads((pkg / ".claude/settings.json").read_text())
+    assert settings["enabledPlugins"] == {"lexa-bioscience@lexa": True}
+    meta = json.loads(catalog.execute(
+        "SELECT metadata_json FROM generated_package WHERE package_id = ?", [pid]
+    ).fetchone()[0])
+    assert meta["profile_data"]["plugin_version"] == "9.9.0"
+    assert meta["profile_data"]["installed"] is True
+    assert any("read plugin 9.9.0" in n for n in report.notes)
+
+
 def test_lexa_profile_writes_agent_with_guard_rails(catalog, tmp_path):
     pid, pkg, _ = _generate(catalog, tmp_path, "Variant interpretation tutor built on Lexa",
                             project_name="variant-tutor")
@@ -242,6 +335,9 @@ def test_lexa_profile_writes_agent_with_guard_rails(catalog, tmp_path):
         "SELECT metadata_json FROM generated_package WHERE package_id = ?", [pid]
     ).fetchone()[0])
     assert meta["profile"] == "lexa"
+    # No plugin installed: built-in snapshot, flagged in CLAUDE.md and metadata.
+    assert meta["profile_data"]["installed"] is False
+    assert "was not installed" in claude_md
 
 
 def test_lexa_profile_accepts_a_stack(catalog):
