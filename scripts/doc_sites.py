@@ -623,7 +623,7 @@ def fetch_page(site: Site, page_url: str, *, etag: Optional[str] = None,
             return pf
         import refresh_docs
         text = refresh_docs.WebMarkdownFetcher.strip_index_note(text)
-        pf.title = markdown_title(text)
+        pf.title = with_endpoint(markdown_title(text), text)
     else:
         page_title, text, pf.content_date = html_page_to_markdown(text, site.content_selector)
         pf.title = markdown_title(text) or page_title
@@ -773,6 +773,26 @@ PREFIX_BY_URL = {
     "https://platform.claude.com/docs/en/api/": "Claude API",
     "https://platform.claude.com/docs/en/managed-agents/": "Claude Managed Agents",
 }
+
+
+_ENDPOINT = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+`?(/api/[\w./{}:-]+)")
+
+
+def with_endpoint(title: Optional[str], text: str) -> Optional[str]:
+    """Append a REST endpoint to a page title when the page documents one.
+
+    API reference titles name the action ("Add a library") but not the
+    path (POST /api/2.0/libraries/install), so a query that says
+    "install libraries" misses the title. Only when the top of the page
+    names exactly one endpoint; resource overview pages list several.
+    """
+    if not title:
+        return title
+    found = {f"{m.group(1)} {m.group(2)}" for m in _ENDPOINT.finditer(text[:3000])}
+    if len(found) != 1:
+        return title
+    ep = found.pop()
+    return title if ep in title else f"{title} ({ep})"
 
 
 def _page_name(site: Site, title: Optional[str], url: str) -> str:
