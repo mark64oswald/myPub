@@ -54,6 +54,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 | Tutorial | `/kb-tutorial <topic>` | [`tutorial.py`](../mcp-servers/kb-mcp/tutorial.py) | Step-by-step walkthrough backed by procedures |
 | Content Brief | `/kb-content-brief <topic>` | [`content_brief.py`](../mcp-servers/kb-mcp/content_brief.py) | Article / blog skeleton with key points and sources |
 | Pattern + Anti-Pattern Catalog | `/kb-pattern-catalog <topic>` | [`pattern_catalog.py`](../mcp-servers/kb-mcp/pattern_catalog.py) | Patterns with canonical implementations + anti-patterns to avoid |
+| Guided Conversation | `/kb-guided-conversation <goal> --output <X>` | [`guided_conversation.py`](../mcp-servers/kb-mcp/guided_conversation.py) | A workflow Agent Skill that drives a chat from a goal to an output (document, plan, decision, code or checklist), one question at a time: frame → prerequisite checks (REQUIRES) → decisions (CONTRASTS_WITH) → procedures → produce → review. Topic-gated; also writes `conversation.json` |
 
 ### Decisions & strategy
 
