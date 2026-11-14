@@ -444,6 +444,11 @@ def is_release_notes(identifier: Optional[str], name: Optional[str]) -> bool:
     return page_kind(identifier, name) == "release_notes"
 
 
+# Relevance of a result found only through the title modalities, per unit
+# of weighted title coverage (before the title-coverage boost).
+TITLE_ONLY_RELEVANCE_SCALE = 0.5
+
+
 def relevance_score(
     modality_scores: Optional[dict[str, Any]] = None,
     *, title_coverage: float = 0.0,
@@ -488,6 +493,8 @@ def relevance_score(
     fts_raw = max(
         float(modality_scores.get("fts_chapter") or 0.0),
         float(modality_scores.get("fts_doc_section") or 0.0),
+        # API-reference modality: BM25 over API pages, same scale.
+        float(modality_scores.get("api_doc_section") or 0.0),
     )
     vss_raw = max(
         float(modality_scores.get("vss_chapter") or 0.0),
@@ -504,7 +511,15 @@ def relevance_score(
         1.0 - math.exp(-graph_raw / GRAPH_SATURATION_HITS) if graph_raw > 0 else 0.0
     )
 
-    base = max(fts_norm, vss_norm, graph_norm)
+    # Title modalities score by weighted title coverage (0..1). A row found
+    # only by title still has evidence; damped so body matches lead.
+    title_raw = max(
+        float(modality_scores.get("title_chapter") or 0.0),
+        float(modality_scores.get("title_doc_section") or 0.0),
+    )
+    title_norm = TITLE_ONLY_RELEVANCE_SCALE * max(0.0, min(1.0, title_raw))
+
+    base = max(fts_norm, vss_norm, graph_norm, title_norm)
     if base <= 0.0:
         return 0.0
     cov = max(0.0, min(1.0, float(title_coverage)))
