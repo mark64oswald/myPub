@@ -166,6 +166,14 @@ def test_parse_llms_txt_keeps_same_host_links_once():
         "https://c.test/docs/en/a.md", "https://c.test/docs/en/b.md"]
 
 
+def test_parse_llms_txt_resolves_relative_links():
+    text = ("# API\n- [Role](access-management/v1/assignable-role.md): x\n"
+            "- [Abs](/api/jobs/v2/create.md#body)\n- [Mail](mailto:a@b.test)\n")
+    assert doc_sites.parse_llms_txt(text, "https://d.test/api/llms.txt") == [
+        "https://d.test/api/access-management/v1/assignable-role.md",
+        "https://d.test/api/jobs/v2/create.md"]
+
+
 def test_site_filters_and_markdown_urls():
     s = doc_sites.Site(name="t", index_url="", index_kind="sitemap", page_format="markdown",
                        include_patterns=["https://d.test/aws/en/*"],
@@ -588,6 +596,28 @@ def test_claude_developer_presets_scope():
     assert doc_sites._page_name(P["claude-platform"], "Create a Message",
                                 "https://platform.claude.com/docs/en/api/messages/create.md") \
         == "Claude API: Create a Message"
+
+
+def test_databricks_api_preset_scope():
+    api = doc_sites.PRESETS["databricks-api"]
+    assert api.wants("https://docs.databricks.com/api/workspace/libraries/install.md")
+    assert not api.wants("https://docs.databricks.com/aws/en/delta/optimize")
+    assert not api.wants("https://docs.databricks.com/api/workspace/jobs/object.md")
+    assert not doc_sites.PRESETS["databricks"].wants(
+        "https://docs.databricks.com/api/workspace/libraries/install")
+    assert api.fetch_url("https://docs.databricks.com/api/workspace/libraries/install") \
+        == "https://docs.databricks.com/api/workspace/libraries/install.md"
+    assert api.fetch_url("https://docs.databricks.com/api/workspace/libraries/install.md") \
+        == "https://docs.databricks.com/api/workspace/libraries/install.md"
+
+
+def test_with_endpoint_appends_single_rest_path():
+    page = "# Add a library\n\n`POST /api/2.0/libraries/install`\n\nAdds libraries to a cluster.\n"
+    assert doc_sites.with_endpoint("Add a library", page) \
+        == "Add a library (POST /api/2.0/libraries/install)"
+    many = page + "\nGET /api/2.0/libraries/cluster-status\n"
+    assert doc_sites.with_endpoint("Libraries", many) == "Libraries"
+    assert doc_sites.with_endpoint("Guide", "# Guide\n\nNo endpoints here.") == "Guide"
 
 
 def test_front_matter_is_not_a_heading():

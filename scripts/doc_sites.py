@@ -69,7 +69,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import duckdb
 import httpx
@@ -223,6 +223,25 @@ PRESETS: dict[str, Site] = {
         max_workers=2,
         request_interval_s=1.0,      # 2 requests/second overall
     ),
+    # Databricks REST API reference: one unified page per endpoint or object
+    # (the old /api/workspace|gcp|azure URLs redirect to it; cloud
+    # differences are noted inline). /api/llms.txt lists ~1,580 pages, each
+    # with a Markdown twin at <url>.md. Not in the main sitemap.
+    "databricks-api": Site(
+        name="databricks-api",
+        index_url="https://docs.databricks.com/api/llms.txt",
+        index_kind="llms_txt",
+        page_format="markdown",
+        md_url_suffix=".md",
+        include_patterns=["https://docs.databricks.com/api/*"],
+        # Object pages repeat schemas that every endpoint page inlines.
+        exclude_patterns=["*/object.md"],
+        name_prefix="Databricks API",
+        authority_score=0.85,
+        refresh_ttl_days=14,
+        max_workers=2,
+        request_interval_s=1.0,      # 2 requests/second overall
+    ),
     # Claude Code docs: llms.txt lists every page as a Markdown URL.
     "claude-code": Site(
         name="claude-code",
@@ -350,7 +369,7 @@ def upsert_site(conn: duckdb.DuckDBPyConnection, site: Site) -> int:
 # ---------------------------------------------------------------------------
 
 _SM_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
-_MD_LINK = re.compile(r"\]\((https?://[^)\s]+)\)")
+_MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
 
 
 def parse_sitemap(xml_text: str) -> tuple[list[str], list[str]]:
@@ -366,12 +385,18 @@ def parse_sitemap(xml_text: str) -> tuple[list[str], list[str]]:
 
 
 def parse_llms_txt(text: str, index_url: str) -> list[str]:
-    """Markdown links in an llms.txt that stay on the index's host."""
+    """Markdown links in an llms.txt that stay on the index's host.
+
+    Relative links (docs.databricks.com/api/llms.txt uses them) resolve
+    against the index URL."""
     host = urlparse(index_url).netloc
     seen: dict[str, None] = {}
     for url in _MD_LINK.findall(text):
         url = url.split("#", 1)[0]
-        if urlparse(url).netloc == host:
+        if not url or url.startswith(("mailto:", "javascript:")):
+            continue
+        url = urljoin(index_url, url)
+        if urlparse(url).scheme in ("http", "https") and urlparse(url).netloc == host:
             seen.setdefault(url, None)
     return list(seen)
 
@@ -598,7 +623,7 @@ def fetch_page(site: Site, page_url: str, *, etag: Optional[str] = None,
             return pf
         import refresh_docs
         text = refresh_docs.WebMarkdownFetcher.strip_index_note(text)
-        pf.title = markdown_title(text)
+        pf.title = with_endpoint(markdown_title(text), text)
     else:
         page_title, text, pf.content_date = html_page_to_markdown(text, site.content_selector)
         pf.title = markdown_title(text) or page_title
@@ -748,6 +773,26 @@ PREFIX_BY_URL = {
     "https://platform.claude.com/docs/en/api/": "Claude API",
     "https://platform.claude.com/docs/en/managed-agents/": "Claude Managed Agents",
 }
+
+
+_ENDPOINT = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+`?(/api/[\w./{}:-]+)")
+
+
+def with_endpoint(title: Optional[str], text: str) -> Optional[str]:
+    """Append a REST endpoint to a page title when the page documents one.
+
+    API reference titles name the action ("Add a library") but not the
+    path (POST /api/2.0/libraries/install), so a query that says
+    "install libraries" misses the title. Only when the top of the page
+    names exactly one endpoint; resource overview pages list several.
+    """
+    if not title:
+        return title
+    found = {f"{m.group(1)} {m.group(2)}" for m in _ENDPOINT.finditer(text[:3000])}
+    if len(found) != 1:
+        return title
+    ep = found.pop()
+    return title if ep in title else f"{title} ({ep})"
 
 
 def _page_name(site: Site, title: Optional[str], url: str) -> str:
