@@ -852,9 +852,10 @@ MCP_SERVER = Profile(
     keywords=["mcp server", "mcp-server", "model context protocol server"],
 )
 
-# Order matters for keyword detection: specific before general.
+# Order matters for keyword detection: the products this project owns first, then
+# the kind of artifact (a plugin about Databricks is a plugin), then platforms.
 PROFILES: dict[str, Profile] = {p.name: p for p in (
-    LEXA, HEALTHSIM, DATABRICKS, CLAUDE_PLUGIN, MCP_APP, MCP_SERVER)}
+    LEXA, HEALTHSIM, CLAUDE_PLUGIN, MCP_APP, MCP_SERVER, DATABRICKS)}
 
 ALIASES = {
     "dab": "databricks", "dabs": "databricks", "bundle": "databricks",

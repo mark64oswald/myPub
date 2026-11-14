@@ -46,7 +46,7 @@ import duckdb
 import agent_skills
 import kb_scaffold as ks
 from generator import GenFile, GenPlan, GenUnit, Generator, ValidationIssue
-from topic_gate import DEFAULT_MIN_SIMILARITY, gate_concepts
+from topic_gate import DEFAULT_MIN_SIMILARITY, gate_concepts, procedure_similarities
 
 LOG = logging.getLogger("mypub-guided-conversation")
 GENERATOR_TYPE = "guided_conversation"
@@ -72,12 +72,6 @@ OUTPUT_TEMPLATES: dict[str, list[str]] = {
     "code": ["What it does", "Files", "{work}", "How to run", "Tests", "Sources"],
     "checklist": ["Before you start", "{work}", "Verify", "Sources"],
 }
-
-# Single words too generic to stand for a topic on their own.
-_GENERIC = {"data", "design", "system", "service", "project", "model", "process", "user",
-            "users", "team", "build", "plan", "code", "test", "tests", "document", "app",
-            "application", "guide", "help", "work", "output", "goal", "new", "simple"}
-
 
 @dataclass
 class Step:
@@ -119,6 +113,8 @@ class Conversation:
     prereqs: list[Prereq]
     decisions: list[tuple[str, list[Option]]]     # (topic name, options incl. topic)
     procedures: list[ks.Procedure]
+    proc_scores: dict[int, int] = field(default_factory=dict)   # procedure_id -> relevance
+    comparison: bool = False
     steps: list[Step] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -151,41 +147,32 @@ def _coverage(conn: duckdb.DuckDBPyConnection, cid: int) -> int:
 
 def topics_from_goal(conn: duckdb.DuckDBPyConnection, resolver: Any, goal: str,
                      limit: int = 3) -> list[str]:
-    """Concept names the goal mentions: the longest n-grams (1-4 words) that resolve
-    by name or alias. Generic single words only count when capitalised."""
-    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#.\-]*", goal or "")
-    found: list[tuple[int, int, int, str]] = []          # (-n, -coverage, position, name)
-    taken: set[int] = set()
-    for n in (4, 3, 2, 1):
-        for i in range(len(words) - n + 1):
-            span = set(range(i, i + n))
-            if span & taken:
-                continue
-            phrase = " ".join(words[i:i + n]).strip(".-")
-            if n == 1:
-                w = words[i]
-                if len(w) < 3 or w.lower() in ks._STOP or (
-                        w.lower() in _GENERIC and not w[0].isupper()):
-                    continue
-            elif phrase.split()[0].lower() in ks._STOP or phrase.split()[-1].lower() in ks._STOP:
-                continue
-            cid = resolver.resolve_lookup_only(phrase)
-            if cid is None:
-                continue
-            cov = _coverage(conn, int(cid))
-            if cov == 0:
-                continue
-            taken |= span
-            name = conn.execute("SELECT name FROM concept WHERE concept_id = ?",
-                                [int(cid)]).fetchone()[0]
-            found.append((-n, -cov, i, name))
-    out: list[str] = []
-    for _n, _c, _i, name in sorted(found):
-        if name.lower() not in {o.lower() for o in out}:
-            out.append(name)
-        if len(out) >= limit:
-            break
-    return out
+    """Concept names the goal mentions (see kb_scaffold.concepts_in_text)."""
+    return ks.concepts_in_text(conn, resolver, goal, limit=limit)
+
+
+_COMPARE_RE = re.compile(r"\b(between|versus|vs\.?|compare|comparing|or)\b", re.I)
+
+
+def is_comparison(goal: str, n_topics: int) -> bool:
+    """'Choose between Kafka and Pulsar', 'Kafka vs Pulsar', 'compare A with B'."""
+    return n_topics >= 2 and bool(_COMPARE_RE.search(goal or ""))
+
+
+_MIGRATE_RE = re.compile(r"\b(migrat\w*|upgrad\w*|port(?:ing)?|mov(?:e|ing)|convert\w*|"
+                         r"replac\w*)\b.*\bto\b", re.I)
+_MIGRATE_WORDS = re.compile(r"\b(migrat\w*|upgrad\w*|convert\w*|port(?:ing)?|replac\w*|"
+                            r"mov(?:e|ing))\b", re.I)
+
+
+def is_migration(goal: str, n_topics: int) -> bool:
+    """'Migrate X to Y', 'move from X to Y': source and target are already chosen."""
+    return n_topics >= 1 and bool(_MIGRATE_RE.search(goal or ""))
+
+
+def relevance(goal: str, text: str) -> int:
+    """Specific goal words (generic ones excluded, crude stems) that ``text`` shares."""
+    return len(ks.stems(goal) & ks.stems(text))
 
 
 # ---------------------------------------------------------------------------
@@ -261,18 +248,35 @@ def alternatives(conn: duckdb.DuckDBPyConnection, tm: ks.TopicMaterial, *, limit
          GROUP BY c.concept_id, c.name, c.description
          ORDER BY conf DESC, c.name
         """, [tm.concept_id] * 4).fetchall()
-    kept, dropped, _ = gate_concepts(conn, tm.concept_id, [int(r[0]) for r in rows],
-                                     min_similarity)
+    kept, dropped_ids, _ = gate_concepts(conn, tm.concept_id, [int(r[0]) for r in rows],
+                                         min_similarity)
+    dropped = len(dropped_ids)
     keep = set(kept)
+    # An alternative is the same kind of thing and not a part of the topic: drop other
+    # concept types ("Topic" is not an alternative to the Kafka tool) and names that
+    # contain the topic's words ("Transactions in Kafka", "kafka-topics.sh").
+    types = {r[0] for r in conn.execute(
+        "SELECT DISTINCT concept_type FROM concept WHERE lower(name) = lower(?)",
+        [tm.name]).fetchall() if r[0]}
+    topic_words = ks.stems(tm.name, drop_generic=False)
+    ctype = {int(r[0]): r[1] for r in conn.execute(
+        "SELECT concept_id, concept_type FROM concept WHERE concept_id IN ("
+        + (",".join("?" * len(rows)) or "NULL") + ")", [int(r[0]) for r in rows]).fetchall()}
     out: list[Option] = []
     seen = {tm.name.lower()}
     for cid, name, desc, _conf in rows:
+        if types and ctype.get(int(cid)) and ctype[int(cid)] not in types:
+            dropped += 1
+            continue
+        if topic_words & ks.stems(name, drop_generic=False):
+            dropped += 1
+            continue
         if int(cid) in keep and name.lower() not in seen:
             seen.add(name.lower())
             out.append(Option(int(cid), name, desc))
         if len(out) >= limit:
             break
-    return out, len(dropped)
+    return out, dropped
 
 
 # ---------------------------------------------------------------------------
@@ -332,29 +336,53 @@ def plan_steps(c: Conversation, max_steps: int = 8) -> list[Step]:
     for topic, opts in c.decisions:
         names = [o.name for o in opts]
         steps.append(Step(
-            key=f"decide-{_anchor(topic)}", kind="decide", title=f"Choose an approach: {topic}",
-            purpose=f"The sources contrast {', '.join(names[:-1])} and {names[-1]}; "
-                    "the choice shapes the rest.",
+            key=f"decide-{_anchor(topic)}", kind="decide",
+            title=(f"Compare {' and '.join(names)}" if topic == "comparison"
+                   else f"Choose an approach: {topic}"),
+            purpose=(f"Compare {', '.join(names[:-1])} and {names[-1]} for the user's case; "
+                     "the choice shapes the rest." if c.comparison and topic == "comparison" else
+                     f"The sources set {', '.join(names[1:])} against {names[0]}; settle "
+                     "which fits before going further."),
             ask=["Ask which constraints matter most here (from the frame step), then ask the "
                  f"user to pick: {', '.join(names)}, or none of these."],
             do=["Before asking, give each option in one line from references/options.md#"
-                f"{_anchor(topic)}, with when it fits.",
-                "Recommend one option against the user's constraints, and say why."],
+                f"{_anchor(topic)}, with when it fits."]
+            + (["Compare them on the criteria the user named, one criterion at a time, "
+                "from the references; mark where the sources say nothing."]
+               if topic == "comparison" else [])
+            + ([] if topic == "comparison" else
+               ["Leave out any option that is not a real alternative for this goal (the "
+                "sources' links can be loose) and say which you left out."])
+            + ["Recommend one option against the user's constraints, and say why."],
             done_when="The user has picked an option and the reason is recorded.",
             captures=[_field("decision", topic)],
             ref=f"references/options.md#{_anchor(topic)}",
         ))
-    for p in c.procedures:
+    hands_on = c.output_type in ("code", "checklist")
+    if c.output_type == "decision" and c.procedures:
+        c.notes.append("decision output: procedures stay in references/procedures.md "
+                       "(what adopting an option involves) rather than becoming steps")
+    for p in ([] if c.output_type == "decision" else c.procedures):
         pre = ks.first_sentence(p.preconditions, 200)
+        ref = f"references/procedures.md#{_anchor(p.name)}"
+        if hands_on:
+            purpose = f"Work through this procedure for the user's case ({out_word} section)."
+            do = [f"Walk through the steps in {ref} one at a time, adapting each to the "
+                  "captured state; skip steps that don't apply and say so.",
+                  "Draft the matching part of the output as you go."]
+        else:
+            purpose = (f"Use the sources' procedure as input to the {noun}: what this part "
+                       "involves for the user's case, not running it.")
+            do = [f"Summarise the steps in {ref} that matter for the goal; note the ones "
+                  "that don't apply.",
+                  f"Draft the matching section of the {noun}, with the user's specifics and "
+                  "any decision it depends on."]
         steps.append(Step(
             key=f"work-{_anchor(p.name)[:40]}", kind="work", title=p.name,
-            purpose=f"Work through this procedure for the user's case ({out_word} section).",
-            ask=([f"Confirm the starting point: {pre}"] if pre else [])
-            + ["Ask for the specifics this procedure needs from the user's situation."],
-            do=[f"Walk through the steps in references/procedures.md#{_anchor(p.name)} one "
-                "at a time, adapting each to the captured state; skip steps that don't apply "
-                "and say so.",
-                "Draft the matching part of the output as you go."],
+            purpose=purpose,
+            ask=([f"Confirm the starting point: {pre}"] if pre and hands_on else [])
+            + ["Ask for the specifics this part needs from the user's situation."],
+            do=do,
             done_when="The user has confirmed the result of the last step that applies.",
             captures=[_field("result", p.name)],
             ref=f"references/procedures.md#{_anchor(p.name)}",
@@ -462,11 +490,15 @@ def render_background(c: Conversation) -> str:
 
 
 def render_options(c: Conversation) -> str:
-    lines = ["# Options", "", "Alternatives the sources contrast (CONTRASTS_WITH edges).", ""]
+    lines = ["# Options", "", "Options at each decision: the ones the goal names, or "
+             "alternatives the sources set against a topic (CONTRASTS_WITH edges, same kind "
+             "of thing, topic-gated).", ""]
     if not c.decisions:
         lines.append("_No contrasting alternatives recorded for these topics._")
     for topic, opts in c.decisions:
         lines += [f"## {topic}", ""]
+        if topic == "comparison":
+            lines += ["The options the goal names, as the knowledge base describes them.", ""]
         for o in opts:
             lines.append(f"- **{o.name}**: {ks.first_sentence(o.description, 300) or 'no description'}")
         lines.append("")
@@ -572,16 +604,17 @@ optional subagent pass that rewrites their wording without changing the flow.
 class ConversationDecomposer:
     def decompose(self, conn: duckdb.DuckDBPyConnection, resolver: Any, query: str,
                   **kw: Any) -> Conversation:
+        goal = " ".join(query.split())
         output = (kw.get("output") or "").strip() or "a written summary"
         otype = detect_output_type(output, kw.get("output_type"))
         notes: list[str] = []
-        names = list(kw.get("topics") or []) or topics_from_goal(conn, resolver, query)
+        names = list(kw.get("topics") or []) or topics_from_goal(conn, resolver, goal)
         if not kw.get("topics"):
             notes.append("topics from the goal: " + (", ".join(names) or "none found"))
+        max_procs = max(1, int(kw.get("max_procedures", 3)))
         topics: list[ks.TopicMaterial] = []
         for n in names:
-            tm = ks.topic_material(conn, resolver, n, purpose=query,
-                                   max_procedures=int(kw.get("max_procedures", 3)))
+            tm = ks.topic_material(conn, resolver, n, purpose=goal, max_procedures=12)
             if tm is None:
                 notes.append(f"topic {n!r} not in the knowledge base; skipped")
             elif all(t.concept_id != tm.concept_id for t in topics):
@@ -590,24 +623,65 @@ class ConversationDecomposer:
         prereqs, dropped = prerequisites(conn, ids, limit=int(kw.get("max_prereqs", 3)))
         if dropped:
             notes.append(f"topic gate dropped {dropped} off-topic prerequisite(s)")
+
+        migration = is_migration(goal, len(topics))
+        comparison = not migration and is_comparison(goal, len(topics))
         decisions: list[tuple[str, list[Option]]] = []
-        for t in topics:
-            opts, d = alternatives(conn, t)
-            if d:
-                notes.append(f"topic gate dropped {d} off-topic alternative(s) to {t.name}")
-            if opts:
-                decisions.append((t.name, [Option(t.concept_id, t.name, t.description)] + opts))
-        procs: list[ks.Procedure] = []
+        if migration:
+            notes.append("migration goal: source and target are set, so no approach decision")
+        elif comparison:
+            decisions.append(("comparison", [Option(t.concept_id, t.name, t.description)
+                                             for t in topics]))
+            notes.append("comparison goal: one decision across "
+                         + ", ".join(t.name for t in topics))
+        else:
+            for t in topics:
+                opts, d = alternatives(conn, t)
+                pre_names = {p.name.lower() for p in prereqs}
+                opts = [o for o in opts if o.name.lower() not in pre_names]
+                if d:
+                    notes.append(f"dropped {d} alternative(s) to {t.name} "
+                                 "(off topic, a different kind of thing, or a part of it)")
+                if opts:
+                    decisions.append((t.name, [Option(t.concept_id, t.name, t.description)]
+                                      + opts))
+
+        # Procedures: pooled across topics, gated to their own topic, ranked by how
+        # many specific goal words they share; keep the best few.
+        pool: list[tuple[int, int, ks.Procedure]] = []
         seen: set[int] = set()
-        per_topic = max(1, int(kw.get("max_procedures", 3)))
-        for t in topics:
-            for p in t.procedures[:per_topic]:
-                if p.procedure_id not in seen:
-                    seen.add(p.procedure_id)
-                    procs.append(p)
-        c = Conversation(goal=" ".join(query.split()), output=output, output_type=otype,
+        gated = 0
+        for ti, t in enumerate(topics):
+            sims = procedure_similarities(conn, t.concept_id, [p.procedure_id for p in t.procedures])
+            for p in t.procedures:
+                if p.procedure_id in seen:
+                    continue
+                seen.add(p.procedure_id)
+                sim = sims.get(p.procedure_id)
+                if sim is not None and sim < DEFAULT_MIN_SIMILARITY:
+                    gated += 1
+                    continue
+                score = relevance(goal, p.name + " " + (p.steps or "")[:400])
+                if migration and _MIGRATE_WORDS.search(p.name):
+                    score += 3     # a migration procedure beats one that only names the tools
+                pool.append((score, ti, p))
+        if gated:
+            notes.append(f"topic gate dropped {gated} off-topic procedure(s)")
+        best = max((sc for sc, _, _ in pool), default=0)
+        # Every pooled procedure is linked to a topic and passed the gate; the floor
+        # only bites when some procedures match the goal's own words better.
+        floor = min(2, best)
+        chosen = sorted((x for x in pool if x[0] >= floor), key=lambda x: (-x[0], x[1]))
+        weak = len(pool) - len(chosen)
+        if weak:
+            notes.append(f"left out {weak} procedure(s) that share fewer than {floor} "
+                         "specific word(s) with the goal")
+        procs = [p for _, _, p in chosen[:max_procs]]
+        c = Conversation(goal=goal, output=output, output_type=otype,
                          audience=kw.get("audience"), topics=topics, prereqs=prereqs,
-                         decisions=decisions, procedures=procs, notes=notes)
+                         decisions=decisions, procedures=procs,
+                         proc_scores={p.procedure_id: sc for sc, _, p in chosen},
+                         comparison=comparison, notes=notes)
         c.steps = plan_steps(c, max_steps=int(kw.get("max_steps", 8)))
         return c
 

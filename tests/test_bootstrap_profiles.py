@@ -80,6 +80,28 @@ def test_detect_profile_hint_wins_and_aliases():
         bp.detect_profile("anything", "mainframe")
 
 
+def test_plugin_about_databricks_is_a_plugin():
+    assert bp.detect_profile("Claude Code plugin with skills for Databricks cost review").name \
+        == "claude-plugin"
+
+
+def test_profile_requests_pick_up_prose_concepts_and_drop_fragments(catalog):
+    uc = _concept(catalog, "Unity Catalog", desc="Governance for Databricks data")
+    unity = _concept(catalog, "Unity", desc="A game engine")
+    claims = _concept(catalog, "Claims Data", "Concept", "Insurance claims records")
+    for cid in (uc, unity, claims):
+        catalog.execute("INSERT INTO concept_relation (from_concept_id, to_concept_id, "
+                        "relation_type, source_type, source_id, confidence) "
+                        "VALUES (?, ?, 'REQUIRES', 'chapter', ?, 0.9)", [cid, uc if cid != uc else claims, cid])
+    names = {"unity catalog": uc, "unity": unity, "claims data": claims}
+    d = pb.StackComposeDecomposer().decompose(
+        catalog, _resolver(names), "Databricks pipeline that loads claims data into Unity Catalog",
+        project_name="p")
+    got = [el.name for el in d.elements]
+    assert "Claims Data" in got and "Unity Catalog" in got
+    assert "Unity" not in got
+
+
 def test_plugin_with_mcp_app_stays_a_plugin():
     prof = bp.detect_profile("Claude Code plugin with an MCP App dashboard")
     assert prof.name == "claude-plugin"
