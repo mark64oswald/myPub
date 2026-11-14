@@ -69,7 +69,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import duckdb
 import httpx
@@ -234,6 +234,8 @@ PRESETS: dict[str, Site] = {
         page_format="markdown",
         md_url_suffix=".md",
         include_patterns=["https://docs.databricks.com/api/*"],
+        # Object pages repeat schemas that every endpoint page inlines.
+        exclude_patterns=["*/object.md"],
         name_prefix="Databricks API",
         authority_score=0.85,
         refresh_ttl_days=14,
@@ -367,7 +369,7 @@ def upsert_site(conn: duckdb.DuckDBPyConnection, site: Site) -> int:
 # ---------------------------------------------------------------------------
 
 _SM_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
-_MD_LINK = re.compile(r"\]\((https?://[^)\s]+)\)")
+_MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
 
 
 def parse_sitemap(xml_text: str) -> tuple[list[str], list[str]]:
@@ -383,12 +385,18 @@ def parse_sitemap(xml_text: str) -> tuple[list[str], list[str]]:
 
 
 def parse_llms_txt(text: str, index_url: str) -> list[str]:
-    """Markdown links in an llms.txt that stay on the index's host."""
+    """Markdown links in an llms.txt that stay on the index's host.
+
+    Relative links (docs.databricks.com/api/llms.txt uses them) resolve
+    against the index URL."""
     host = urlparse(index_url).netloc
     seen: dict[str, None] = {}
     for url in _MD_LINK.findall(text):
         url = url.split("#", 1)[0]
-        if urlparse(url).netloc == host:
+        if not url or url.startswith(("mailto:", "javascript:")):
+            continue
+        url = urljoin(index_url, url)
+        if urlparse(url).scheme in ("http", "https") and urlparse(url).netloc == host:
             seen.setdefault(url, None)
     return list(seen)
 
