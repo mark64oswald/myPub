@@ -30,8 +30,9 @@ Two kinds of live-doc source:
 
 - **Doc sites** (`doc_sites.py`): a whole docs site enumerated from its
   sitemap.xml or llms.txt, one `doc_source` per page. Presets:
-  `databricks` (docs.databricks.com/aws/en, HTML, ~6.4k pages) and
-  `claude-code` (code.claude.com/docs, Markdown, ~200 pages), plus the other
+  `databricks` (docs.databricks.com/aws/en, HTML, ~6.4k pages),
+  `databricks-api` (docs.databricks.com/api REST reference, Markdown twins
+  via /api/llms.txt, ~1.6k pages) and `claude-code` (code.claude.com/docs, Markdown, ~200 pages), plus the other
   Claude developer sites: `claude-platform` (platform.claude.com/docs/en,
   ~916 pages incl. the API reference), `claude-docs` (claude.com/docs,
   developer subset, ~70 pages), `mcp` (modelcontextprotocol.io, current spec

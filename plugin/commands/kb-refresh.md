@@ -15,7 +15,7 @@ are in. Below, `PY` means `"${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3"` and
 ## Two kinds of sources
 
 - **Doc sites** — whole docs sites enumerated from a sitemap or llms.txt,
-  one doc_source per page (`databricks`, `claude-code`, `claude-platform`, `claude-docs`, `mcp`, `agent-skills`). Refreshed by
+  one doc_source per page (`databricks`, `databricks-api`, `claude-code`, `claude-platform`, `claude-docs`, `mcp`, `agent-skills`). Refreshed by
   `doc_sites.py`, which uses conditional GETs, compares a hash of the
   extracted text, re-ingests only changed pages, and retires pages that
   left the index.
@@ -89,7 +89,7 @@ are in. Below, `PY` means `"${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3"` and
 ## Adding a site
 
 ```bash
-PY S/doc_sites.py add-site --preset databricks     # or claude-code, claude-platform, claude-docs, mcp, agent-skills
+PY S/doc_sites.py add-site --preset databricks     # or databricks-api, claude-code, claude-platform, claude-docs, mcp, agent-skills
 PY S/doc_sites.py add-site --name NAME --index-url https://…/sitemap.xml \
     --page-format html --selector article --include 'https://…/en/*' \
     --exclude '*/archive/*' --name-prefix 'Vendor' --ttl 14
