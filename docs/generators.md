@@ -77,6 +77,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 | Generator | Slash command | Source file | What it does |
 |---|---|---|---|
 | **Project Bootstrap** ★ | `/kb-bootstrap <description>` | [`project_bootstrap.py`](../mcp-servers/kb-mcp/project_bootstrap.py) | Runnable scaffold for any of 8 language stacks (python / rust / node / typescript / java / go / csharp / ruby), inferred from request keywords; emits a generic skeleton if no signal — never Python-by-default |
+| ↳ Bootstrap profiles | `/kb-bootstrap … profile=<name>` | [`bootstrap_profiles.py`](../mcp-servers/kb-mcp/bootstrap_profiles.py) | Category layer over the stacks: `databricks` (Declarative Automation Bundle: pipeline + job + wheel + offline tests), `healthsim` (project using the HealthSim plugin for synthetic test data), `lexa` (custom agent on Lexa BioScience with its guard rails); `claude-plugin` / `mcp-server` / `mcp-app` route to the scaffold generators. Detected from keywords when not passed |
 | Refactoring Playbook | `/kb-refactoring <pattern>` | [`refactoring_playbook.py`](../mcp-servers/kb-mcp/refactoring_playbook.py) | Targeted refactor with before/after snippets |
 
 ★ User's #1 motivating example. See [Project Bootstrap](#project-bootstrap) below for the canonical CQRS+Kafka+HL7 walkthrough.

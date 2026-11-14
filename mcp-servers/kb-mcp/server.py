@@ -3198,6 +3198,7 @@ def generate_project_bootstrap(
     patterns: Optional[list[str]] = None,
     project_name: Optional[str] = None,
     stack: Optional[str] = None,
+    profile: Optional[str] = None,
     output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
@@ -3223,10 +3224,28 @@ def generate_project_bootstrap(
             ``python | rust | node | typescript | java | go | csharp |
             ruby | generic``. Aliases ``py / rs / js / ts / nodejs /
             golang / cs / dotnet / kotlin`` also accepted.
+        profile: Optional project category, on top of the stack:
+            ``databricks`` (Declarative Automation Bundle: pipeline + job +
+            wheel), ``healthsim`` (project using the HealthSim plugin for
+            synthetic test data), ``lexa`` (custom agent on the Lexa
+            BioScience plugin), ``claude-plugin`` / ``mcp-server`` /
+            ``mcp-app`` (routed to generate_plugin_scaffold /
+            generate_mcp_server), or ``none``. Detected from the
+            description when omitted.
     """
+    # pylint: disable=import-outside-toplevel
+    import bootstrap_profiles
+    try:
+        prof = bootstrap_profiles.detect_profile(description, profile)
+    except ValueError as e:
+        return {"package_id": -1, "validation_issues": [
+            {"severity": "error", "message": str(e)}], "notes": []}
+    if prof is not None and prof.delegate:
+        return _route_bootstrap_profile(prof, description, technologies, patterns,
+                                        project_name, stack, output_root, overwrite)
+
     output_root = _resolve_output_root(output_root)
     _bootstrap()
-    # pylint: disable=import-outside-toplevel
     import project_bootstrap
     gen = project_bootstrap.make_project_bootstrap_generator()
     with _temporarily_open_writer() as rw_conn:
@@ -3235,6 +3254,7 @@ def generate_project_bootstrap(
             rw_conn, rw_resolver, description,
             technologies=technologies, patterns=patterns,
             project_name=project_name, stack=stack,
+            profile=prof.name if prof else "none",
             output_root=output_root, overwrite=overwrite,
         )
         if package_id == -1:
@@ -3253,12 +3273,50 @@ def generate_project_bootstrap(
         "n_elements": metadata.get("n_elements", 0),
         "n_files": metadata.get("n_files", 0),
         "stack": metadata.get("stack"),
+        "profile": metadata.get("profile"),
         "stack_description": metadata.get("stack_description"),
         "file_paths": report.file_paths,
         "validation_issues": [
             {"severity": i.severity, "message": i.message} for i in issues],
         "notes": list(report.notes),
     }
+
+
+def _route_bootstrap_profile(prof: Any, description: str,
+                             technologies: Optional[list[str]],
+                             patterns: Optional[list[str]],
+                             project_name: Optional[str], stack: Optional[str],
+                             output_root: Optional[str], overwrite: bool) -> dict[str, Any]:
+    """Hand a plugin / MCP server / MCP App request to the generator that owns it."""
+    # pylint: disable=import-outside-toplevel
+    language = "typescript" if (stack or "").lower() in ("ts", "typescript", "node", "js") \
+        else "python"
+    topics = list(technologies or []) + list(patterns or [])
+    if prof.delegate == "plugin_scaffold":
+        import plugin_scaffold
+        wants_server = "mcp" in description.lower()
+        out = _run_scaffold(plugin_scaffold.make_plugin_scaffold_generator(), description,
+                            output_root, overwrite, plugin_name=project_name,
+                            skill_topics=topics,
+                            workflows=[] if (topics or wants_server) else ["Main workflow"],
+                            mcp_server=wants_server,
+                            language=language,
+                            transport="stdio", tools=[], domain=None,
+                            ui="mcp app" in description.lower(), hooks=False, author=None)
+        routed = "generate_plugin_scaffold"
+    else:
+        import mcp_server_gen
+        out = _run_scaffold(mcp_server_gen.make_mcp_server_generator(), description,
+                            output_root, overwrite, server_name=project_name,
+                            language=language, transport="stdio", tools=[],
+                            domain=None, ui=prof.delegate == "mcp_app",
+                            skill_topics=[], registry_namespace=None)
+        routed = "generate_mcp_server"
+    out["profile"] = prof.name
+    out["routed_to"] = routed
+    out["notes"] = [f"profile {prof.name!r}: built by {routed}; call it directly "
+                    "for its full options (tools, domain, transport, hooks)"] + out["notes"]
+    return out
 
 
 @mcp.tool
