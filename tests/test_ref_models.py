@@ -346,3 +346,20 @@ def test_silverston_pages_and_csv(tmp_path):
     assert text.splitlines() == ["entity,attribute,pk,fk,domain", "PARTY,PARTY ID,Yes,No,ID"]
     with pytest.raises(SystemExit):
         s.silverston_pages(epub, "astrology", out_root=root)
+
+
+def test_model_ids_union_of_industry_and_source():
+    import argparse
+    script = _load_script()
+    conn = duckdb.connect()
+    rm.ensure_schema(conn)
+    for src, ind in [("databricks", "healthcare"), ("databricks", "banking"), ("omop", "healthcare"),
+                     ("silverston", "insurance")]:
+        rm.load_model(conn, rm.RefModel(source=src, industry=ind, flavour="x", version="1"))
+    ids = dict(conn.execute("SELECT source || ':' || industry, ref_model_id FROM ref_model").fetchall())
+    ns = argparse.Namespace(model_id=None, industry=["insurance", "healthcare"], source=["omop"],
+                            all=False)
+    assert set(script._model_ids(conn, ns)) == {ids["databricks:healthcare"], ids["omop:healthcare"],
+                                                ids["silverston:insurance"]}
+    ns = argparse.Namespace(model_id=None, industry=None, source=["omop"], all=False)
+    assert script._model_ids(conn, ns) == [ids["omop:healthcare"]]

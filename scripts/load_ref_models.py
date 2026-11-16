@@ -110,14 +110,19 @@ def _resolver(conn):
 def _model_ids(conn, args) -> list[int]:
     if getattr(args, "model_id", None):
         return [int(x) for x in args.model_id]
-    sql = "SELECT ref_model_id FROM ref_model WHERE 1=1"
+    # --industry and --source add models (union): "--industry healthcare
+    # --source omop" means the healthcare models plus OMOP.
+    sql = "SELECT ref_model_id FROM ref_model"
     params: list[Any] = []
+    clauses = []
     if getattr(args, "industry", None):
-        sql += f" AND industry IN ({','.join('?' * len(args.industry))})"
+        clauses.append(f"industry IN ({','.join('?' * len(args.industry))})")
         params += args.industry
     if getattr(args, "source", None):
-        sql += f" AND source IN ({','.join('?' * len(args.source))})"
+        clauses.append(f"source IN ({','.join('?' * len(args.source))})")
         params += args.source
+    if clauses:
+        sql += " WHERE " + " OR ".join(clauses)
     if not (getattr(args, "all", False) or params):
         raise SystemExit("name models with --model-id, --industry/--source, or --all")
     return [int(r[0]) for r in conn.execute(sql + " ORDER BY ref_model_id", params).fetchall()]
