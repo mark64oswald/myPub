@@ -290,6 +290,8 @@ class GitHubFetcher:
             url = f"https://raw.githubusercontent.com/{owner}/{repo}/{b}/{path}"
             try:
                 content = self._fetch_url(url)
+                if path.lower().endswith(".csv"):
+                    content = csv_to_markdown(content, title=path.rsplit("/", 1)[-1])
                 return FetchResult(url=url, content=content, source_type=sec_type)
             except FetchError as e:
                 last_error = e
@@ -322,6 +324,51 @@ class GitHubFetcher:
         if response.status_code >= 400:
             raise FetchError(f"HTTP {response.status_code} fetching {url}")
         return response.text
+
+
+_CSV_ID_COLUMNS = ("id", "rule_id", "key", "code")
+_CSV_NAME_COLUMNS = ("name", "title", "rule", "term")
+_CSV_GROUP_COLUMNS = ("group", "category", "section")
+
+
+def csv_to_markdown(content: str, *, title: str = "Table") -> str:
+    """Render a catalog-style CSV (one record per row) as markdown sections.
+
+    Built for rule and glossary catalogs such as Databricks' Vibe Data
+    Modeling rule file (ID, Group, Scope, Name, Requirement, Example): a
+    flat CSV would otherwise become one unsearchable blob. Each row becomes
+    ``## <id> <name>`` (H2, the markdown sectionizer's split level, so one
+    section per record) with its group first and its remaining columns as
+    labelled paragraphs. Columns are matched case-insensitively; a CSV with
+    none of the id/name columns gets a ``Row N`` heading per row.
+    """
+    import csv
+    import io
+
+    reader = csv.DictReader(io.StringIO(content.lstrip("﻿")))
+    fields = [f for f in (reader.fieldnames or []) if f]
+    lower = {f.lower().strip(): f for f in fields}
+
+    def pick(cands: tuple[str, ...]) -> Optional[str]:
+        return next((lower[c] for c in cands if c in lower), None)
+
+    id_col, name_col, group_col = (pick(_CSV_ID_COLUMNS), pick(_CSV_NAME_COLUMNS),
+                                   pick(_CSV_GROUP_COLUMNS))
+    body_cols = [f for f in fields if f not in {id_col, name_col, group_col}]
+
+    out = [f"# {title}", ""]
+    for n, row in enumerate(reader, start=1):
+        head = " ".join(x for x in ((row.get(id_col) or "").strip() if id_col else "",
+                                    (row.get(name_col) or "").strip() if name_col else "")
+                        if x) or f"Row {n}"
+        out += [f"## {head}", ""]
+        if group_col and (row.get(group_col) or "").strip():
+            out += [f"**{group_col.strip()}:** {row[group_col].strip()}", ""]
+        for col in body_cols:
+            val = (row.get(col) or "").strip()
+            if val:
+                out += [f"**{col.strip()}:** {val}", ""]
+    return "\n".join(out).rstrip() + "\n"
 
 
 class WebMarkdownFetcher:
