@@ -521,6 +521,7 @@ Outputs land under `data/generated-packages/<name>_<timestamp>/`. Each entry bel
 | | [Data Product Portfolio](docs/generators.md#open-data-products) | `/kb-dp-portfolio` | ODPS products, ODPC catalog and ODPG value graph from a list of ideas, validated with the SDK |
 | | [Data Product Recipe](docs/generators.md#open-data-products) | `/kb-dp-recipe` | ODPR CI and agent recipes for a product, with a build plan and handoff brief |
 | | [Data Product Review](docs/generators.md#open-data-products) | `/kb-dp-review` | Section-by-section grade and fix list for an ODPS file |
+| | [Data Model Review](docs/ref-models.md#reviewing-a-model-kb-model-review) | `/kb-model-review` | Pattern-based grade for a data model, with change requests ("vibes") for a modeling agent |
 | Healthcare interop | [EDI Round-Trip](docs/generators.md#edi-round-trip-test) | `/kb-edi-roundtrip` | X12 transaction-set fixtures + parse/round-trip tests (270/271, 834, 835, 837, 997, 999) |
 | | [De-identification Bundle](docs/generators.md#de-identification-procedure-bundle) | `/kb-deid-bundle` | HIPAA Safe-Harbor de-id pipeline scaffold + audit trail (FHIR / DICOM / HL7v2 / clinical trial) |
 | | [Standards Translator](docs/generators.md#standards-translator) | `/kb-standards-translator` | Cross-standard mapping package (HL7v2↔FHIR, X12↔FHIR, DICOM→FHIR) — table + transformer + tests |
