@@ -152,3 +152,17 @@ def test_package_name_carries_flavour(monkeypatch):
         monkeypatch.setattr(mr, "load_input", lambda c, s, m=m: (m, None, ""))
         d = mr.ModelReviewDecomposer().decompose(conn, None, "databricks:healthcare", compare=False)
         assert mr.ModelReviewPlanner().plan(conn, d).package_name == f"model-review-healthcare-{flavour}"
+
+
+def test_coverage_needs_insurance_and_insured_party_columns():
+    cov = next(p for p in rm.load_patterns().patterns if p.key == "coverage")
+
+    def ent(*cols):
+        return rm.RefEntity(name="t", attributes=[rm.RefAttribute(name=c) for c in cols])
+
+    assert mr.has_evidence(ent("patient_id", "payer_id", "group_number"), cov)
+    assert mr.has_evidence(ent("member_subscriber_id", "health_plan_id"), cov)
+    # Trial eligibility, malpractice policies and plan definitions are not member coverage.
+    assert not mr.has_evidence(ent("criterion_text", "eligibility_type"), cov)
+    assert not mr.has_evidence(ent("policy_number", "self_insured_indicator"), cov)
+    assert not mr.has_evidence(ent("payer_id", "inpatient_hospital_copay_amount"), cov)

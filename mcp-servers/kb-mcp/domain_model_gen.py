@@ -281,7 +281,8 @@ def rewrite(model: rm.RefModel, keep: Sequence[str], *, name: str,
         for p in catalog.patterns:
             if p.review != "single_owner":
                 continue
-            members = [e for e in out.entities if links.get(e.key, {}).get(p.key, 0) >= 0.6]
+            members = [e for e in out.entities if links.get(e.key, {}).get(p.key, 0) >= 0.6
+                       and mr.has_evidence(e, p)]
             if len(members) < 2 or len({e.domain for e in members}) < 2:
                 continue
             owner = max(members, key=lambda e: len(e.attributes))
