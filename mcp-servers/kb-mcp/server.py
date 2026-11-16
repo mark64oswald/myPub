@@ -4058,6 +4058,54 @@ def review_data_model(
 
 @mcp.tool
 @_release_catalog
+def generate_dp_from_model(
+    model: str,
+    products: Optional[list[str]] = None,
+    use_cases: Optional[list[str]] = None,
+    objectives: Optional[list[str]] = None,
+    portfolio: Optional[str] = None,
+    industry: Optional[str] = None,
+    catalog: Optional[str] = None,
+    platform: Optional[str] = None,
+    sample_rows: int = 500,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Cut Open Data Products out of an industry data model.
+
+    Each product is a slice of the model's tables: ``"Name: description =>
+    domain.table, table, domain:<name>"``. Writes, per product, an ODPS 4.2
+    file with productKPIs from the model's metric views, an ODCS contract with
+    one schema object per table, Unity Catalog DDL and the metric views; plus
+    the ODPC catalog, ODPG graph and recipe from /kb-dp-portfolio,
+    ``model-notes.md`` (/kb-model-review findings on those tables) and
+    ``sample-data/healthsim-request.md``. With no products and a healthcare
+    model, a 3-product example portfolio is used.
+
+    Args:
+        model: Same forms as review_data_model (model.json, DDL, ``databricks:healthcare``...).
+        products: ``"Name: description => table, table"``.
+        use_cases: ``"Name: description => Product, Product"``.
+        objectives: ``"Name: description => Use case"``.
+        portfolio: Portfolio name (defaults to "<model> data products").
+        industry: Industry, when the path doesn't name one.
+        catalog: Unity Catalog catalog for DDL and contract locations.
+        platform: Defaults to databricks.
+        sample_rows: Rows per root table in the sample-data request.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import model_products_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(model_products_gen.make_dp_from_model_generator(),
+                         portfolio or model, output_root, overwrite, model=model,
+                         products=products or [], use_cases=use_cases or [],
+                         objectives=objectives or [], portfolio=portfolio, industry=industry,
+                         catalog=catalog, platform=platform, sample_rows=sample_rows)
+
+
+@mcp.tool
+@_release_catalog
 def generate_guided_conversation(
     goal: str,
     output: str,

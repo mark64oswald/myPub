@@ -103,3 +103,24 @@ vibe; `vibes.txt` lists them in order of severity. The healthcare MVM v2
 grades **D**: four role tables copy person identity, insurance coverage is
 held in six tables across four domains, nine tables inline addresses, and
 741 of 1,056 FKs are LLM-generated links.
+
+## Data products from a model (`/kb-dp-from-model`)
+
+`model_products_gen.py` bridges a model to the Open Data Product
+generators. A product is a slice of tables (`"Claims and denials: ... =>
+claim.claim, claim.denial"`, or `domain:claim`). For each product it writes
+an ODCS contract with every table as a schema object, ODPS `productKPIs`
+from the model's metric-view measures (rates and averages first, targets
+left as TODO), Unity Catalog DDL (`model_emit.uc_ddl`: parents first, FKs
+outside the slice kept as comments) and the metric views. The portfolio
+files (ODPC, ODPG, recipe, Makefile) come from `/kb-dp-portfolio`.
+`model-notes.md` lists the model-wide review findings that touch each
+product's tables, and `sample-data/healthsim-request.md` asks HealthSim
+(PatientSim + MemberSim) for synthetic rows in FK order.
+
+The built-in healthcare example over the Databricks MVM: Encounter
+activity (5 tables), Claims and denials (6), Patient coverage (4), two use
+cases (denial prevention, length of stay) and two objectives. All products,
+contracts, the graph, recipe and built catalog pass the SDK and ODCS schema
+checks. Because the output contains gallery content, it stays in the local
+`data/generated-packages/`.
