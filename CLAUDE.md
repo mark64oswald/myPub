@@ -101,6 +101,10 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-mcp-server` | MCP Server (2026-11) | MCP 2026-07-28 server skeleton; python or typescript; `ui` adds an MCP App, `skill_topics` serves skills |
 | `/kb-plugin-scaffold` | Plugin Scaffold (2026-11) | Claude Code plugin as a local marketplace: KB skills, workflow skills, hooks, optional MCP server |
 | `/kb-guided-conversation` | Guided Conversation (2026-11) | Workflow skill that drives a chat from a goal to an output: frame → prerequisite checks (REQUIRES) → decisions (CONTRASTS_WITH) → procedures → produce → review; topic-gated; `conversation.json` for other hosts |
+| `/kb-data-contract` | Data Contract (2026-11) | ODCS v3.1.0 contract for an existing table (DDL or columns): schema, quality, SLA, servers; checked against the ODCS JSON Schema |
+| `/kb-dp-portfolio` | Data Product Portfolio (2026-11) | Ideas → ODPS products + ODCS contracts, ODPC catalog, ODPG value graph, recipe; built and validated with the `open-data-products` SDK |
+| `/kb-dp-recipe` | Data Product Recipe (2026-11) | ODPR `ci` + `agent` recipes for an ODPS product, KB-grounded build plan, handoff brief; passes `recipe validate` |
+| `/kb-dp-review` | Data Product Review (2026-11) | Grades an ODPS file A–F by section against the specs and *Data Product Portfolios*; SDK/ODCS/graph checks + fix list |
 
 ## Other MCP servers
 

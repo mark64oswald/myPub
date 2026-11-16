@@ -8,3 +8,8 @@
   `license` block in the file. When ODPV ships a new version, add its file
   next to this one, point `odpv.file` at it, and run
   `seed_odp_family.py render-map`.
+- `odcs-json-schema-v3.1.0.json`: the Open Data Contract Standard v3.1.0
+  JSON Schema, copied unchanged from bitol-io/open-data-contract-standard
+  (Apache 2.0). `mcp-servers/kb-mcp/odp_gen.py` checks every generated ODCS
+  contract against it (needs `jsonschema`). Replace it when ODCS ships a new
+  version and update `ODCS_SCHEMA_FILE` in `odp_gen.py`.

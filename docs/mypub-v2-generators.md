@@ -2602,6 +2602,27 @@ Finalize the unified generation interface:
 
 ---
 
+### Phase 18: Open Data Product generators (2026-11)
+
+Added after the ODP spec family (ODPS 4.2, ODPC, ODPG, ODPV, ODPR, the
+`open-data-products` SDK and ODCS v3.1.0) was loaded as live docs and the
+`/kb-bootstrap` `data-product` profile shipped. The order follows how a team
+adopts the specs: contract an existing table, lay out a portfolio, automate
+it, then review what was written.
+
+| Order | Command | Generator type | Input | Output | Machine check |
+|---:|---|---|---|---|---|
+| 1 | `/kb-data-contract` | `data_contract` | DDL or column list, platform | `<name>.odcs.yaml` + checklist | ODCS JSON Schema |
+| 2 | `/kb-dp-portfolio` | `dp_portfolio` | product / use case / objective ideas | ODPS + ODCS per product, ODPC fragments + catalog, ODPG graph, recipe | `odp validate`, `odpc-build`, `odpg-analyze` |
+| 3 | `/kb-dp-recipe` | `dp_recipe` | ODPS file or description | `ci` + `agent` ODPR recipes, handoff brief | `recipe validate`, `recipe dry-run` |
+| 4 | `/kb-dp-review` | `dp_review` | ODPS file (+ contract, graph) | `review.md`, `findings.json`, fix prompt | `odp validate`, ODCS schema, `odpg-analyze` |
+
+Shared pieces live in `odp_gen.py` (column parsing, ODCS building, platform
+detection, SDK runner). Each generator is deterministic; the `_prompts/`
+files hand the judgement calls (owners, targets, pricing) to an agent or a
+person. Open follow-ups: grade generated packages on real portfolios, and
+add ODPV (value tracking) once the SDK validates it.
+
 ## 7. Summary
 
 ### Architecture changes (minimal)
@@ -2646,6 +2667,7 @@ Finalize the unified generation interface:
 | Project Bootstrap | Stack scaffolding | Silent | New-project authors | Concept→Pattern→Procedure with live-doc reconcile | 15 |
 | Refactoring Playbook | Anti-pattern → pattern transformation | Interactive | Engineering teams | Transformation path + per-step reconcile | 15 |
 | Curriculum | Composite | Mixed | Self-paced learners / cohorts / instructors | Orchestrates Learning Path + Tutorial + Dialog + Cheatsheet | 16 |
+| Data Contract / Portfolio / Recipe / Review | Spec-driven (ODCS, ODPS, ODPC, ODPG, ODPR) | Silent | Data product teams + agents | Spec map + SDK validation | 18 |
 
 ### The key insight
 

@@ -290,39 +290,22 @@ product:
 
 
 def odcs_contract(c: Any) -> str:
+    import odp_gen  # noqa: PLC0415  (odp_gen imports nothing from here)
     i, pf = ids(c), _platform(c)
-    table = c.pkg
-    return f"""\
-# ODCS {ODCS_VERSION} data contract for {title(c.project_name)}.
-# {MARKER}: define the real schema, quality rules and server details.
-# The ODPS product's contract.default points here.
-apiVersion: {ODCS_VERSION}
-kind: DataContract
-id: {i['product']}-contract
-name: {c.slug}
-version: 0.1.0
-status: draft
-description:
-  purpose: {_q(_first_sentence(c.request))}
-  usage: Read-only analytical use by the teams named in the ODPC use case.
-schema:
-  - name: {table}
-    physicalType: table
-    description: Main table of the data product.
-    properties:
-      - name: id
-        logicalType: string
-        primaryKey: true
-        required: true
-        description: Unique record identifier.
-      - name: updated_at
-        logicalType: timestamp
-        required: true
-        description: When the record last changed.
-servers:
-  - server: production
-    type: {pf['server_type']}
-"""
+    cols = [odp_gen.Column("id", "string", required=True, primary_key=True,
+                           description="Unique record identifier."),
+            odp_gen.Column("updated_at", "timestamp", required=True,
+                           description="When the record last changed.")]
+    doc = odp_gen.odcs_contract(
+        contract_id=f"{i['product']}-contract", name=c.slug, table=c.pkg, columns=cols,
+        purpose=_first_sentence(c.request),
+        platform=(c.data or {}).get("platform") or "generic")
+    doc["description"]["usage"] = "Read-only analytical use by the teams named in the ODPC use case."
+    return odp_gen.dump_yaml(doc, (
+        f"ODCS {ODCS_VERSION} data contract for {title(c.project_name)}.\n"
+        f"{MARKER}: define the real schema, quality rules and server details.\n"
+        "The ODPS product's contract.default points here.\n"
+        f"Server: {pf['label']}."))
 
 
 # ---------------------------------------------------------------------------
