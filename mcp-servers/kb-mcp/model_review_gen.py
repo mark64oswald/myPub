@@ -335,6 +335,8 @@ def check_status_history(model: rm.RefModel, links: dict[str, dict[str, float]])
         lk = links.get(e.key, {})
         if not any(_has(lk, k, 0.6) for k in _TRANSACTIONAL):
             continue
+        if re.search(r"_(status_)?history$", e.name):  # already the history table
+            continue
         if not any(a.name.endswith("status") for a in e.attributes):
             continue
         if any(n.startswith(e.name) and ("status" in n or "history" in n) for n in names
