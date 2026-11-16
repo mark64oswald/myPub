@@ -44,6 +44,7 @@ Usage:
     .venv/bin/python3 scripts/refresh_docs.py refresh --source-id <id> ...
     .venv/bin/python3 scripts/seed_odp_family.py map            # plan
     .venv/bin/python3 scripts/seed_odp_family.py map --write
+    .venv/bin/python3 scripts/seed_odp_family.py map --pin odps=<concept_id>   # name taken
     .venv/bin/python3 scripts/seed_odp_family.py status
 """
 
@@ -444,7 +445,16 @@ def _lookup(resolver, names: list[str]) -> Optional[int]:
     return None
 
 
-def plan_map(conn, fam: Family, resolver) -> MapPlan:
+def plan_map(conn, fam: Family, resolver,
+             pins: Optional[dict[str, int]] = None) -> MapPlan:
+    """Plan the spec map. ``pins`` maps a spec key or ``odpv:<Id>`` to an
+    existing concept_id, overriding the name/alias lookup. Use it when a
+    name or acronym is already taken by a different standard (Bitol's
+    "Open Data Product Standard" is also "ODPS")."""
+    pins = dict(pins or {})
+    for key, cid in pins.items():
+        if not conn.execute("SELECT 1 FROM concept WHERE concept_id = ?", [cid]).fetchone():
+            raise SystemExit(f"--pin {key}={cid}: no concept #{cid}")
     map_src = _source_id(conn, "github_raw", FAMILY_MAP_ID)
     if map_src is None:
         raise SystemExit("the family map isn't loaded: run `sources` and refresh it first")
@@ -460,7 +470,7 @@ def plan_map(conn, fam: Family, resolver) -> MapPlan:
 
     for s in fam.specs.values():
         cp = ConceptPlan(s.key, s.name, s.concept_type, s.description, list(s.aliases))
-        cp.concept_id = _lookup(resolver, [s.name, *s.aliases])
+        cp.concept_id = pins.pop(s.key, None) or _lookup(resolver, [s.name, *s.aliases])
         cp.doc_source_ids = [i for i in (spec_src.get(s.key), map_src) if i]
         concepts[s.key] = cp
 
@@ -476,9 +486,12 @@ def plan_map(conn, fam: Family, resolver) -> MapPlan:
         # A qualified name ("Domain (ODPV)") is looked up as itself only: its
         # bare id or aliases would find the unrelated "Domain" or "Product Owner".
         lookups = [name] if name != t.label else [name, t.id]
-        cp.concept_id = _lookup(resolver, lookups)
+        cp.concept_id = pins.pop(f"odpv:{t.id}", None) or _lookup(resolver, lookups)
         cp.doc_source_ids = [i for i in (odpv_src, map_src) if i]
         concepts[cp.key] = cp
+
+    if pins:
+        raise SystemExit(f"--pin: unknown key(s) {sorted(pins)}")
 
     edges: list[EdgePlan] = []
 
@@ -528,6 +541,11 @@ def plan_map(conn, fam: Family, resolver) -> MapPlan:
     return MapPlan(concepts, edges, skipped)
 
 
+def _concept_name(conn, concept_id: int) -> str:
+    row = conn.execute("SELECT name FROM concept WHERE concept_id = ?", [concept_id]).fetchone()
+    return row[0] if row else ""
+
+
 def _name_taken(conn, alias: str, concept_id: int) -> bool:
     """True when ``alias`` already names or aliases a different concept."""
     row = conn.execute(
@@ -564,7 +582,14 @@ def apply_map(conn, plan: MapPlan, resolver) -> ApplySummary:
                 cp.name, cp.description, cp.concept_type, vec, pending_review=False)
             out.concepts_created += 1
         cid = ids[key]
-        for alias in cp.aliases:
+        # A concept matched under another name ("ODPR") also answers to the
+        # map's own name ("Open Data Product Recipe Specification").
+        names = list(cp.aliases)
+        if cp.concept_id is not None and cp.name and cp.name not in names:
+            names.insert(0, cp.name)
+        for alias in names:
+            if alias.lower() == _concept_name(conn, cid).lower():
+                continue
             if _name_taken(conn, alias, cid):
                 out.aliases_skipped += 1
             elif resolver.register_alias(cid, alias, "odp") is not None:
@@ -664,6 +689,16 @@ def print_plan(plan: MapPlan) -> None:
         print(f"  skipped: {line}")
 
 
+def _parse_pins(items: Optional[list[str]]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for item in items or []:
+        key, sep, cid = item.partition("=")
+        if not sep or not cid.strip().isdigit():
+            raise SystemExit(f"--pin expects KEY=CONCEPT_ID, got {item!r}")
+        out[key.strip()] = int(cid)
+    return out
+
+
 def cmd_map(args) -> int:
     fam = load_family()
     errors = validate_family(fam)
@@ -677,7 +712,7 @@ def cmd_map(args) -> int:
         conn = duckdb.connect(str(args.catalog), read_only=True)
     try:
         resolver = _resolver(conn, load_model=args.write)
-        plan = plan_map(conn, fam, resolver)
+        plan = plan_map(conn, fam, resolver, pins=_parse_pins(args.pin))
         print_plan(plan)
         if args.write:
             print(apply_map(conn, plan, resolver))
@@ -756,6 +791,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     mp = sub.add_parser("map", help="seed spec + ODPV concepts and curated edges")
     mp.add_argument("--write", action="store_true")
+    mp.add_argument("--pin", action="append", metavar="KEY=CONCEPT_ID",
+                    help="use this existing concept for a spec key (odps) or "
+                         "ODPV term (odpv:DataProduct); repeatable")
     mp.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     mp.set_defaults(func=cmd_map)
 
