@@ -201,6 +201,10 @@ def test_not_yet_populated_tables_are_empty(conn):
         # extraction has been run for any source. PostgreSQL was the
         # first to be processed (2026-05-06).
         "alignment_edge",
+        # concept_doc_link — first populated 2026-11-16 by
+        # scripts/seed_odp_family.py map --write (spec + ODPV concepts
+        # linked to the ODP spec pages and the family map).
+        "concept_doc_link",
         # Phase 5 — Skills Factory has been driven against the live
         # corpus (first dogfood run: 2026-05-07).
         # skill_package: one row per generated package

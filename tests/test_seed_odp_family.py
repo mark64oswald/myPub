@@ -203,3 +203,39 @@ def test_plan_and_apply(schema_only_conn, fam):
     assert again.edges_added == 0
     assert again.aliases_added == 0
     assert again.doc_links_added == 0
+
+
+def test_pin_overrides_name_lookup(schema_only_conn, fam):
+    """Bitol's Open Data Product Standard also goes by "ODPS"; a pin keeps the
+    Linux Foundation spec off that concept."""
+    conn = schema_only_conn
+    _load_family_map(conn)
+    bitol = _concept(conn, "ODPS", "Framework")
+    conn.execute("INSERT INTO concept_alias (concept_id, alias, alias_type) VALUES (?, ?, 'merged')",
+                 [bitol, "Open Data Product Specification"])
+    lf = _concept(conn, "Open Data Product Specification (ODPS)")
+    resolver = EntityResolver(conn, model=FakeModel())
+
+    assert odp.plan_map(conn, fam, resolver).concepts["odps"].concept_id == bitol
+    plan = odp.plan_map(conn, fam, resolver, pins={"odps": lf})
+    assert plan.concepts["odps"].concept_id == lf
+
+    with pytest.raises(SystemExit, match="unknown key"):
+        odp.plan_map(conn, fam, resolver, pins={"odpz": lf})
+    with pytest.raises(SystemExit, match="no concept"):
+        odp.plan_map(conn, fam, resolver, pins={"odps": 999_999})
+    assert odp._parse_pins(["odps=12", "odpv:KPI = 7"]) == {"odps": 12, "odpv:KPI": 7}
+    with pytest.raises(SystemExit):
+        odp._parse_pins(["odps"])
+
+
+def test_matched_concept_gets_the_map_name(schema_only_conn, fam):
+    """ODPR matched by its acronym still answers to its full spec name."""
+    conn = schema_only_conn
+    _load_family_map(conn)
+    odpr = _concept(conn, "ODPR")
+    resolver = EntityResolver(conn, model=FakeModel())
+    plan = odp.plan_map(conn, fam, resolver)
+    assert plan.concepts["odpr"].concept_id == odpr
+    odp.apply_map(conn, plan, resolver)
+    assert resolver.resolve_lookup_only("Open Data Product Recipe Specification") == odpr
