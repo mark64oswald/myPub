@@ -974,6 +974,9 @@ class Pattern:
     attrs: list[re.Pattern]
     books: list[dict[str, Any]]
     review: Optional[str] = None
+    # Column-name evidence groups: a table counts for a review check only when
+    # every group matches one of its columns (see model_review_gen.has_evidence).
+    evidence: list[list[re.Pattern]] = field(default_factory=list)
 
     def concept_names(self) -> list[str]:
         return [self.name] + self.aliases
@@ -1003,7 +1006,8 @@ def load_patterns(path: Path = PATTERNS_FILE) -> PatternCatalog:
     pats = [Pattern(key=p["key"], name=p["name"], aliases=list(p.get("aliases") or []),
                     description=" ".join((p.get("description") or "").split()),
                     names=_rx(p.get("names")), attrs=_rx(p.get("attrs")),
-                    books=list(p.get("books") or []), review=p.get("review"))
+                    books=list(p.get("books") or []), review=p.get("review"),
+                    evidence=[_rx(g) for g in p.get("evidence") or []])
             for p in doc.get("patterns") or []]
     return PatternCatalog(patterns=pats, books=dict(doc.get("books") or {}))
 

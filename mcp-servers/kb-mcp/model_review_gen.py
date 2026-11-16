@@ -218,6 +218,14 @@ def _attr_set(e: rm.RefEntity) -> set[str]:
                                "end_date", "start_date"}}
 
 
+def has_evidence(e: rm.RefEntity, p: rm.Pattern) -> bool:
+    """A table counts as an instance of ``p`` for the review checks only when each of the
+    pattern's evidence groups matches one of its columns (a name match alone, like
+    'eligibility_criterion' or 'malpractice_coverage', isn't enough)."""
+    names = [a.name for a in e.attributes]
+    return all(any(rx.search(n) for n in names for rx in group) for group in p.evidence)
+
+
 def check_single_owner(model: rm.RefModel, links: dict[str, dict[str, float]],
                        catalog: rm.PatternCatalog) -> list[Finding]:
     out: list[Finding] = []
@@ -227,7 +235,7 @@ def check_single_owner(model: rm.RefModel, links: dict[str, dict[str, float]],
         if p.review != "single_owner":
             continue
         members = [e for e in model.entities if _has(links.get(e.key, {}), p.key, 0.6)
-                   and not re.search(r"_(status_)?history$", e.name)]
+                   and not re.search(r"_(status_)?history$", e.name) and has_evidence(e, p)]
         # A member that references another member and repeats at most one of
         # its columns depends on it (a use of the concept, not a second copy).
         mkeys = {e.key for e in members}

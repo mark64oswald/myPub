@@ -121,6 +121,16 @@ patterns:
       encounter, billing and claims.
     names: ['coverage', '.*_coverage', 'insurance', '.*_insurance', 'insurance_.*', 'eligibility',
             'eligibility_.*', '.*_eligibility', 'benefit', 'benefit_plan', 'health_plan']
+    # Evidence the single-owner check and rewrite need before counting a table as a
+    # copy of patient/member coverage: an insurance column AND an insured-party column.
+    # So trial "eligibility_criterion", "sla_coverage", malpractice and employee-benefit
+    # tables stay out.
+    evidence:
+      - ['payer', 'policy', 'subscriber', 'member_(id|number)', 'group_number', 'copay',
+         'deductible', 'coinsurance', 'cob_', 'coordination_of_benefits', 'plan_id']
+      - ['(^|_)patient_(id|key|mrn|number)', 'mpi_record_id', '(^|_)member_(id|key|number|subscriber)',
+         'subscriber', 'beneficiar', '(^|_)insured_(id|party|person|member)', 'demographics',
+         '(^|_)dependent_']
     review: single_owner
 
   - key: product_offering
