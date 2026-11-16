@@ -44,6 +44,52 @@ ODCS_SOURCES = ("ODCS: overview", "ODCS: fundamentals", "ODCS: schema",
                 "ODCS: data quality", "ODCS: service-level agreement")
 FAMILY_MAP_SOURCES = ("ODP family map (myPub)",)
 
+# Library books written about the ODP specs themselves. Matched by title prefix,
+# so a re-indexed edition keeps working.
+ODP_BOOKS = ("Data Product Portfolios", "Minimum Lovable Governance for Data Products",
+             "Data Product Toolkit")
+
+
+def book_citations(conn: Any, titles: Iterable[str], *, keywords: Sequence[str] = (),
+                   per_book: int = 3) -> list:
+    """Up to ``per_book`` chapters from each active book whose title starts with one of
+    ``titles``, ranked by keyword hits (title hits count triple). Chapters with no hit
+    are left out when keywords are given, so an unrelated chapter never gets cited."""
+    import kb_scaffold as ks  # local: kb_scaffold imports heavy deps
+
+    out = []
+    for t in titles:
+        try:
+            rows = conn.execute(
+                "SELECT c.chapter_id, b.title, c.title, coalesce(c.content, '') "
+                "FROM chapter c JOIN book b ON b.book_id = c.book_id "
+                "WHERE b.title ILIKE ? AND coalesce(b.status, 'active') = 'active' "
+                "ORDER BY c.chapter_num, c.chapter_id", [t + "%"]).fetchall()
+        except Exception:  # catalog without the books tables (tests, fresh installs)
+            return out
+        scored = []
+        for cid, btitle, ctitle, content in rows:
+            low_t, low_c = (ctitle or "").lower(), content[:6000].lower()
+            hits = sum(3 * low_t.count(k) + low_c.count(k) for k in (k.lower() for k in keywords))
+            if keywords and not hits:
+                continue
+            scored.append((-hits, cid, btitle, ctitle))
+        for _h, cid, btitle, ctitle in sorted(scored)[:per_book]:
+            out.append(ks.Citation("chapter", int(cid), f"{btitle} — {ctitle or '(untitled)'}"))
+    return out
+
+
+def relevant_procedures(procs: Sequence[Any], words: Iterable[str]) -> list:
+    """Keep procedures whose name shares a content word with ``words``. Topic material
+    pools procedures from neighbouring concepts, so without this a platform topic
+    can drag in, say, a third-party connector's auth troubleshooting page."""
+    import kb_scaffold as ks
+
+    want = set()
+    for w in words:
+        want |= ks.tokens(w)
+    return [p for p in procs if ks.tokens(p.name) & want]
+
 
 # ---------------------------------------------------------------------------
 # Names
