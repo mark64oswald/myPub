@@ -4106,6 +4106,52 @@ def generate_dp_from_model(
 
 @mcp.tool
 @_release_catalog
+def generate_domain_model(
+    description: str,
+    base: Optional[str] = None,
+    industry: Optional[str] = None,
+    name: Optional[str] = None,
+    domains: Optional[list[str]] = None,
+    tables: Optional[list[str]] = None,
+    refactor: Optional[list[str]] = None,
+    catalog: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Build a pattern-first domain model from a base industry model.
+
+    Keeps the part of the base model the description (or ``domains`` /
+    ``tables``) asks for, then rewrites it with the library's patterns:
+    Party + Party Role (identity moved to person), contact mechanisms,
+    one owner per concept, status history; FKs leaving the scope are
+    dropped. Writes ``model.json`` (Databricks Vibe Data Modeling format),
+    ``ddl/model.sql`` (Unity Catalog), ``model.dbml``, ``changes.md`` with the
+    books behind each change, a before/after /kb-model-review, and a subagent
+    prompt for tables the base model lacks.
+
+    Args:
+        description: The business the model is for.
+        base: Base model (same forms as review_data_model); defaults to
+            ``databricks:<industry>`` from the catalog.
+        industry: Industry name.
+        name: Model name.
+        domains: Base-model domains to keep (instead of matching the description).
+        tables: Base-model tables to keep.
+        refactor: Subset of party, contact_mechanism, single_owner, status_history.
+        catalog: Unity Catalog catalog for the DDL.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import domain_model_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(domain_model_gen.make_domain_model_generator(), description,
+                         output_root, overwrite, description=description, base=base,
+                         industry=industry, name=name, domains=domains or [],
+                         tables=tables or [], refactor=refactor, catalog=catalog)
+
+
+@mcp.tool
+@_release_catalog
 def generate_guided_conversation(
     goal: str,
     output: str,

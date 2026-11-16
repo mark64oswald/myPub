@@ -212,6 +212,8 @@ def _attr_set(e: rm.RefEntity) -> set[str]:
     return {a.name for a in e.attributes if a.name not in pk and not a.name.endswith("_id")
             and a.name not in {"created_at", "updated_at", "created_by", "updated_by",
                                "record_source", "load_timestamp", "is_active", "effective_date",
+                               "created_timestamp", "updated_timestamp", "source_system_code",
+                               "source_system_record_code",
                                "end_date", "start_date"}}
 
 
@@ -223,7 +225,23 @@ def check_single_owner(model: rm.RefModel, links: dict[str, dict[str, float]],
     for p in catalog.patterns:
         if p.review != "single_owner":
             continue
-        members = [e for e in model.entities if _has(links.get(e.key, {}), p.key, 0.6)]
+        members = [e for e in model.entities if _has(links.get(e.key, {}), p.key, 0.6)
+                   and not re.search(r"_(status_)?history$", e.name)]
+        # A member that references another member and repeats at most one of
+        # its columns depends on it (a use of the concept, not a second copy).
+        mkeys = {e.key for e in members}
+        idx = model.entity_index()
+        by_name = {e.name: e.key for e in model.entities}
+
+        def dependent(e: rm.RefEntity) -> bool:
+            for a in e.attributes:
+                t = _fk_key(a.fk_to, idx, by_name) if a.fk_to and not a.is_pk else None
+                if t in mkeys - {e.key}:
+                    if len(_attr_set(e) & _attr_set(idx[t])) <= 1:
+                        return True
+            return False
+
+        members = [e for e in members if not dependent(e)] or members[:1]
         domains = {e.domain for e in members}
         if len(members) >= 2 and len(domains) >= 2:
             keys = [e.key for e in members]
@@ -240,6 +258,8 @@ def check_single_owner(model: rm.RefModel, links: dict[str, dict[str, float]],
     # (b) same-concept pairs across domains by name tokens + attribute overlap
     by_token: dict[str, list[rm.RefEntity]] = defaultdict(list)
     for e in model.entities:
+        if re.search(r"_(status_)?history$", e.name):
+            continue      # history tables share their shape by design
         for t in _name_tokens(e.name):
             by_token[t].append(e)
     pairs = []
@@ -269,6 +289,13 @@ def check_single_owner(model: rm.RefModel, links: dict[str, dict[str, float]],
         if len(out) >= 12:
             break
     return out
+
+
+def _fk_key(fk_to: str, idx: dict[str, rm.RefEntity], by_name: dict[str, str]) -> Optional[str]:
+    parts = fk_to.split(".")
+    if len(parts) >= 2 and f"{parts[0]}.{parts[1]}" in idx:
+        return f"{parts[0]}.{parts[1]}"
+    return by_name.get(parts[-2] if len(parts) >= 2 else parts[0])
 
 
 def check_contact_mechanism(model: rm.RefModel, links: dict[str, dict[str, float]]) -> list[Finding]:
