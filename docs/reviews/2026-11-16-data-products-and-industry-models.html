@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Data Products and Industry Models in myPub</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+/* Layout: one reading column (~72ch) with wide figures that may scroll sideways; teal = data product specs, ochre = industry models */
+:root {
+  --bg: #f6f7f8;
+  --surface: #ffffff;
+  --fg: #1c2430;
+  --muted: #5a6573;
+  --line: #d8dde3;
+  --ink-soft: #eef1f4;
+  --odp: #0f766e;
+  --odp-soft: #e2f3f1;
+  --mdl: #a16207;
+  --mdl-soft: #fbf0dc;
+  --kb: #475569;
+  --kb-soft: #eceff3;
+  --good: #15803d;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  --code-bg: #f1f3f6;
+  --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161c; --surface: #1a2028; --fg: #e3e8ee; --muted: #9aa5b3; --line: #2e3742; --ink-soft: #202833;
+    --odp: #4fd1c5; --odp-soft: #12302e; --mdl: #f0b54a; --mdl-soft: #33270f; --kb: #a7b3c2; --kb-soft: #242c37;
+    --good: #4ade80; --warn: #fbbf24; --bad: #f87171; --code-bg: #1e252e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161c; --surface: #1a2028; --fg: #e3e8ee; --muted: #9aa5b3; --line: #2e3742; --ink-soft: #202833;
+  --odp: #4fd1c5; --odp-soft: #12302e; --mdl: #f0b54a; --mdl-soft: #33270f; --kb: #a7b3c2; --kb-soft: #242c37;
+  --good: #4ade80; --warn: #fbbf24; --bad: #f87171; --code-bg: #1e252e; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+.wrap { max-width: 900px; margin: 0 auto; padding-block: 40px 80px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3, h4 { font-family: var(--font-display); text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: 2.1rem; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.55rem; font-weight: 600; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); }
+h3 { font-size: 1.15rem; font-weight: 600; margin-top: 32px; }
+h4 { font-size: 1rem; font-weight: 600; margin-top: 20px; }
+p, ul, ol { margin: 12px 0 0; max-width: 70ch; }
+li + li { margin-top: 4px; }
+a { color: var(--odp); }
+.eyebrow { font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 1.12rem; color: var(--fg); margin-top: 16px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 14px; font-size: 0.88rem; color: var(--muted); }
+.tag { display: inline-block; font-family: var(--font-mono); font-size: 0.75rem; padding: 1px 7px; border-radius: 4px; vertical-align: 1px; white-space: nowrap; }
+.tag.odp { background: var(--odp-soft); color: var(--odp); }
+.tag.mdl { background: var(--mdl-soft); color: var(--mdl); }
+.tag.kb { background: var(--kb-soft); color: var(--kb); }
+nav.toc { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.9rem; }
+nav.toc a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--line); }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--fg); }
+code { font-family: var(--font-mono); font-size: 0.86em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+pre { font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.55; background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; overflow-x: auto; margin: 14px 0 0; }
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .c { color: var(--muted); }
+.tbl { overflow-x: auto; margin-top: 16px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+td.num, th.num { text-align: right; }
+.g { font-family: var(--font-mono); font-weight: 600; }
+.g.a, .g.b { color: var(--good); } .g.c { color: var(--warn); } .g.d { color: var(--bad); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+.two > div { min-width: 0; padding: 16px 18px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); }
+.two > div.odp { border-top: 3px solid var(--odp); }
+.two > div.mdl { border-top: 3px solid var(--mdl); }
+.two h4 { margin-top: 0; }
+.two p { font-size: 0.93rem; }
+@media (max-width: 640px) { .two { grid-template-columns: 1fr; } h1 { font-size: 1.7rem; } }
+figure { margin: 22px 0 0; }
+.fig { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.fig svg { display: block; min-width: 820px; width: 100%; height: auto; }
+figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 8px; max-width: 70ch; }
+.example { margin-top: 28px; padding: 18px 20px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.example h3 { margin-top: 0; }
+.example .kicker { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+.note { margin-top: 14px; font-size: 0.9rem; padding: 10px 14px; border-left: 3px solid var(--warn); background: var(--ink-soft); border-radius: 0 6px 6px 0; max-width: 70ch; }
+.steps { counter-reset: s; list-style: none; padding-left: 0; }
+.steps > li { counter-increment: s; position: relative; padding-left: 34px; margin-top: 12px; }
+.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1px; width: 22px; height: 22px; border-radius: 50%; background: var(--kb-soft); color: var(--kb); font: 600 0.78rem/22px var(--font-mono); text-align: center; }
+.open h4 { display: flex; align-items: center; gap: 8px; }
+/* SVG */
+svg text { font-family: var(--font-body); fill: var(--fg); }
+svg .hd { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; fill: var(--muted); }
+svg .t { font-family: var(--font-display); font-weight: 600; font-size: 13.5px; }
+svg .s { font-size: 11.5px; fill: var(--muted); }
+svg .m { font-family: var(--font-mono); font-size: 11px; }
+svg .box-odp { fill: var(--odp-soft); stroke: var(--odp); stroke-width: 1.3; }
+svg .box-mdl { fill: var(--mdl-soft); stroke: var(--mdl); stroke-width: 1.3; }
+svg .box-kb { fill: var(--kb-soft); stroke: var(--kb); stroke-width: 1.1; }
+svg .box-br { fill: var(--surface); stroke: var(--odp); stroke-width: 1.6; stroke-dasharray: 5 3; }
+svg .box-br2 { fill: none; stroke: var(--mdl); stroke-width: 1.6; stroke-dasharray: 5 3; stroke-dashoffset: 4; }
+svg .ar { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+svg .ar-odp { fill: none; stroke: var(--odp); stroke-width: 1.4; }
+svg .ar-mdl { fill: none; stroke: var(--mdl); stroke-width: 1.4; }
+svg .ah { fill: var(--muted); }
+svg .ah-odp { fill: var(--odp); }
+svg .ah-mdl { fill: var(--mdl); }
+svg .sw-odp { fill: var(--odp); } svg .sw-mdl { fill: var(--mdl); } svg .sw-kb { fill: var(--kb); }
+svg .gb { font-family: var(--font-mono); font-weight: 600; font-size: 12px; }
+svg .gb.bad { fill: var(--bad); } svg .gb.good { fill: var(--good); }
+svg .brk { fill: none; stroke: var(--line); stroke-width: 1.4; }
+@media (prefers-reduced-motion: no-preference) { nav.toc a { transition: color .15s; } }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">myPub review · 15–16 Nov 2026 · PRs #40–#57</div>
+  <h1>Data products and industry models in myPub</h1>
+  <p class="lede">Tonight added two things to the knowledge base. The first is the Open Data Product standards, which say how to <em>package, contract and govern</em> data. The second is the Databricks industry data models plus the reference models around them, which give the raw material to <em>model</em> data in the first place. A set of generators now carries a design from one to the other, grading it against your books along the way.</p>
+  <div class="meta">
+    <span><span class="tag odp">teal</span> data product specs (PRs #40–#47)</span>
+    <span><span class="tag mdl">ochre</span> industry models (PRs #48–#57)</span>
+    <span><span class="tag kb">grey</span> what myPub already had</span>
+  </div>
+  <nav class="toc" aria-label="Contents">
+    <a href="#why">Why</a><a href="#what">What was built</a><a href="#how">How it fits the KB</a><a href="#connect">How the two connect</a><a href="#examples">Worked examples</a><a href="#open">Open items</a>
+  </nav>
+</header>
+
+<section id="why">
+<h2>Why</h2>
+<p>myPub's books already explain data products, data mesh and data modeling patterns well. What the knowledge base lacked was a way to turn that understanding into artifacts that a machine can check. There are two halves to that problem.</p>
+<div class="two">
+  <div class="odp">
+    <h4>How to describe and deliver a data product</h4>
+    <p>Books say a data product needs an owner, a contract, SLAs, quality rules and a reason to exist. The Open Data Product standards turn each of those into a YAML field with a JSON Schema and an SDK that validates it. Loading the specs lets myPub answer "where does this go in ODPS?" and lets generators write files that pass the validator, not prose that only describes them.</p>
+  </div>
+  <div class="mdl">
+    <h4>What data the product is made of</h4>
+    <p>A product is only as good as the model under it. Silverston, Hay and Fowler teach patterns such as Party/Role, contact mechanisms and status history. The Databricks gallery offers 41 industries of ready-made tables, mostly LLM-generated. Putting both in the catalog lets myPub grade a model against the patterns, rewrite it, and cite the page that justifies each change.</p>
+  </div>
+</div>
+<p>The aim is a chain where each step is grounded in the library and checked by a machine: a business description becomes a pattern-first model, the model becomes contracted tables, and the tables become products in a governed portfolio.</p>
+</section>
+
+<section id="what">
+<h2>What was built</h2>
+
+<h3><span class="tag odp">A</span> Open Data Product standards</h3>
+<p>The family is five Linux Foundation specifications plus an SDK. ODPS 4.2 describes one product, ODPC 1.0 is the portfolio, ODPG 1.0 is the value graph, ODPV 1.1 is the shared vocabulary, and ODPR 1.0 (draft) is the recipes for building them. ODCS v3.1.0 from the Bitol project supplies the data contract that ODPS points to. It came in three layers.</p>
+<div class="tbl"><table>
+<thead><tr><th>Layer</th><th>What went in</th><th class="num">Size</th></tr></thead>
+<tbody>
+<tr><td>1. Live docs</td><td>The full text of the five spec pages, 12 SDK guides, 32 knowledge-base FAQs and 5 ODCS pages. Extraction ran on your subscription with Sonnet and Haiku subagents.</td><td class="num">55 sources · 520 sections<br>681 concepts · 1,288 relations · 154 procedures</td></tr>
+<tr><td>1b. Second layer</td><td>The SDK tutorial track (19 lessons), the recipe workflow reference, recipe examples, the SDK <code>llms.txt</code> and the portfolio design doc.</td><td class="num">26 sources</td></tr>
+<tr><td>2. Spec map</td><td><code>scripts/seed_odp_family.py</code> plus <code>docs/odp-family-map.md</code>. It seeds the ODPV terms (with aliases) as concepts and hand-written edges such as "ODPG requires ODPC". Each edge cites a section of the family map.</td><td class="num">78 ODPV terms · 324 edges</td></tr>
+<tr><td>Books</td><td>The two knowledge-base PDFs became ePubs: <em>Data Product Toolkit</em> (book 1001) and <em>Minimum Lovable Governance</em> (book 1002). <em>Data Product Portfolios</em> (book 938) was already indexed. Its two files are byte-identical.</td><td class="num">2 new books</td></tr>
+<tr><td>Concept merges</td><td>The book's ODPV and SDK concepts were merged into the spec ones. For ODPS, only the 9 <em>Data Product Portfolios</em> edges moved. Bitol's separate "Open Data Product Standard" (#16339) stays its own concept.</td><td class="num">3 pairs</td></tr>
+<tr><td>3. Generators</td><td>The <code>/kb-bootstrap</code> <code>data-product</code> profile, plus <code>/kb-data-contract</code>, <code>/kb-dp-portfolio</code>, <code>/kb-dp-recipe</code> and <code>/kb-dp-review</code>. They cite the ODP books and filter off-topic procedures (#45, #46). Governance policies are graph nodes linked by <code>governedBy</code> edges (#47).</td><td class="num">5 commands</td></tr>
+</tbody></table></div>
+
+<h3><span class="tag mdl">B</span> Industry and reference models</h3>
+<p>This half added a new kind of content to myPub. Industry models are stored as structured metadata in <code>ref_*</code> tables, not as concepts, so that 6,600 generated table names don't swamp the concept graph.</p>
+<div class="tbl"><table>
+<thead><tr><th>Piece</th><th>What it is</th><th class="num">Size</th></tr></thead>
+<tbody>
+<tr><td>Vibe Modeling docs</td><td>Databricks' Vibe Data Modeling docs, modeling rules and Genie skills, loaded as live docs (#48).</td><td class="num">39 sources</td></tr>
+<tr><td>Databricks gallery</td><td>All 41 minimal models (MVMs) and the enterprise models (ECMs) for healthcare, health insurance, clinical trials, pharmaceuticals and genomics.</td><td class="num">41 MVM + 5 ECM<br>ECMs add 2,176 tables</td></tr>
+<tr><td>Reference models</td><td>Silverston <em>Data Model Resource Book</em> Vol. 2 (healthcare 210 entities, insurance 245), OMOP CDM 5.4, CDISC SDTMIG 3.4 (63 domains) and GA4GH Phenopackets v2 with VRS (103 messages).</td><td class="num">5 sources</td></tr>
+<tr><td>Pattern map</td><td><code>data/ref_models/patterns.yaml</code> lists 23 patterns, such as party, party_role, contact_mechanism, coverage and status. Each names the books that teach it and the evidence that counts.</td><td class="num">23 patterns</td></tr>
+<tr><td>Pattern links</td><td>Heuristics first, then subagents confirmed, dropped or added links in batches of 25 entities.</td><td class="num">≈5,200 subagent links</td></tr>
+<tr><td>Generators</td><td><code>/kb-model-review</code> grades a model, <code>/kb-domain-model</code> rewrites it pattern-first, and <code>/kb-dp-from-model</code> slices it into data products.</td><td class="num">3 commands</td></tr>
+<tr><td>Pattern-first models</td><td>Rewrites of the five ECMs, refined by subagents and loaded next to the untouched originals as catalog models #52–56.</td><td class="num">5 models</td></tr>
+</tbody></table></div>
+
+<h4>Grades, before and after</h4>
+<div class="tbl"><table>
+<thead><tr><th>Industry</th><th>Databricks MVM</th><th>Databricks ECM</th><th>Pattern-first ECM</th><th>Reference used</th></tr></thead>
+<tbody>
+<tr><td>Healthcare</td><td><span class="g d">D</span></td><td><span class="g d">D</span> 57%</td><td><span class="g a">A</span> 93%</td><td>Silverston, OMOP</td></tr>
+<tr><td>Health insurance</td><td><span class="g d">D</span></td><td><span class="g d">D</span> 57%</td><td><span class="g b">B</span> 83%</td><td>Silverston insurance</td></tr>
+<tr><td>Clinical trials</td><td><span class="g c">C</span></td><td><span class="g b">B</span> 77%</td><td><span class="g a">A</span> 93%</td><td>CDISC SDTM</td></tr>
+<tr><td>Pharmaceuticals</td><td><span class="g d">D</span></td><td><span class="g d">D</span> 47%</td><td><span class="g b">B</span> 83%</td><td>CDISC SDTM</td></tr>
+<tr><td>Genomics / biotech</td><td><span class="g c">C</span></td><td><span class="g d">D</span> 57%</td><td><span class="g b">B</span> 83%</td><td>Phenopackets</td></tr>
+</tbody></table></div>
+<p>The Databricks models fail in the same ways in every industry. Person identity is copied onto every role table, addresses sit inline on 10 to 43 tables, the insurance-heavy ECMs model coverage 10 to 15 times, and 40 to 60% of foreign keys are labeled "LLM Generated Cross-Domain Link". The grades describe Databricks' models. The grader was not loosened to raise them. Two false positives were fixed instead (#56 coverage evidence, #57 status-history tables).</p>
+<p class="note">The Databricks License covers the gallery, so model content stays in the local catalog and in <code>data/generated-packages/</code>. This review quotes grades and counts only.</p>
+</section>
+
+<section id="how">
+<h2>How it fits into the knowledge base</h2>
+<p>Each new piece lands in one of the three stores myPub already had, or in the new one. The spec text goes to doc sections, the spec relationships to the concept graph, and the models to the reference-model tables. The generators read across all of them, and every output they write is checked by a machine: the ODP SDK, the ODCS JSON Schema, or the pattern grader.</p>
+
+<figure>
+<div class="fig">
+<svg viewBox="0 0 1000 520" role="img" aria-labelledby="d1t d1d">
+<title id="d1t">How the new content integrates into myPub</title>
+<desc id="d1d">Sources on the left flow into the KB stores, which feed the generators, which write machine-checked outputs.</desc>
+<defs>
+  <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+  <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-odp"/></marker>
+  <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-mdl"/></marker>
+</defs>
+<text class="hd" x="20" y="22">SOURCES</text>
+<text class="hd" x="262" y="22">STORED IN THE KB</text>
+<text class="hd" x="502" y="22">GENERATORS + TOOLS</text>
+<text class="hd" x="752" y="22">OUTPUTS, MACHINE-CHECKED</text>
+
+<!-- Sources -->
+<rect class="box-kb" x="20" y="40" width="200" height="62" rx="6"/>
+<text class="t" x="32" y="61">Books (ePubs)</text>
+<text class="s" x="32" y="78">+ Data Product Portfolios,</text>
+<text class="s" x="32" y="93">Toolkit, Min. Lovable Governance</text>
+
+<rect class="box-odp" x="20" y="116" width="200" height="72" rx="6"/>
+<text class="t" x="32" y="137">ODP live docs</text>
+<text class="s" x="32" y="154">5 specs · SDK guides · tutorials</text>
+<text class="s" x="32" y="169">FAQs · ODCS · 81 sources</text>
+
+<rect class="box-mdl" x="20" y="202" width="200" height="56" rx="6"/>
+<text class="t" x="32" y="223">Vibe Modeling docs</text>
+<text class="s" x="32" y="240">rules · Genie skills · 39 sources</text>
+
+<rect class="box-mdl" x="20" y="272" width="200" height="92" rx="6"/>
+<text class="t" x="32" y="293">Industry + reference models</text>
+<text class="s" x="32" y="310">Databricks 41 MVM + 5 ECM</text>
+<text class="s" x="32" y="325">Silverston Vol. 2 · OMOP 5.4</text>
+<text class="s" x="32" y="340">CDISC SDTM · Phenopackets</text>
+<text class="s" x="32" y="355">5 pattern-first rewrites</text>
+
+<rect class="box-kb" x="20" y="378" width="200" height="72" rx="6"/>
+<text class="t" x="32" y="399">Curated maps</text>
+<text class="s" x="32" y="416">odp_family.yaml: ODPV terms,</text>
+<text class="s" x="32" y="431">spec edges · patterns.yaml: 23</text>
+
+<!-- Stores -->
+<rect class="box-kb" x="262" y="56" width="200" height="86" rx="6"/>
+<text class="t" x="274" y="78">Chapters + doc sections</text>
+<text class="s" x="274" y="96">embeddings · full-text index</text>
+<text class="s" x="274" y="112">+81 ODP doc sources</text>
+<text class="s" x="274" y="128">+39 Vibe Modeling sources</text>
+
+<rect class="box-kb" x="262" y="168" width="200" height="92" rx="6"/>
+<text class="t" x="274" y="190">Concept graph</text>
+<text class="s" x="274" y="208">+681 extracted concepts</text>
+<text class="s" x="274" y="223">+324 spec-map edges</text>
+<text class="s" x="274" y="238">REQUIRES · aliases · merges</text>
+
+<rect class="box-mdl" x="262" y="286" width="200" height="92" rx="6"/>
+<text class="t" x="274" y="308">Reference-model tables</text>
+<text class="m" x="274" y="326">ref_model · ref_entity</text>
+<text class="m" x="274" y="341">ref_attribute · ref_metric</text>
+<text class="m" x="274" y="356">ref_entity_concept</text>
+
+<!-- arrows sources -> stores -->
+<path class="ar" d="M220,71 C240,71 240,85 260,85" marker-end="url(#a1)"/>
+<path class="ar-odp" d="M220,145 C242,145 240,112 260,112" marker-end="url(#a2)"/>
+<path class="ar-odp" d="M220,160 C242,160 240,200 260,200" marker-end="url(#a2)"/>
+<path class="ar-mdl" d="M220,226 C246,226 236,132 260,132" marker-end="url(#a3)"/>
+<path class="ar-mdl" d="M220,318 C240,318 240,330 260,330" marker-end="url(#a3)"/>
+<path class="ar" d="M220,400 C246,400 236,240 260,240" marker-end="url(#a1)"/>
+<path class="ar" d="M220,420 C246,420 236,360 260,360" marker-end="url(#a1)"/>
+
+<!-- Generators -->
+<rect class="box-odp" x="502" y="40" width="210" height="130" rx="6"/>
+<text class="t" x="514" y="61">Data product generators</text>
+<text class="m" x="514" y="80">/kb-data-contract</text>
+<text class="m" x="514" y="96">/kb-dp-portfolio</text>
+<text class="m" x="514" y="112">/kb-dp-recipe</text>
+<text class="m" x="514" y="128">/kb-dp-review</text>
+<text class="m" x="514" y="144">/kb-bootstrap data-product</text>
+<text class="s" x="514" y="161">cite Portfolios + MLG</text>
+
+<rect class="box-br" x="502" y="196" width="210" height="62" rx="6"/>
+<rect class="box-br2" x="502" y="196" width="210" height="62" rx="6"/>
+<text class="t" x="514" y="219">The bridge</text>
+<text class="m" x="514" y="237">/kb-dp-from-model</text>
+<text class="s" x="514" y="252">model slice → products</text>
+
+<rect class="box-mdl" x="502" y="284" width="210" height="74" rx="6"/>
+<text class="t" x="514" y="305">Model generators</text>
+<text class="m" x="514" y="324">/kb-model-review</text>
+<text class="m" x="514" y="340">/kb-domain-model</text>
+
+<rect class="box-kb" x="502" y="384" width="210" height="66" rx="6"/>
+<text class="t" x="514" y="405">Interactive MCP tools</text>
+<text class="s" x="514" y="422">search_chapters · find_prerequisites</text>
+<text class="s" x="514" y="437">compare_concept_across_authors</text>
+
+<!-- stores -> generators -->
+<path class="ar" d="M462,92 C482,92 482,92 500,92" marker-end="url(#a1)"/>
+<path class="ar" d="M462,200 C484,200 478,140 500,140" marker-end="url(#a1)"/>
+<path class="ar" d="M462,120 C490,120 470,400 500,400" marker-end="url(#a1)"/>
+<path class="ar" d="M462,230 C488,230 472,420 500,420" marker-end="url(#a1)"/>
+<path class="ar-mdl" d="M462,310 C482,310 482,316 500,316" marker-end="url(#a3)"/>
+<path class="ar-mdl" d="M462,300 C484,300 478,236 500,236" marker-end="url(#a3)"/>
+<!-- domain-model feeds dp-from-model -->
+<path class="ar-mdl" d="M650,284 L650,260" marker-end="url(#a3)"/>
+
+<!-- Outputs -->
+<rect class="box-odp" x="752" y="40" width="228" height="130" rx="6"/>
+<text class="t" x="764" y="61">Open Data Product files</text>
+<text class="m" x="764" y="80">ODCS contract (per table)</text>
+<text class="m" x="764" y="96">ODPS product + KPIs</text>
+<text class="m" x="764" y="112">ODPC catalog · ODPG graph</text>
+<text class="m" x="764" y="128">ODPR recipe · governance</text>
+<text class="s" x="764" y="149">✓ open-data-products validate</text>
+<text class="s" x="764" y="163">✓ ODCS v3.1.0 JSON Schema</text>
+
+<rect class="box-mdl" x="752" y="284" width="228" height="74" rx="6"/>
+<text class="t" x="764" y="305">Model packages</text>
+<text class="m" x="764" y="323">model.json · UC DDL · DBML</text>
+<text class="m" x="764" y="339">changes.md · review.md</text>
+<text class="s" x="764" y="353">✓ pattern grade + vibes.txt</text>
+
+<rect class="box-kb" x="752" y="384" width="228" height="66" rx="6"/>
+<text class="t" x="764" y="405">Answers with citations</text>
+<text class="s" x="764" y="422">spec sections ranked next to</text>
+<text class="s" x="764" y="437">book chapters on the same idea</text>
+
+<!-- generators -> outputs -->
+<path class="ar-odp" d="M712,104 L750,104" marker-end="url(#a2)"/>
+<path class="ar-odp" d="M712,220 C734,220 728,160 750,160" marker-end="url(#a2)"/>
+<path class="ar-mdl" d="M712,240 C736,240 726,296 750,296" marker-end="url(#a3)"/>
+<path class="ar-mdl" d="M712,330 L750,330" marker-end="url(#a3)"/>
+<path class="ar" d="M712,417 L750,417" marker-end="url(#a1)"/>
+<!-- review feeds back to dp review -->
+<path class="ar-odp" d="M866,170 C866,186 760,186 714,150" marker-end="url(#a2)" stroke-dasharray="4 3"/>
+<text class="s" x="790" y="198">/kb-dp-review grades A–F</text>
+
+<!-- legend -->
+<rect class="sw-odp" x="20" y="484" width="12" height="12" rx="2"/><text class="s" x="38" y="494">Open Data Product standards (PRs #40–#47)</text>
+<rect class="sw-mdl" x="330" y="484" width="12" height="12" rx="2"/><text class="s" x="348" y="494">Industry + reference models (PRs #48–#57)</text>
+<rect class="sw-kb" x="640" y="484" width="12" height="12" rx="2"/><text class="s" x="658" y="494">Existing myPub machinery</text>
+</svg>
+</div>
+<figcaption>Figure 1. Where each new piece is stored and what reads it. The dashed box, <code>/kb-dp-from-model</code>, is the only generator that reads both halves. Scroll sideways on a phone.</figcaption>
+</figure>
+
+<div class="tbl"><table>
+<thead><tr><th>KB component</th><th><span class="tag odp">A</span> Data product specs</th><th><span class="tag mdl">B</span> Industry models</th></tr></thead>
+<tbody>
+<tr><td>Live docs</td><td>81 sources at authority 0.70–0.90. The spec pages rank first for "where does X go" questions.</td><td>39 Vibe Modeling sources, so "how does Databricks' agent model X" is answerable.</td></tr>
+<tr><td>Concept graph</td><td>Spec concepts with <code>REQUIRES</code> edges (ODPR → ODPS/ODPC/ODPG → ODPV), ODPV terms with aliases, and book concepts merged in.</td><td>The 23 patterns resolve to library concepts, so a finding can cite the book that teaches it.</td></tr>
+<tr><td>Reference-model tables</td><td>None.</td><td>New. 41 MVMs, 5 ECMs and 5 reference models, plus the 5 pattern-first rewrites, with entity embeddings and pattern links.</td></tr>
+<tr><td>Generators</td><td>Five commands that write SDK-valid files.</td><td>Three commands. <code>/kb-dp-from-model</code> hands its slices to the ODP generators.</td></tr>
+<tr><td>Plugin</td><td colspan="2">All eight new commands ship in the <code>mypub</code> plugin as <code>/mypub:kb-*</code>, so they work from any project on the Mac.</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="connect">
+<h2>How the two workstreams connect</h2>
+<p>The two workstreams cover the two halves of one path. The model generators make sure the tables are sound, and the ODP generators make sure the product built on them is described, contracted and governed. <code>/kb-dp-from-model</code> joins them. It takes a slice of tables and writes one ODCS contract per table, ODPS KPIs taken from the model's metric views, and Unity Catalog DDL. Then <code>/kb-dp-portfolio</code> builds the catalog, graph and recipe around them.</p>
+
+<figure>
+<div class="fig">
+<svg viewBox="0 0 1000 250" role="img" aria-labelledby="d2t d2d">
+<title id="d2t">From an industry model to a governed data product portfolio</title>
+<desc id="d2d">Six steps: Databricks model, model review, pattern-first rewrite, slice into products, portfolio, then review and recipe.</desc>
+<defs>
+  <marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+</defs>
+<rect class="box-mdl" x="10" y="30" width="148" height="100" rx="6"/>
+<text class="t" x="22" y="53">Industry model</text>
+<text class="s" x="22" y="71">Databricks ECM,</text>
+<text class="s" x="22" y="86">as published</text>
+<text class="gb bad" x="22" y="117">grade D</text>
+
+<rect class="box-mdl" x="176" y="30" width="148" height="100" rx="6"/>
+<text class="m" x="188" y="53">/kb-model-review</text>
+<text class="s" x="188" y="71">8 pattern sections</text>
+<text class="s" x="188" y="86">vs. SDTM, OMOP,</text>
+<text class="s" x="188" y="101">Silverston</text>
+<text class="s" x="188" y="117">→ review.md, vibes.txt</text>
+
+<rect class="box-mdl" x="342" y="30" width="148" height="100" rx="6"/>
+<text class="m" x="354" y="53">/kb-domain-model</text>
+<text class="s" x="354" y="71">party · contact mech.</text>
+<text class="s" x="354" y="86">single owner · status</text>
+<text class="s" x="354" y="101">history + refinement</text>
+<text class="gb good" x="354" y="117">grade A / B</text>
+
+<rect class="box-br" x="508" y="30" width="148" height="100" rx="6"/>
+<rect class="box-br2" x="508" y="30" width="148" height="100" rx="6"/>
+<text class="m" x="520" y="53">/kb-dp-from-model</text>
+<text class="s" x="520" y="71">slice → products</text>
+<text class="s" x="520" y="86">ODCS per table</text>
+<text class="s" x="520" y="101">KPIs from metric views</text>
+<text class="s" x="520" y="117">UC DDL · HealthSim ask</text>
+
+<rect class="box-odp" x="674" y="30" width="148" height="100" rx="6"/>
+<text class="m" x="686" y="53">/kb-dp-portfolio</text>
+<text class="s" x="686" y="71">ODPC use cases,</text>
+<text class="s" x="686" y="86">objectives, KPIs</text>
+<text class="s" x="686" y="101">ODPG value graph</text>
+<text class="s" x="686" y="117">+ governance nodes</text>
+
+<rect class="box-odp" x="840" y="30" width="150" height="100" rx="6"/>
+<text class="m" x="852" y="53">/kb-dp-review</text>
+<text class="m" x="852" y="69">/kb-dp-recipe</text>
+<text class="s" x="852" y="88">A–F by section</text>
+<text class="s" x="852" y="103">ci + agent recipes</text>
+<text class="s" x="852" y="118">handoff brief</text>
+
+<path class="ar" d="M158,80 L174,80" marker-end="url(#b1)"/>
+<path class="ar" d="M324,80 L340,80" marker-end="url(#b1)"/>
+<path class="ar" d="M490,80 L506,80" marker-end="url(#b1)"/>
+<path class="ar" d="M656,80 L672,80" marker-end="url(#b1)"/>
+<path class="ar" d="M822,80 L838,80" marker-end="url(#b1)"/>
+
+<path class="brk" d="M12,150 L12,160 L488,160 L488,150"/>
+<text class="s" x="22" y="180">Grounded in modeling patterns from the library:</text>
+<text class="s" x="22" y="196">Silverston Vol. 2 + 3, Hay, Fowler, Blaha (patterns.yaml)</text>
+<path class="brk" d="M510,150 L510,160 L988,160 L988,150"/>
+<text class="s" x="520" y="180">Grounded in the ODP specs, ODCS and the ODP books:</text>
+<text class="s" x="520" y="196">Data Product Portfolios, Data Product Toolkit, MLG</text>
+<text class="s" x="22" y="232">Checked by the pattern grader and reference coverage</text>
+<text class="s" x="520" y="232">Checked by open-data-products validate, odpc-build, odpg-analyze, ODCS schema</text>
+</svg>
+</div>
+<figcaption>Figure 2. The full path. Steps 1–3 come from workstream B and steps 5–6 from workstream A. Step 4 joins them. Every box is a command you can run alone.</figcaption>
+</figure>
+
+<p>Three smaller links connect the halves too.</p>
+<ul>
+<li><strong>Shared vocabulary.</strong> <code>/kb-dp-from-model</code> uses ODPV terms (UseCase, BusinessObjective, KPI, governedBy) for the graph it builds from a model, so the ODP review step reads it like any other portfolio.</li>
+<li><strong>Review notes travel with the product.</strong> Each product package carries a <code>model-notes.md</code> that lists the model-review findings touching its tables, so a contract reviewer sees, for example, that coverage was held in three places.</li>
+<li><strong>Synthetic data.</strong> The <code>sample-data/healthsim-request.md</code> file asks HealthSim for rows in foreign-key order. That closes the loop from model to something you can load and query.</li>
+</ul>
+</section>
+
+<section id="examples">
+<h2>Worked examples</h2>
+<p>These start simple and build up. Examples 1 to 4 show results from runs tonight. Example 5 is a recommended next run that has not been executed yet.</p>
+
+<div class="example">
+<div class="kicker">Example 1 · ask in natural language · done tonight</div>
+<h3>Search the specs</h3>
+<p>No slash command is needed. Ask Claude in any project with the plugin installed, and the question routes to the <code>mypub-kb</code> tools.</p>
+<pre><code><span class="c"># "How do I define an SLA in ODPS 4.2?"</span>
+search_chapters("how do I define an SLA in ODPS", mode="interactive")
+<span class="c">#  primary:        ODPS 4.2 spec, SLA component (declared dimensions + SLA-as-code)</span>
+<span class="c">#  corroborations: ODCS slaProperties page; Building Data Products chapter (Bitol ODPS)</span>
+
+<span class="c"># "What do I need to understand before ODPR?"</span>
+find_prerequisites("Open Data Product Recipe Specification", max_depth=2)
+<span class="c">#  depth 1: ODPS, ODPC, ODPG          depth 2: ODPV terms ... 75 concepts in all</span>
+
+<span class="c"># "How do my authors treat ODPS?"</span>
+compare_concept_across_authors("ODPS 4.2")
+<span class="c">#  now includes Moilanen, Data Product Portfolios (missing before the concept merge)</span></code></pre>
+<p>Two tips. Say "ODPS 4.2" when you mean the Linux Foundation spec, because a bare "ODPS" still resolves to Bitol's standard. Keep <code>max_depth</code> at 2 for the specs. At depth 5 the walk runs through general ideas like Data Product and passes 3,000 nodes.</p>
+</div>
+
+<div class="example">
+<div class="kicker">Example 2 · one table · runs in seconds</div>
+<h3>Write a contract for a table you already have</h3>
+<p>Give <code>/kb-data-contract</code> a table and its DDL. It writes an ODCS v3.1.0 contract and checks it against the ODCS JSON Schema. Primary keys get uniqueness rules, required columns get not-null rules, and personal columns are marked <code>restricted</code>. The judgement calls, such as owner, purpose and SLA values, stay as TODOs for a person.</p>
+<pre><code>/mypub:kb-data-contract member_eligibility --ddl ddl/member_eligibility.sql \
+    --platform databricks --location vbc.silver.member_eligibility</code></pre>
+<pre><code><span class="c"># member_eligibility.odcs.yaml (trimmed)</span>
+apiVersion: v3.1.0
+kind: DataContract
+id: member-eligibility
+version: 0.1.0
+status: draft
+description:
+  purpose: "TODO: why member_eligibility exists."
+schema:
+  - name: member_eligibility
+    physicalType: table
+    properties:
+      - name: member_id
+        logicalType: string
+        primaryKey: true
+      - name: birth_date
+        logicalType: date
+        classification: restricted
+    quality:
+      - name: table_not_empty
+        metric: rowCount
+        mustBeGreaterThan: 0
+      - name: member_id_unique
+        metric: duplicateValues
+        mustBe: 0
+slaProperties:
+  - { property: availability, value: 99.5, unit: percent }
+  - { property: frequency,    value: 1,    unit: d }
+  - { property: latency,      value: 4,    unit: h }</code></pre>
+</div>
+
+<div class="example">
+<div class="kicker">Example 3 · whole model · done tonight</div>
+<h3>Review a model, then improve it</h3>
+<p>Point <code>/kb-model-review</code> at any model: a Databricks <code>model.json</code>, plain DDL, or one already in the catalog.</p>
+<pre><code>/mypub:kb-model-review databricks:healthcare           <span class="c"># gallery MVM → grade D</span>
+/mypub:kb-model-review ref:48                          <span class="c"># healthcare ECM → D (57%)</span>
+/mypub:kb-model-review ~/work/claims/ddl.sql           <span class="c"># your own DDL</span></code></pre>
+<p>Each finding names a pattern, cites its books, and ends with a <em>vibe</em>, a change request you can paste into Databricks' Vibe Data Modeling agent. If you'd rather myPub do the rewrite, run <code>/kb-domain-model</code>. For a "community hospital revenue cycle" over the healthcare model, it kept 54 tables and added the party, contact-mechanism and status-history tables, 93 tables in all. The grade went from D to B, with this section profile:</p>
+<div class="tbl"><table>
+<thead><tr><th>Section (weight)</th><th>Result</th><th>What is left</th></tr></thead>
+<tbody>
+<tr><td>Party and roles (3)</td><td>clean</td><td>none</td></tr>
+<tr><td>One owner per concept (3)</td><td>clean</td><td>none</td></tr>
+<tr><td>Contact mechanisms (2)</td><td>clean</td><td>none</td></tr>
+<tr><td>Relationship provenance (2)</td><td>review</td><td>246 of 312 FKs justified only by the generating model</td></tr>
+<tr><td>Structure (2)</td><td>review</td><td>one four-table FK cycle around coverage</td></tr>
+<tr><td>Status history, Classification (1 each)</td><td>advice</td><td>257 code columns without a reference table</td></tr>
+</tbody></table></div>
+<p>The subagent refinement pass handles the classification tables and the cycles. That's how the five ECM rewrites reached A and B. Judging the generated foreign keys needs source-system knowledge, so that part is left to you.</p>
+</div>
+
+<div class="example">
+<div class="kicker">Example 4 · SQL over the reference-model layer · read-only</div>
+<h3>Ask the models a pattern question</h3>
+<p>The <code>ref_*</code> tables have no MCP tool yet, but they answer cross-model questions well in SQL. Run these on an APFS clone (<code>cp -c data/catalog.ddb /tmp/ro.ddb</code>), because the catalog allows one writer. First: which entities from any source play the Party Role pattern, and how sure is the link?</p>
+<pre><code>SELECT m.source,
+       m.industry,
+       m.flavour,
+       e.domain,
+       e.name        AS entity,
+       c.confidence,
+       c.method                         <span class="c">-- heuristic or subagent</span>
+FROM   ref_entity_concept AS c
+JOIN   ref_entity         AS e ON e.ref_entity_id = c.ref_entity_id
+JOIN   ref_model          AS m ON m.ref_model_id  = e.ref_model_id
+WHERE  c.pattern_key = 'party_role'
+  AND  m.industry IN ('healthcare', 'health_insurance', 'insurance')
+ORDER  BY m.source, c.confidence DESC;</code></pre>
+<p>Next, a rollup that makes the "coverage modeled 10 to 15 times" finding visible, with Silverston and the pattern-first rewrites side by side.</p>
+<pre><code>SELECT m.name AS model,
+       count(DISTINCT e.ref_entity_id)
+           FILTER (WHERE c.pattern_key = 'coverage')   AS coverage_entities,
+       count(DISTINCT e.ref_entity_id)
+           FILTER (WHERE c.pattern_key = 'party_role') AS role_entities
+FROM   ref_entity_concept AS c
+JOIN   ref_entity         AS e ON e.ref_entity_id = c.ref_entity_id
+JOIN   ref_model          AS m ON m.ref_model_id  = e.ref_model_id
+WHERE  c.confidence &gt;= 0.5
+  AND  m.industry IN ('healthcare', 'health_insurance', 'insurance')
+GROUP  BY m.name
+ORDER  BY coverage_entities DESC;</code></pre>
+</div>
+
+<div class="example">
+<div class="kicker">Example 5 · end to end · recommended next run</div>
+<h3>A value-based care data product, from model to portfolio</h3>
+<p>This fits your Vantage work and uses every new piece. The built-in healthcare example (Encounter activity, Claims and denials, Patient coverage) already ran the second half of this path, and all its contracts, products, catalog, graph and recipe pass the SDK. This run would add the pattern-first first half and a value-based care scope.</p>
+<ol class="steps">
+<li><strong>Frame it.</strong> Search before generating: <em>"attribution and shared savings in value-based care"</em> and <em>"how ODPC models use cases and business objectives"</em>. The first pulls book chapters, the second the ODPC spec. Together they tell you which products and KPIs to ask for.</li>
+<li><strong>Build the model.</strong> Start from the pattern-first health insurance ECM, which already passes Party/Role and has one coverage owner.
+<pre><code>/mypub:kb-domain-model "Value-based care: member attribution to PCPs, care gaps
+    from quality measures, total cost of care, shared-savings reconciliation"
+    --base ref:&lt;pattern-first health_insurance id&gt;</code></pre>
+If the description needs tables the base lacks, such as a quality-measure result, the command sends an Agent to add them and records each addition in <code>changes.md</code> with the book it relies on. The review should stay at A or B.</li>
+<li><strong>Slice it into products.</strong>
+<pre><code>/mypub:kb-dp-from-model &lt;model.json from step 2&gt; \
+    "Member attribution: members and PCP attribution periods => domain:attribution" \
+    "Care gaps: quality-measure results and open gaps => domain:quality" \
+    "Total cost of care: allowed amounts by member month => domain:claim" \
+    --catalog vbc
+<span class="c"># then, when Claude asks for use cases and objectives:</span>
+<span class="c">#   "Shared-savings reconciliation: settle the contract year => Member attribution, Total cost of care"</span>
+<span class="c">#   "Care-gap outreach: close open gaps before year end => Care gaps, Member attribution"</span>
+<span class="c">#   "Earn shared savings: beat the cost benchmark on quality => Shared-savings reconciliation"</span></code></pre>
+<p>The domain names depend on what step 2 produces, so check <code>model.json</code> first and name its tables or domains.</p>
+You get one ODCS contract per table, ODPS products whose KPIs come from the metric views (PMPM cost, gap-closure rate, with targets left as TODO), Unity Catalog DDL for <code>vbc.*</code>, an ODPC catalog, an ODPG graph in which each product <code>supports</code> a use case and is <code>governedBy</code> its contract, and a HealthSim request for MemberSim rows.</li>
+<li><strong>Grade and hand off.</strong> <code>/kb-dp-review products/total-cost-of-care.odps.yaml --contract … --graph …</code> grades each section A–F against the specs and <em>Data Product Portfolios</em>. Then <code>/kb-dp-recipe</code> writes the <code>ci</code> recipe (validate on every change) and the <code>agent</code> recipe (the build brief for whoever writes the pipelines).</li>
+<li><strong>Check.</strong> Run <code>make all</code> in the package. It runs <code>open-data-products validate</code>, <code>odpc-build</code>, <code>odpg-analyze</code> and a recipe dry run.</li>
+</ol>
+<p class="note">Since the base is a derivative of a Databricks model, the package stays in the local <code>data/generated-packages/</code>, like the other model outputs.</p>
+</div>
+
+<div class="example">
+<div class="kicker">Example 6 · greenfield · no model needed</div>
+<h3>Start a product from an idea</h3>
+<p>Without a source model, <code>/kb-bootstrap</code> with the <code>data-product</code> profile writes the spec files instead of code. It detects the profile from the request.</p>
+<pre><code>/mypub:kb-bootstrap "customer churn data product on Databricks"
+<span class="c"># → ODPS product, ODCS contract, ODPC use case + objective fragments,</span>
+<span class="c">#   ODPG value graph, ODPR recipe, Makefile        (make all → SDK passes)</span></code></pre>
+<p>Use <code>/kb-dp-portfolio</code> instead when you have several products in mind at once.</p>
+</div>
+</section>
+
+<section id="open" class="open">
+<h2>Open items and next steps</h2>
+
+<h4><span class="tag odp">A</span> Data product specs</h4>
+<ul>
+<li><strong>SDK 0.7.0 gaps.</strong> The SDK checker and the 4.2 schema disagree on <code>dataHolder</code>, so generated products leave it out. The SDK can't validate a <code>DataProductRecipe</code> or ODPV value tracking yet, and <code>odpg-build</code> needs a local Ollama. Re-check each of these when the SDK releases a new version.</li>
+<li><strong>Generator quality on real work.</strong> All four generators pass the SDK, but none has been graded on a real portfolio. The recipe build plan still pulls one off-topic Palantir procedure.</li>
+<li><strong>Possible extra sources.</strong> The 14 YAML examples in the knowledge-base repo, the remaining ODCS pages (team, roles, servers, pricing) and the ODPV mapping profiles (DCAT-3, ODRL, PROV-O, OpenLineage) were listed as worth adding. They weren't in the second-layer load.</li>
+<li><strong>Naming.</strong> A bare "ODPS" resolves to Bitol's standard. That's deliberate, but worth knowing when a search looks wrong.</li>
+</ul>
+
+<h4><span class="tag mdl">B</span> Industry models</h4>
+<ul>
+<li><strong>Review the five pattern-first models.</strong> They are drafts until you've read one. Healthcare (A) or health insurance (B) is the best place to start, given the value-based care work.</li>
+<li><strong>LLM-generated foreign keys.</strong> About 40% remain in every rewrite. Pruning them needs source-system knowledge, and this is the main thing keeping three models at B. Double-owned concepts are the other: payer and NDC in pharma, offering in insurance.</li>
+<li><strong>Fairer reference coverage.</strong> Coverage matches on names, so SDTM coverage reads 38–46% even where tables like <code>trial_dosing</code> plainly cover EX. Matching on entity embeddings and pattern links would fix it. That changes the coverage numbers more than the letter grades.</li>
+<li><strong>The other 36 MVMs</strong> have heuristic pattern links only, with no subagent pass. Map any of them on demand.</li>
+<li><strong>A <code>ref_*</code> query tool.</strong> Example 4 shows these questions are useful. An MCP tool such as <code>find_pattern_implementations(pattern, industry)</code> would make them natural-language questions.</li>
+<li><strong>Regenerate the revenue-cycle sample.</strong> The saved hospital revenue cycle review predates PR #57 and still shows status-history tables asked for their own history.</li>
+</ul>
+
+<h4>Both</h4>
+<ul>
+<li><strong>Run Example 5.</strong> It is the first test of the whole path on a problem you care about, and it would show where each half is weakest.</li>
+<li><strong>Housekeeping.</strong> Five <code>catalog_pre-odp-*</code> backups from tonight are still in <code>data/</code> on the Mac. They are APFS clones, so they cost little until the catalog changes a lot.</li>
+</ul>
+</section>
+
+<p style="margin-top:56px;font-size:0.85rem;color:var(--muted)">Sources: the two project threads, merged PRs #40–#57 on <code>mark64oswald/myPub</code>, <code>docs/odp-family-map.md</code>, <code>docs/ref-models.md</code> and the generated packages. Counts are as the Mac runs reported them on 16 Nov 2026.</p>
+</div>
