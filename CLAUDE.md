@@ -106,6 +106,7 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-dp-recipe` | Data Product Recipe (2026-11) | ODPR `ci` + `agent` recipes for an ODPS product, KB-grounded build plan, handoff brief; passes `recipe validate` |
 | `/kb-dp-review` | Data Product Review (2026-11) | Grades an ODPS file A–F by section against the specs and *Data Product Portfolios*; SDK/ODCS/graph checks + fix list |
 | `/kb-model-review` | Data Model Review (2026-11) | Grades a data model (Databricks `model.json`, DDL, or a loaded reference model) against the library's patterns: Party/Role, one owner per concept, contact mechanisms, status history, classification, LLM-invented FKs, structure, Silverston/OMOP coverage; writes paste-ready `vibes.txt` |
+| `/kb-dp-from-model` | Data Products from a Model (2026-11) | Slices an industry model (Databricks gallery, DDL, loaded reference model) into ODPS products: per-table ODCS contracts, KPIs from metric views, UC DDL, model-review notes, ODPC/ODPG portfolio, HealthSim sample-data request; built-in healthcare example (3 products) |
 
 ## Other MCP servers
 
