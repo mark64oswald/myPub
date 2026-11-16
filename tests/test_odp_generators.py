@@ -399,3 +399,12 @@ def test_portfolio_cites_the_book(corpus, tmp_path):
     _add_book(conn, "Data Product Portfolios", [("Use cases first", "Start from the use case.")])
     root, _ = _portfolio(corpus, tmp_path)
     assert "Data Product Portfolios — Use cases first" in (root / "guidance.md").read_text()
+
+
+def test_relevant_procedures_drops_near_duplicates():
+    from types import SimpleNamespace as NS
+    procs = [NS(name="Add a streaming table to a share in Catalog Explorer"),
+             NS(name="Add a managed Iceberg table to a share in Catalog Explorer"),
+             NS(name="Publish pipeline tables to a Unity Catalog schema")]
+    kept = og.relevant_procedures(procs, ("share", "table", "publish"))
+    assert [p.name for p in kept] == [procs[0].name, procs[2].name]

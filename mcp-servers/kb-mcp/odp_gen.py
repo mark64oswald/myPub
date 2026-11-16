@@ -88,7 +88,18 @@ def relevant_procedures(procs: Sequence[Any], words: Iterable[str]) -> list:
     want = set()
     for w in words:
         want |= ks.tokens(w)
-    return [p for p in procs if ks.tokens(p.name) & want]
+    kept: list = []
+    for p in procs:
+        t = ks.tokens(p.name)
+        if not t & want:
+            continue
+        # Near-duplicates ("Add X to a share in Catalog Explorer" for five values of X):
+        # keep the first of any pair that shares most of its words.
+        if any(len(t & k) / max(1, len(t | k)) >= 0.5
+               for k in (ks.tokens(q.name) for q in kept)):
+            continue
+        kept.append(p)
+    return kept
 
 
 # ---------------------------------------------------------------------------
