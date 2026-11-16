@@ -234,8 +234,10 @@ class ReviewDecomposer:
         spec: dict[str, list[str]] = {}
         for name, _w, topic, keyword, _why in SECTIONS:
             tm = ks.topic_material(conn, resolver, topic, max_procedures=2)
-            library[name] = [f"{p.name}" + (f" ({p.source.label})" if p.source else "")
-                             for p in (tm.procedures if tm else [])]
+            books = og.book_citations(conn, og.ODP_BOOKS[:2], keywords=(topic,), per_book=1)
+            library[name] = [f"Read: {c.label}" for c in books] + [
+                f"{p.name}" + (f" ({p.source.label})" if p.source else "")
+                for p in (tm.procedures if tm else [])]
             spec[name] = [c.label for c in ks.doc_citations(conn, og.ODPS_SOURCES,
                                                             keywords=(keyword,), per_source=1)]
         return {"query": query, "path": path, "doc": doc, "text": text, "library": library,

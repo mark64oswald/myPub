@@ -47,6 +47,12 @@ PLATFORM_TOPICS = {
     "api": ("REST API", "API Design"),
     "generic": ("Data Pipeline",),
 }
+# What delivering a data product involves; used to rank and filter KB procedures so
+# the build plan stays on publishing, sharing, access and quality.
+DELIVERY_WORDS = ("share", "publish", "product", "contract", "catalog", "grant", "permission",
+                  "access", "quality", "expectation", "monitor", "schedule", "table", "view",
+                  "schema", "recipient", "deploy", "bundle", "lineage", "tag")
+DELIVERY_PURPOSE = " ".join(DELIVERY_WORDS)
 
 
 def read_product(path: Optional[str]) -> Optional[dict[str, Any]]:
@@ -229,9 +235,12 @@ class RecipeDecomposer:
                     ).lower()
         procs: list[ks.Procedure] = []
         seen: set[int] = set()
-        for topic in PLATFORM_TOPICS.get(platform, ()) + ("Data Product",):
-            tm = ks.topic_material(conn, resolver, topic, max_procedures=4)
-            for p in (tm.procedures if tm else []):
+        topics = PLATFORM_TOPICS.get(platform, ()) + ("Data Product",)
+        for topic in topics:
+            tm = ks.topic_material(conn, resolver, topic, max_procedures=6,
+                                   purpose=DELIVERY_PURPOSE)
+            for p in og.relevant_procedures(tm.procedures if tm else [],
+                                            topics + DELIVERY_WORDS):
                 if p.procedure_id not in seen:
                     seen.add(p.procedure_id)
                     procs.append(p)

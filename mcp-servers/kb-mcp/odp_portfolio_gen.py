@@ -265,7 +265,7 @@ def guidance(tm: Optional[ks.TopicMaterial], cites: Sequence[ks.Citation]) -> st
               "- [ ] Every objective has a KPI with a baseline and a target date.",
               "- [ ] Derived `contributesTo` edges in the graph are confirmed or removed.",
               "- [ ] Priorities (`portfolioPriority`, `priority`) reflect the real ranking.", ""]
-    lines.append(ks.render_citations(cites, "Spec sections behind this layout"))
+    lines.append(ks.render_citations(cites, "Spec sections and books behind this layout"))
     return "\n".join(lines)
 
 
@@ -303,6 +303,9 @@ class PortfolioDecomposer:
                 break
         cites = ks.doc_citations(conn, og.ODPC_SOURCES + og.ODPG_SOURCES,
                                  keywords=("use case", "objective", "kpi", "edge"), per_source=3)
+        cites += og.book_citations(conn, og.ODP_BOOKS[:2],
+                                   keywords=("portfolio", "use case", "objective", "kpi"),
+                                   per_book=3)
         return {"query": query, "name": name, "products": products, "use_cases": use_cases,
                 "objectives": objectives, "topic": tm, "citations": cites,
                 "platform": (kw.get("platform") or og.detect_platform(text)).lower()}
@@ -378,7 +381,7 @@ class PortfolioPlanner:
             f"# Provenance: {portfolio}\n\nBuilt from {len(products)} product ideas, "
             f"{len(d['use_cases'])} use cases and {len(d['objectives'])} objectives given "
             "(defaults filled the rest).\n\n"
-            + ks.render_citations(d["citations"], "Spec sections")
+            + ks.render_citations(d["citations"], "Spec sections and books")
             + "\n" + ks.render_citations(tm.sources if tm else [], "Knowledge-base sources"))
         files["_validation.md"] = og.render_checks(f"Portfolio checks: {portfolio}", checks)
         files["_prompts/fill-portfolio.md"] = FILL_PROMPT.format(portfolio=portfolio,

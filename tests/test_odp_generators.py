@@ -355,3 +355,47 @@ def test_review_unreadable_file(corpus, tmp_path):
     pid, _, issues = odp_review_gen.make_dp_review_generator().run_deterministic(
         conn, resolver, str(tmp_path / "missing.yaml"), output_root=str(tmp_path))
     assert pid == -1 and "can't read" in issues[0].message
+
+
+# ---------------------------------------------------------------------------
+# Library grounding: ODP books and procedure filtering
+# ---------------------------------------------------------------------------
+
+
+def _add_book(conn, title, chapters):
+    bid = conn.execute("INSERT INTO book (title, source_path) VALUES (?, ?) RETURNING book_id",
+                       [title, f"/x/{title}.epub"]).fetchone()[0]
+    for i, (ct, body) in enumerate(chapters, 1):
+        conn.execute("INSERT INTO chapter (book_id, chapter_num, title, content) VALUES (?,?,?,?)",
+                     [bid, i, ct, body])
+    return bid
+
+
+def test_book_citations_rank_and_skip_unrelated(catalog):
+    _add_book(catalog, "Data Product Portfolios", [
+        ("Preface", "Thanks to everyone."),
+        ("Portfolio thinking", "A portfolio of data products, each tied to a use case."),
+        ("KPIs", "Every objective needs a KPI.")])
+    _add_book(catalog, "Some Other Book", [("Portfolio", "portfolio portfolio")])
+    cites = og.book_citations(catalog, og.ODP_BOOKS, keywords=("portfolio", "kpi"), per_book=5)
+    labels = [c.label for c in cites]
+    assert labels == ["Data Product Portfolios — Portfolio thinking",
+                      "Data Product Portfolios — KPIs"]
+    assert all(c.source_type == "chapter" for c in cites)
+
+
+def test_relevant_procedures_drops_off_topic():
+    from types import SimpleNamespace as NS
+    procs = [NS(name="Troubleshoot Dynamics 365 authentication"),
+             NS(name="Create a Delta Sharing recipient"),
+             NS(name="Grant table permissions in Unity Catalog")]
+    kept = og.relevant_procedures(procs, ("Delta Sharing", "Unity Catalog") + ("grant",))
+    assert [p.name for p in kept] == ["Create a Delta Sharing recipient",
+                                      "Grant table permissions in Unity Catalog"]
+
+
+def test_portfolio_cites_the_book(corpus, tmp_path):
+    conn, _ = corpus
+    _add_book(conn, "Data Product Portfolios", [("Use cases first", "Start from the use case.")])
+    root, _ = _portfolio(corpus, tmp_path)
+    assert "Data Product Portfolios — Use cases first" in (root / "guidance.md").read_text()
