@@ -132,3 +132,13 @@ def test_unreadable_model_fails_validation(tmp_path):
     d = mr.ModelReviewDecomposer().decompose(conn, None, str(tmp_path / "nope.json"))
     plan = mr.ModelReviewPlanner().plan(conn, d)
     assert mr.ModelReviewValidator().validate(conn, plan)
+
+
+def test_reference_matching_uses_sdtm_labels():
+    ref = rm.RefModel(source="cdisc", industry="clinical_trials", flavour="sdtmig", version="3.4")
+    ref.entities = [rm.RefEntity(name="ae", display_name="AE", description="Adverse Events (AE)"),
+                    rm.RefEntity(name="vs", display_name="VS", description="Vital Signs (VS)")]
+    model = rm.RefModel(source="x", industry="clinical_trials", flavour="x", version="1")
+    model.entities = [rm.RefEntity(name="adverse_event", domain="safety")]
+    fs = mr.check_reference(model, [ref])
+    assert len(fs) == 1 and "VS (Vital Signs)" in fs[0].detail and "AE" not in fs[0].detail

@@ -397,6 +397,228 @@ def parse_omop(field_csv: str, table_csv: str = "", *, version: str = "5.4") -> 
     return model
 
 
+# ---------------------------------------------------------------------------
+# CDISC SDTM (variable metadata, reference-only)
+# ---------------------------------------------------------------------------
+
+# Published under CDISC's terms (use within the downloader's organization).
+# The cdiscdata R package (github.com/humanpred/cdiscdata) carries the
+# variable metadata as data/ig_sdtm.rda; it is read at load time and kept in
+# the local catalog only.
+SDTM_RDA_URL = "https://raw.githubusercontent.com/humanpred/cdiscdata/main/data/ig_sdtm.rda"
+
+SDTM_DATASETS = {
+    "DM": "Demographics", "CO": "Comments", "SE": "Subject Elements",
+    "SM": "Subject Disease Milestones", "SV": "Subject Visits", "AG": "Procedure Agents",
+    "CM": "Concomitant/Prior Medications", "EC": "Exposure as Collected", "EX": "Exposure",
+    "ML": "Meal Data", "PR": "Procedures", "SU": "Substance Use", "AE": "Adverse Events",
+    "BE": "Biospecimen Events", "CE": "Clinical Events", "DS": "Disposition",
+    "DV": "Protocol Deviations", "HO": "Healthcare Encounters", "MH": "Medical History",
+    "BS": "Biospecimen Findings", "CP": "Cell Phenotype Findings",
+    "CV": "Cardiovascular System Findings", "DA": "Product Accountability",
+    "DD": "Death Details", "EG": "ECG Test Results", "FT": "Functional Tests",
+    "GF": "Genomics Findings", "IE": "Inclusion/Exclusion Criteria Not Met",
+    "IS": "Immunogenicity Specimen Assessments", "LB": "Laboratory Test Results",
+    "MB": "Microbiology Specimen", "MI": "Microscopic Findings",
+    "MK": "Musculoskeletal System Findings", "MS": "Microbiology Susceptibility",
+    "NV": "Nervous System Findings", "OE": "Ophthalmic Examinations",
+    "PC": "Pharmacokinetics Concentrations", "PE": "Physical Examination",
+    "PP": "Pharmacokinetics Parameters", "QS": "Questionnaires",
+    "RE": "Respiratory System Findings", "RP": "Reproductive System Findings",
+    "RS": "Disease Response and Clin Classification", "SC": "Subject Characteristics",
+    "SS": "Subject Status", "TR": "Tumor/Lesion Results", "TU": "Tumor/Lesion Identification",
+    "UR": "Urinary System Findings", "VS": "Vital Signs",
+    "FA": "Findings About Events or Interventions", "SR": "Skin Response",
+    "TA": "Trial Arms", "TD": "Trial Disease Assessments", "TE": "Trial Elements",
+    "TI": "Trial Inclusion/Exclusion Criteria", "TM": "Trial Disease Milestones",
+    "TS": "Trial Summary", "TV": "Trial Visits", "RELREC": "Related Records",
+    "RELSPEC": "Related Specimens", "RELSUB": "Related Subjects",
+    "SUPPQUAL": "Supplemental Qualifiers", "OI": "Non-host Organism Identifiers",
+}
+
+
+def parse_sdtm(rows: Iterable[dict], *, version: str = "3.4",
+               standard: str = "SDTMIG") -> RefModel:
+    """SDTM IG variable metadata (one row per dataset variable) as a RefModel.
+
+    Each dataset (DM, AE, LB...) is an entity in a domain named after its
+    class (special_purpose, events, findings, interventions, trial_design,
+    relationship). Keys follow SDTM's natural keys: STUDYID+USUBJID for DM,
+    USUBJID + --SEQ for subject-level datasets; every USUBJID references DM."""
+    model = RefModel(source="cdisc", industry="clinical_trials", flavour="sdtmig",
+                     version=version, name=f"CDISC {standard} v{version}",
+                     origin_uri="CDISC Library export via cdiscdata (humanpred/cdiscdata)",
+                     license_note="CDISC terms: use within the organization; reference-only, "
+                                  "local catalog only.")
+    by: dict[str, RefEntity] = {}
+    keep = [r for r in rows if str(r.get("standard")) == standard
+            and str(r.get("version")) == version]
+    keep.sort(key=lambda r: (str(r.get("domain")), int(r.get("order") or 0)))
+    for r in keep:
+        code = str(r.get("domain") or "").upper()
+        if not code:
+            continue
+        ent = by.get(code)
+        if ent is None:
+            ent = RefEntity(name=code.lower(), domain=snake(str(r.get("class") or "other")),
+                            display_name=code,
+                            description=SDTM_DATASETS.get(code, code) + f" ({code})",
+                            standard_refs=f"{standard} {version}")
+            by[code] = ent
+            model.entities.append(ent)
+        typ = {"Char": "STRING", "Num": "DOUBLE"}.get(str(r.get("type")), "STRING")
+        tags = ",".join(str(x) for x in (r.get("role"), r.get("core")) if x and str(x) != "nan")
+        ent.attributes.append(RefAttribute(
+            name=str(r.get("variable") or "").lower(), data_type=typ, tags=tags,
+            description=str(r.get("label") or "")))
+    dm = by.get("DM")
+    for code, ent in by.items():
+        names = [a.name for a in ent.attributes]
+        seq = f"{code.lower()}seq"
+        if code == "DM":
+            pk = ["studyid", "usubjid"]
+        elif "usubjid" in names and seq in names:
+            pk = ["usubjid", seq]
+        elif seq in names:
+            pk = ["studyid", seq] if "studyid" in names else [seq]
+        else:
+            pk = [a.name for a in ent.attributes
+                  if "Identifier" in a.tags and "Req" in a.tags] or names[:1]
+        ent.primary_key = ",".join(pk)
+        for a in ent.attributes:
+            a.is_pk = a.name in pk
+            if dm is not None and code != "DM" and a.name == "usubjid":
+                a.fk_to = f"{dm.key}.usubjid"
+    return model
+
+
+# ---------------------------------------------------------------------------
+# Protocol Buffers schemas (GA4GH Phenopackets, VRS)
+# ---------------------------------------------------------------------------
+
+PHENOPACKETS_PROTO_ROOT = ("https://raw.githubusercontent.com/phenopackets/phenopacket-schema/"
+                           "master/src/main/proto/")
+PHENOPACKETS_ENTRY = "phenopackets/schema/v2/phenopackets.proto"
+# phenopackets/vrs/v1/vrs.proto is a git symlink into the vrs-protobuf submodule.
+PROTO_SYMLINKS = {"phenopackets/vrs/v1/vrs.proto":
+                  "https://raw.githubusercontent.com/ga4gh/vrs-protobuf/main/schema/vrs.proto"}
+
+_PROTO_SCALAR = {"string": "STRING", "bytes": "BINARY", "bool": "BOOLEAN", "double": "DOUBLE",
+                 "float": "DOUBLE", "int32": "INT", "int64": "BIGINT", "uint32": "INT",
+                 "uint64": "BIGINT", "sint32": "INT", "sint64": "BIGINT", "fixed32": "INT",
+                 "fixed64": "BIGINT", "sfixed32": "INT", "sfixed64": "BIGINT",
+                 "google.protobuf.Timestamp": "TIMESTAMP", "Timestamp": "TIMESTAMP"}
+_PROTO_FIELD = re.compile(r"^(repeated\s+|optional\s+)?(map\s*<[^>]+>|[A-Za-z_][\w.]*)\s+(\w+)\s*="
+                          r"\s*\d+")
+
+
+def proto_imports(text: str) -> list[str]:
+    return re.findall(r'^\s*import\s+"([^"]+)"\s*;', text, re.M)
+
+
+def _camel_snake(name: str) -> str:
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s).lower()
+
+
+def parse_proto_model(files: dict[str, str], *, source: str = "ga4gh",
+                      industry: str = "genomics", flavour: str = "phenopackets",
+                      version: str = "2.0", name: str = "GA4GH Phenopackets v2",
+                      origin_uri: str = "phenopackets/phenopacket-schema",
+                      license_note: str = "BSD-3-Clause") -> RefModel:
+    """Messages as entities (domain = .proto file stem), scalar and enum fields as
+    columns. A singular message field becomes an FK column ``<field>_id``; a
+    repeated one becomes an association table ``<parent>_<field>``."""
+    messages: dict[str, tuple[str, list[tuple[bool, str, str]], str]] = {}  # name -> (domain, fields, comment)
+    enums: set[str] = set()
+    for path, text in files.items():
+        domain = snake(Path(path).stem)
+        body = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        stack: list[tuple[str, str]] = []
+        last_comment: list[str] = []
+        pieces: list[tuple[str, str]] = []          # (code statement, comment)
+        for raw in body.splitlines():
+            comment = re.search(r"//\s?(.*)$", raw)
+            code = re.sub(r"//.*$", "", raw)
+            parts = [p.strip() for p in re.split(r"(?<=[{;])|(?=\})", code) if p.strip()]
+            if not parts:
+                pieces.append(("", comment.group(1).strip() if comment else ""))
+            pieces += [(p, "") for p in parts]
+        for line, comment_text in pieces:
+            if not line:
+                if comment_text:
+                    last_comment.append(comment_text)
+                continue
+            m = re.match(r"(message|enum|oneof)\s+(\w+)\s*\{", line)
+            if m:
+                kind, nm = m.groups()
+                if kind == "message":
+                    full = nm if nm not in messages else f"{stack[-1][1]}{nm}" if stack else nm
+                    messages.setdefault(full, (domain, [], " ".join(last_comment)[:400]))
+                    stack.append(("message", full))
+                elif kind == "enum":
+                    enums.add(nm)
+                    stack.append(("enum", nm))
+                else:
+                    stack.append(("oneof", nm))
+                last_comment = []
+                continue
+            if line.startswith("}"):
+                if stack:
+                    stack.pop()
+                last_comment = []
+                continue
+            owner = next((n for k, n in reversed(stack) if k == "message"), None)
+            if owner and stack and stack[-1][0] != "enum":
+                f = _PROTO_FIELD.match(line)
+                if f:
+                    rep, typ, fname = f.groups()
+                    messages[owner][1].append((bool(rep and rep.strip() == "repeated"),
+                                               typ.split(".")[-1] if not typ.startswith("map")
+                                               else "map", fname))
+            last_comment = []
+    model = RefModel(source=source, industry=industry, flavour=flavour, version=version,
+                     name=name, origin_uri=origin_uri, license_note=license_note)
+    ents: dict[str, RefEntity] = {}
+    for mname, (domain, _fields, comment) in messages.items():
+        ename = _camel_snake(mname)
+        ents[mname] = RefEntity(name=ename, domain=domain, display_name=mname,
+                                description=comment, primary_key=f"{ename}_id",
+                                attributes=[RefAttribute(name=f"{ename}_id", data_type="BIGINT",
+                                                         is_pk=True,
+                                                         description="Surrogate key.")])
+    assoc: list[RefEntity] = []
+    for mname, (domain, fields, _c) in messages.items():
+        ent = ents[mname]
+        for rep, typ, fname in fields:
+            target = ents.get(typ)
+            if target is None:
+                dtype = "STRING" if typ in enums or typ == "map" else _PROTO_SCALAR.get(typ, "STRING")
+                ent.attributes.append(RefAttribute(
+                    name=fname, data_type=f"ARRAY<{dtype}>" if rep else dtype,
+                    tags="enum" if typ in enums else ""))
+            elif not rep:
+                ent.attributes.append(RefAttribute(
+                    name=f"{fname}_id", data_type="BIGINT",
+                    fk_to=f"{target.key}.{target.primary_key}",
+                    description=f"{fname} ({typ})"))
+            else:
+                an = f"{ent.name}_{fname}"
+                assoc.append(RefEntity(
+                    name=an, domain=domain, subdomain="association", primary_key=f"{an}_id",
+                    description=f"{mname}.{fname}: repeated {typ}.",
+                    attributes=[
+                        RefAttribute(name=f"{an}_id", data_type="BIGINT", is_pk=True),
+                        RefAttribute(name=f"{ent.name}_id", data_type="BIGINT",
+                                     fk_to=f"{ent.key}.{ent.primary_key}"),
+                        RefAttribute(name=f"{target.name}_id" if target is not ent
+                                     else f"child_{target.name}_id", data_type="BIGINT",
+                                     fk_to=f"{target.key}.{target.primary_key}"),
+                        RefAttribute(name="ordinal", data_type="INT")]))
+    model.entities = list(ents.values()) + assoc
+    return model
+
+
 _TABLE_RE = re.compile(
     r"CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([`\w.\"]+)\s*\(", re.I)
 _FK_RE = re.compile(

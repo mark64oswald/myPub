@@ -24,6 +24,8 @@ role?"
 | `databricks` | `model.json` per industry, MVM (default) or ECM | Databricks License: use with Databricks services, local catalog only | `load-databricks --repo <clone>` |
 | `silverston` | *Data Model Resource Book Vol. 2* appendices (entities + attributes per industry) | book copyright, local only | `silverston-pages` → subagent transcription → `load-silverston` |
 | `omop` | OMOP CDM 5.4 field/table CSVs (OHDSI) | Apache 2.0 | `load-omop` (fetched) |
+| `cdisc` | SDTMIG 3.4 variable metadata (63 datasets, 1,917 variables), from the cdiscdata R package's `ig_sdtm.rda` | CDISC terms: reference-only, local catalog only | `load-sdtm` (fetched; needs `pip install rdata`) |
+| `ga4gh` | Phenopackets v2 + VRS protobufs (103 messages and association tables) | BSD-3 / Apache 2.0 | `load-phenopackets` (fetched) |
 | `user` / `generated` | any DDL (`CREATE TABLE` + FK constraints) | — | `load-ddl --file` |
 
 The Silverston transcriptions and mapping runs live in gitignored
@@ -96,7 +98,7 @@ or a loaded reference model (`databricks:healthcare`, `ref:<id>`).
 | Structure | 2 | FK cycles, tables without a PK, unconnected tables |
 | Status history | 1 | transactional tables with a status column and no history table |
 | Classification | 1 | free-text `_type`/`_code`/`_category` columns |
-| Reference comparison | 1 | Silverston Vol. 2 / OMOP entities with no counterpart |
+| Reference comparison | 1 | reference-model entities with no counterpart: Silverston Vol. 2 and OMOP for healthcare/insurance, CDISC SDTM for clinical trials and pharma, Phenopackets for genomics |
 
 Each finding cites the pattern's books (via `patterns.yaml`) and carries a
 vibe; `vibes.txt` lists them in order of severity. The healthcare MVM v2

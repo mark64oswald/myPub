@@ -111,12 +111,13 @@ def load_input(conn: Any, spec: str) -> tuple[Optional[rm.RefModel], Optional[in
             return rm.read_model(conn, int(m.group(1))), int(m.group(1)), ""
         except Exception as exc:
             return None, None, str(exc)
-    m = re.fullmatch(r"(databricks|silverston|omop|user|generated):([a-z0-9_]+)(?::([a-z0-9_]+))?",
+    m = re.fullmatch(r"(databricks|silverston|omop|cdisc|ga4gh|user|generated):([a-z0-9_]+)(?::([a-z0-9_]+))?",
                      spec)
     if m:
         try:
             mid = rm.find_model(conn, m.group(1), m.group(2), m.group(3) or
-                                {"databricks": "mvm", "silverston": "book", "omop": "cdm"}.get(
+                                {"databricks": "mvm", "silverston": "book", "omop": "cdm", "cdisc": "sdtmig",
+                                 "ga4gh": "phenopackets"}.get(
                                     m.group(1), "ddl"))
         except Exception:
             mid = None
@@ -461,10 +462,30 @@ def check_structure(model: rm.RefModel) -> list[Finding]:
     return out
 
 
+def _stem(t: str) -> str:
+    return t[:-1] if t.endswith("s") and len(t) > 4 else t
+
+
+def _coded(e: rm.RefEntity) -> bool:
+    return bool(e.description and e.display_name and e.display_name.isupper()
+                and len(e.display_name) <= 8)
+
+
+def _ref_tokens(e: rm.RefEntity) -> set[str]:
+    """Name tokens; for coded names (SDTM's AE, LB...) the label's words."""
+    toks = _name_tokens(e.name)
+    if _coded(e):
+        label = e.description.split("(")[0]
+        toks = {t for t in re.findall(r"[a-z]+", label.lower())
+                if len(t) > 2 and t not in _GENERIC and t not in {"and", "about", "for"}}
+    return {_stem(t) for t in (toks or {e.name})}
+
+
 def _match_score(a: rm.RefEntity, b: rm.RefEntity) -> float:
-    ta, tb = _name_tokens(a.name) or {a.name}, _name_tokens(b.name) or {b.name}
-    name = len(ta & tb) / max(1, len(ta | tb))
-    return name
+    ta, tb = _ref_tokens(a), {_stem(t) for t in (_name_tokens(b.name) or {b.name})}
+    if len(ta) > 1:
+        return len(ta & tb) / len(ta)      # share of the reference concept's words
+    return len(ta & tb) / max(1, len(ta | tb))
 
 
 def check_reference(model: rm.RefModel, refs: Sequence[rm.RefModel]) -> list[Finding]:
@@ -474,14 +495,18 @@ def check_reference(model: rm.RefModel, refs: Sequence[rm.RefModel]) -> list[Fin
             continue
         missing = []
         for r in ref.entities:
-            if r.name.endswith("_type") or r.name in {"metadata", "cdm_source"}:
+            if (r.name.endswith("_type") or r.name in {"metadata", "cdm_source"}
+                    or r.subdomain == "association"):
                 continue
             best = max((_match_score(r, e) for e in model.entities), default=0.0)
             if best < 0.5:
-                missing.append(r.name)
+                missing.append(f"{r.display_name or r.name.upper()} "
+                               f"({r.description.split('(')[0].strip()})"
+                               if _coded(r) else r.name)
         if not missing:
             continue
-        cov = 1 - len(missing) / max(1, len(ref.entities))
+        counted = [r for r in ref.entities if r.subdomain != "association"]
+        cov = 1 - len(missing) / max(1, len(counted))
         label = ref.name or f"{ref.source} {ref.industry}"
         out.append(Finding(
             "reference", "advice",
@@ -583,6 +608,14 @@ def _books_for(conn: Any, catalog: rm.PatternCatalog, pattern_key: Optional[str]
     return labels
 
 
+# Industry -> (source, industry, flavour) reference models compared against, when loaded.
+REFERENCE_MODELS: dict[str, list[tuple[str, str, str]]] = {
+    "clinical_trials": [("cdisc", "clinical_trials", "sdtmig"), ("omop", "healthcare", "cdm")],
+    "pharmaceuticals": [("cdisc", "clinical_trials", "sdtmig")],
+    "genomics_biotech": [("ga4gh", "genomics", "phenopackets")],
+}
+
+
 def _reference_models(conn: Any, model: rm.RefModel, ref_model_id: Optional[int]) -> list[rm.RefModel]:
     out = []
     wanted = []
@@ -591,6 +624,9 @@ def _reference_models(conn: Any, model: rm.RefModel, ref_model_id: Optional[int]
         wanted.append(("silverston", s, "book"))
     if model.industry in OMOP_INDUSTRIES and model.source != "omop":
         wanted.append(("omop", "healthcare", "cdm"))
+    for ref in REFERENCE_MODELS.get(model.industry, []):
+        if ref[0] != model.source and ref not in wanted:
+            wanted.append(ref)
     for src, ind, fl in wanted:
         try:
             mid = rm.find_model(conn, src, ind, fl)

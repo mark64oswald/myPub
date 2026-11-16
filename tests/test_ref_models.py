@@ -363,3 +363,73 @@ def test_model_ids_union_of_industry_and_source():
                                                 ids["silverston:insurance"]}
     ns = argparse.Namespace(model_id=None, industry=None, source=["omop"], all=False)
     assert script._model_ids(conn, ns) == [ids["omop:healthcare"]]
+
+
+SDTM_ROWS = [
+    {"standard": "SDTMIG", "version": "3.4", "class": "Special-Purpose", "domain": "DM",
+     "order": i, "variable": v, "label": lab, "type": "Char", "role": "Identifier", "core": "Req"}
+    for i, (v, lab) in enumerate([("STUDYID", "Study Identifier"),
+                                   ("USUBJID", "Unique Subject Identifier"),
+                                   ("BRTHDTC", "Date/Time of Birth")], start=1)
+] + [
+    {"standard": "SDTMIG", "version": "3.4", "class": "Events", "domain": "AE", "order": i,
+     "variable": v, "label": lab, "type": t, "role": "Identifier", "core": "Req"}
+    for i, (v, lab, t) in enumerate([("STUDYID", "Study Identifier", "Char"),
+                                      ("USUBJID", "Unique Subject Identifier", "Char"),
+                                      ("AESEQ", "Sequence Number", "Num"),
+                                      ("AETERM", "Reported Term", "Char")], start=1)
+] + [{"standard": "SDTMIG", "version": "3.3", "class": "Events", "domain": "XX", "order": 1,
+      "variable": "XXSEQ", "label": "old", "type": "Num"}]
+
+
+def test_parse_sdtm():
+    m = rm.parse_sdtm(SDTM_ROWS)
+    idx = m.entity_index()
+    assert set(idx) == {"special_purpose.dm", "events.ae"}          # 3.3 rows ignored
+    assert idx["special_purpose.dm"].primary_key == "studyid,usubjid"
+    ae = idx["events.ae"]
+    assert ae.primary_key == "usubjid,aeseq" and ae.description.startswith("Adverse Events")
+    assert {a.name: a.fk_to for a in ae.attributes}["usubjid"] == "special_purpose.dm.usubjid"
+    assert m.relationships() == [("events.ae", "special_purpose.dm", "usubjid")]
+
+
+PROTO = {
+    "pkg/base.proto": '''
+syntax = "proto3";
+// A term from an ontology.
+message OntologyClass {
+  string id = 1;
+  string label = 2;
+}
+enum Sex { UNKNOWN = 0; MALE = 1; }
+''',
+    "pkg/individual.proto": '''
+import "pkg/base.proto";
+/* The subject. */
+message Individual {
+  string id = 1;
+  Sex sex = 2;
+  OntologyClass taxonomy = 3;
+  repeated OntologyClass phenotypes = 4;
+  repeated string alternate_ids = 5;
+  oneof age { string iso8601 = 6; int32 days = 7; }
+  map<string, string> extra = 8;
+}
+''',
+}
+
+
+def test_parse_proto_model():
+    assert rm.proto_imports(PROTO["pkg/individual.proto"]) == ["pkg/base.proto"]
+    m = rm.parse_proto_model(PROTO)
+    idx = m.entity_index()
+    ind = {a.name: a for a in idx["individual.individual"].attributes}
+    assert ind["sex"].data_type == "STRING" and ind["sex"].tags == "enum"
+    assert ind["taxonomy_id"].fk_to == "base.ontology_class.ontology_class_id"
+    assert ind["alternate_ids"].data_type == "ARRAY<STRING>"
+    assert "iso8601" in ind and "days" in ind and ind["extra"].data_type == "STRING"
+    assoc = idx["individual.individual_phenotypes"]
+    assert assoc.subdomain == "association"
+    assert {a.fk_to for a in assoc.attributes if a.fk_to} == {
+        "individual.individual.individual_id", "base.ontology_class.ontology_class_id"}
+    assert idx["base.ontology_class"].description == "A term from an ontology."
