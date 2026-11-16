@@ -166,3 +166,11 @@ def test_coverage_needs_insurance_and_insured_party_columns():
     assert not mr.has_evidence(ent("criterion_text", "eligibility_type"), cov)
     assert not mr.has_evidence(ent("policy_number", "self_insured_indicator"), cov)
     assert not mr.has_evidence(ent("payer_id", "inpatient_hospital_copay_amount"), cov)
+
+
+def test_history_tables_need_no_status_history():
+    m = rm.RefModel(source="ddl", industry="x", flavour="", version="", name="t")
+    m.entities = [rm.RefEntity(name="order_status_history", domain="d",
+                               attributes=[rm.RefAttribute(name="order_status")])]
+    links = {m.entities[0].key: {p: 1.0 for p in mr._TRANSACTIONAL}}
+    assert mr.check_status_history(m, links) == []
