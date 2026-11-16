@@ -3855,6 +3855,171 @@ def generate_plugin_scaffold(
                          tools=tools or [], domain=domain, ui=ui, hooks=hooks, author=author)
 
 
+# ---------------------------------------------------------------------------
+# Open Data Product generators (2026-11)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+@_release_catalog
+def generate_data_contract(
+    table: str,
+    ddl: Optional[str] = None,
+    columns: Optional[list[str]] = None,
+    platform: Optional[str] = None,
+    location: Optional[str] = None,
+    contract_name: Optional[str] = None,
+    purpose: Optional[str] = None,
+    domain: Optional[str] = None,
+    owner: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate an ODCS v3.1.0 data contract for one existing table.
+
+    Columns come from ``ddl`` (a CREATE TABLE statement) or ``columns``
+    (short specs: ``"order_id bigint pk"``, ``"email string required -- login"``).
+    Writes ``<name>.odcs.yaml`` with schema, quality rules implied by the
+    columns (rows exist, keys unique, required not null), draft SLA
+    properties marked TODO, a server block for the platform, team and
+    support; plus README, a checklist from the KB's data-contract
+    procedures, ``_validation.md`` (ODCS JSON Schema) and a fill-in prompt.
+    Columns that look like personal data get ``classification: restricted``.
+
+    Args:
+        table: Table name or a short description of the dataset.
+        ddl: CREATE TABLE statement (preferred: gives types, keys, NOT NULL).
+        columns: Column specs when there's no DDL.
+        platform: databricks | snowflake | bigquery | postgres | api | generic (detected if omitted).
+        location: Dotted location (``catalog.schema.table``) or a path/URL for the server block.
+        contract_name: Contract id/file name; defaults to the table name.
+        purpose: One or two sentences on why the dataset exists.
+        domain: Business domain.
+        owner: Owning team.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import odcs_contract_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(odcs_contract_gen.make_data_contract_generator(), table,
+                         output_root, overwrite, ddl=ddl, columns=columns or [],
+                         platform=platform, location=location, contract_name=contract_name,
+                         purpose=purpose, domain=domain, owner=owner)
+
+
+@mcp.tool
+@_release_catalog
+def generate_dp_portfolio(
+    portfolio: str,
+    products: list[str],
+    use_cases: Optional[list[str]] = None,
+    objectives: Optional[list[str]] = None,
+    platform: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Turn product ideas into an ODPC catalog and an ODPG value graph.
+
+    Entries are ``"Name: description"``; ``=>`` links an entry to what it
+    uses: ``"Retention campaigns: target at-risk customers => Churn scores"``
+    (use case → products), ``"Reduce churn: keep customers => Retention
+    campaigns"`` (objective → use cases). Missing links mean "all"; missing
+    use cases or objectives get defaults. Writes an ODPS draft and ODCS
+    placeholder per product, ODPC fragments (product references, use cases,
+    objectives + KPIs), the built ODPC catalog (when the SDK is installed),
+    the ODPG graph, an ODPR validate recipe, a Makefile and
+    ``_validation.md`` (SDK validate, odpc-build, odpg-analyze).
+
+    Args:
+        portfolio: Portfolio name (or a sentence describing it).
+        products: Product ideas, ``"Name: description"``.
+        use_cases: ``"Name: description => Product, Product"``.
+        objectives: ``"Name: description => Use case, Use case"``.
+        platform: Shapes each product's dataAccess (detected if omitted).
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import odp_portfolio_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(odp_portfolio_gen.make_dp_portfolio_generator(), portfolio,
+                         output_root, overwrite, products=products, use_cases=use_cases or [],
+                         objectives=objectives or [], platform=platform)
+
+
+@mcp.tool
+@_release_catalog
+def generate_dp_recipe(
+    description: str,
+    odps_path: Optional[str] = None,
+    product_file: Optional[str] = None,
+    contract_file: Optional[str] = None,
+    graph_file: Optional[str] = None,
+    mode: str = "both",
+    platform: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate ODPR recipes that check and build one data product.
+
+    ``mode`` ``ci`` writes a ci recipe (validate product + graph, explain)
+    and a GitHub workflow; ``agent`` writes an agent recipe (inputs, context
+    policy, validate + explain + render graph, human-and-agent review, build
+    plan from the KB's platform procedures in ``x-mypub-buildPlan``);
+    ``both`` (default) writes both. Also ``handoff/README.md`` with the ODPR
+    DataProductRecipe sections and ``_validation.md`` (SDK recipe validate +
+    dry-run). Paths are relative to the product's repo root.
+
+    Args:
+        description: What the product is (used when there's no ODPS file).
+        odps_path: Absolute path to an existing ODPS product file to read.
+        product_file: The product's path inside its repo (default products/<file>).
+        contract_file: The ODCS contract's path inside the repo.
+        graph_file: The ODPG graph's path inside the repo.
+        mode: ci | agent | both.
+        platform: databricks | snowflake | bigquery | postgres | api | generic (detected if omitted).
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import odp_recipe_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(odp_recipe_gen.make_dp_recipe_generator(), description,
+                         output_root, overwrite, odps_path=odps_path, product_file=product_file,
+                         contract_file=contract_file, graph_file=graph_file, mode=mode,
+                         platform=platform)
+
+
+@mcp.tool
+@_release_catalog
+def review_dp_product(
+    odps_path: str,
+    contract_path: Optional[str] = None,
+    graph_path: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Grade an ODPS 4.2 product file against the specs and the library.
+
+    Scores each ODPS section (missing / draft / filled), weights them into a
+    letter grade, and lists findings with a fix, the ODPS spec section and
+    the KB procedure behind each. Runs the SDK (validate, odpg-analyze) when
+    installed and checks the referenced ODCS contract against its schema.
+    Writes ``review.md``, ``findings.json`` and an apply-fixes prompt.
+    Read-only on the product file.
+
+    Args:
+        odps_path: Absolute path to the ODPS product file.
+        contract_path: ODCS contract (defaults to the product's contractURL, if local).
+        graph_path: ODPG graph to analyze.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import odp_review_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(odp_review_gen.make_dp_review_generator(), odps_path,
+                         output_root, overwrite, odps_path=odps_path,
+                         contract_path=contract_path, graph_path=graph_path)
+
+
 @mcp.tool
 @_release_catalog
 def generate_guided_conversation(

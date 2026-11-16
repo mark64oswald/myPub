@@ -91,6 +91,15 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 | MCP Server | `/kb-mcp-server <purpose>` | [`mcp_server_gen.py`](../mcp-servers/kb-mcp/mcp_server_gen.py) | MCP server skeleton for MCP 2026-07-28: Python or TypeScript, optional MCP Apps view and skills, server.json |
 | Plugin Scaffold | `/kb-plugin-scaffold <purpose>` | [`plugin_scaffold.py`](../mcp-servers/kb-mcp/plugin_scaffold.py) | Claude Code plugin (as a local marketplace) with KB skills, workflow commands, hooks and an optional MCP server |
 
+### Open Data Products
+
+| Generator | Slash command | Source file | What it does |
+|---|---|---|---|
+| Data Contract | `/kb-data-contract <table>` | [`odcs_contract_gen.py`](../mcp-servers/kb-mcp/odcs_contract_gen.py) | ODCS v3.1.0 contract for an existing table (DDL or column list): schema, quality rules, SLA, server block; checked against the ODCS JSON Schema |
+| Data Product Portfolio | `/kb-dp-portfolio <portfolio>` | [`odp_portfolio_gen.py`](../mcp-servers/kb-mcp/odp_portfolio_gen.py) | Product, use case and objective ideas → ODPS products, ODPC catalog fragments, an ODPG value graph and a recipe; built and validated with the SDK |
+| Data Product Recipe | `/kb-dp-recipe <product>` | [`odp_recipe_gen.py`](../mcp-servers/kb-mcp/odp_recipe_gen.py) | ODPR recipes for a product: a CI recipe (validate + explain) and an agent recipe with a KB-grounded build plan and a handoff brief |
+| Data Product Review | `/kb-dp-review <odps file>` | [`odp_review_gen.py`](../mcp-servers/kb-mcp/odp_review_gen.py) | Grades an ODPS 4.2 file section by section (A–F) against the specs and *Data Product Portfolios*, plus SDK, ODCS and graph checks and a fix list |
+
 
 ---
 
@@ -506,6 +515,46 @@ Skills come from `--skills` topics; `--workflows` adds command-style skills with
 `commands/`); `--hooks` adds a PostToolUse example; `--mcp` adds
 `servers/<name>-server/` wired in through `.mcp.json` and
 `${CLAUDE_PLUGIN_ROOT}`. Output passes `claude plugin validate`.
+
+## Open Data Products
+
+Four generators build on the ODP spec family loaded as live docs (see
+[odp-family-map.md](odp-family-map.md)) and share `odp_gen.py`. Every
+output is checked by machine, not by eye: the ODCS JSON Schema (vendored at
+`data/odp/odcs-json-schema-v3.1.0.json`, needs `jsonschema`) and, when the
+`open-data-products` SDK is on PATH, `odp validate`, `odp recipe validate`,
+`odp odpc-build` and `odp odpg-analyze`. Results land in `_validation.md`.
+Without the SDK the packages are still written and the notes say which
+checks were skipped.
+
+**`/kb-data-contract <table>`** turns a table you already have into an ODCS
+v3.1.0 contract. Give it DDL (`CREATE TABLE …`, nested types and
+`PRIMARY KEY` are understood) or short column specs (`name type pk|required
+-- description`). It maps types to ODCS logical types, flags likely personal
+data as `restricted`, adds library quality rules (null, duplicate, row
+count), a starter SLA and a schema-valid server block for Databricks,
+Snowflake, BigQuery, Postgres, an API or a local file. A checklist and a
+fill-in prompt cover what only a person can decide.
+
+**`/kb-dp-portfolio <portfolio>`** takes product, use-case and objective
+ideas (`Name: description => linked, names`) and writes one ODPS product
+and ODCS contract per product, ODPC fragments, an ODPG graph whose
+`uses`/`supports`/`contributesTo`/`measures` edges follow your links, a
+recipe and a Makefile. It then builds the ODPC catalog and runs
+`odpg-analyze`, reporting orphan KPIs and unlinked products as advice.
+
+**`/kb-dp-recipe <product>`** reads an existing ODPS file (or a short
+description) and writes ODPR recipes: a `ci` recipe and an `agent` recipe
+whose `x-mypub-buildPlan` lists platform steps drawn from KB procedures,
+plus a handoff README for the agent. Both pass `recipe validate` and
+`recipe dry-run`.
+
+**`/kb-dp-review <odps file>`** scores nine ODPS sections 0–2 (weights:
+details 3; strategy, contract, SLA, quality, access 2; license, data holder
+1; pricing advice only), treats placeholders and zero targets as partial,
+and caps the grade at C when the SDK rejects the file. It also checks the
+referenced contract and graph, and writes `review.md`, `findings.json` and
+an apply-fixes prompt.
 
 ## Common patterns across generators
 
