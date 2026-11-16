@@ -353,3 +353,83 @@ def test_routed_profile_falls_back_to_stack_in_generator(catalog):
     assert d.stack.profile is None
     assert d.stack.name == "python"
     assert any("own generator" in n for n in d.notes)
+
+
+# ---------------------------------------------------------------------------
+# Data product (Open Data Product standards)
+# ---------------------------------------------------------------------------
+
+import odp_profile  # noqa: E402
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("Customer churn data product on Databricks", "data-product"),
+    ("Describe our sales feed with ODPS 4.2", "data-product"),
+    ("An MCP server that serves our data products", "mcp-server"),
+    ("Databricks pipeline for claims", "databricks"),
+])
+def test_data_product_detection(query, expected):
+    assert bp.detect_profile(query).name == expected
+    assert bp.detect_profile("anything", "odp").name == "data-product"
+
+
+@pytest.mark.parametrize("query,platform", [
+    ("Churn data product shared with Delta Sharing", "databricks"),
+    ("Sales data product on Snowflake", "snowflake"),
+    ("Supplier risk data product behind a REST API", "api"),
+    ("Supplier risk data product", "generic"),
+])
+def test_data_product_platform(query, platform):
+    data, notes = odp_profile.prepare(query, {})
+    assert data["platform"] == platform
+    assert notes
+
+
+_DP_REQUEST = ('Build a customer churn data product on Databricks with Delta Sharing. '
+               'It gives "retention" analysts weekly churn scores.')
+
+
+def test_data_product_package_is_consistent(catalog, tmp_path):
+    yaml = pytest.importorskip("yaml")
+    _, pkg, issues = _generate(catalog, tmp_path, _DP_REQUEST, project_name="customer-churn")
+    assert not [i for i in issues if i.severity == "error"]
+
+    odps = yaml.safe_load((pkg / "products/customer-churn.odps.yaml").read_text())
+    details = odps["product"]["details"]["en"]
+    assert odps["version"] == "4.2" and details["productID"] == "customer-churn"
+    assert '"retention"' in details["description"]           # quotes survive YAML
+    assert odps["product"]["dataAccess"]["default"]["outputPortType"] == "Delta Sharing"
+    assert odps["product"]["contract"]["default"]["contractURL"] == \
+        "../contracts/customer-churn.odcs.yaml"
+
+    graph = yaml.safe_load((pkg / "graph/customer-churn.odpg.yaml").read_text())["graph"]
+    node_ids = {n["id"] for n in graph["nodes"]}
+    assert all(e["from"] in node_ids and e["to"] in node_ids for e in graph["edges"])
+    for n in graph["nodes"]:                                 # every $ref resolves
+        target = (pkg / "graph" / n["$ref"].split("#")[0]).resolve()
+        assert target.is_file(), n
+
+    ref = yaml.safe_load((pkg / "catalog/fragments/product_reference_customer-churn.yaml")
+                         .read_text())["productReference"]
+    assert (pkg / ref["productModel"]["$ref"]).is_file()
+    contract = yaml.safe_load((pkg / "contracts/customer-churn.odcs.yaml").read_text())
+    assert contract["id"] == odps["product"]["contract"]["default"]["id"]
+    assert ".gitignore" in {p.name for p in pkg.iterdir()}
+
+    # Request-specific spec files go to sub-agents; tooling is complete.
+    pending = {p.relative_path for p in br.dispatch_manifest(pkg)}
+    assert "products/customer-churn.odps.yaml" in pending
+    assert "Makefile" not in pending and "recipes/validate.recipe.yaml" not in pending
+
+
+def test_data_product_package_passes_the_sdk(catalog, tmp_path):
+    """Runs the generated Makefile against open-data-products, when it's installed."""
+    import shutil
+    odp = shutil.which("open-data-products")
+    if odp is None or shutil.which("make") is None:
+        pytest.skip("open-data-products SDK (or make) not installed")
+    _, pkg, _ = _generate(catalog, tmp_path, _DP_REQUEST, project_name="customer-churn")
+    proc = subprocess.run(["make", "all", f"ODP={odp}"], cwd=pkg, capture_output=True,
+                          text=True, timeout=300)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (pkg / "catalog/customer-churn.odpc.yaml").is_file()

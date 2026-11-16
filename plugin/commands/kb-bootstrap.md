@@ -61,6 +61,14 @@ Call `generate_project_bootstrap` with:
     into `.claude/lexa-capabilities.json`. Enabling the plugin in
     `.claude/settings.json` is what starts Lexa's MCP servers in the new
     project. With no plugin installed it uses a built-in snapshot and says so.
+  - `data-product` — a data product described with the Open Data Product
+    standards, not code: an ODPS 4.2 product, an ODCS 3.1 data contract,
+    ODPC catalog fragments (use case, business objective + KPI, product
+    reference), an ODPG value graph, an ODPR recipe, a `handoff/` folder
+    and a Makefile that validates everything with the `open-data-products`
+    SDK (`make all`). `dataAccess` is shaped for Databricks / Delta
+    Sharing, Snowflake or a REST API when the request names one. Keywords:
+    data product, ODPS, open data product. Aliases: `odp`, `odps`.
   - `claude-plugin`, `mcp-server`, `mcp-app` — routed to
     `generate_plugin_scaffold` / `generate_mcp_server` (`ui=True` for an
     app). The response says `routed_to`; call those tools directly for
