@@ -80,3 +80,26 @@ git clone --depth 1 https://github.com/databricks-industry-solutions/lakehouse-i
 
 Loading all 41 MVMs and OMOP takes about 10 seconds, and classifying them
 another 10.
+
+## Reviewing a model (`/kb-model-review`)
+
+`model_review_gen.py` grades a data model against the patterns, not just
+structural rules. Input is a Databricks `model.json` (or its folder), DDL,
+or a loaded reference model (`databricks:healthcare`, `ref:<id>`).
+
+| section | weight | what it flags |
+|---|---|---|
+| Party and roles | 3 | two or more role tables each carrying name/birth date/SSN |
+| One owner per concept | 3 | a `single_owner` pattern (coverage) held in several domains; cross-domain name + column overlap |
+| Contact mechanisms | 2 | address/phone/e-mail columns inline on several tables |
+| Relationship provenance | 2 | FKs whose reference is "LLM Generated Cross-Domain Link" |
+| Structure | 2 | FK cycles, tables without a PK, unconnected tables |
+| Status history | 1 | transactional tables with a status column and no history table |
+| Classification | 1 | free-text `_type`/`_code`/`_category` columns |
+| Reference comparison | 1 | Silverston Vol. 2 / OMOP entities with no counterpart |
+
+Each finding cites the pattern's books (via `patterns.yaml`) and carries a
+vibe; `vibes.txt` lists them in order of severity. The healthcare MVM v2
+grades **D**: four role tables copy person identity, insurance coverage is
+held in six tables across four domains, nine tables inline addresses, and
+741 of 1,056 FKs are LLM-generated links.

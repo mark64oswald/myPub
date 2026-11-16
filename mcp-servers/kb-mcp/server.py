@@ -4022,6 +4022,42 @@ def review_dp_product(
 
 @mcp.tool
 @_release_catalog
+def review_data_model(
+    model: str,
+    industry: Optional[str] = None,
+    compare: bool = True,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Review a data model against the data model patterns in the library.
+
+    Checks what structural rule sets don't: Party and roles (person identity
+    copied onto each role), one owner per concept (coverage modeled several
+    times), contact mechanisms, status history, classification tables,
+    LLM-invented relationships, FK cycles / missing PKs, and coverage against
+    Silverston Vol. 2 and OMOP when loaded. Each finding cites the books that
+    teach the pattern and carries a "vibe": a change request ready to paste
+    into the Databricks Vibe Data Modeling agent. Writes ``review.md``,
+    ``findings.json``, ``vibes.txt``.
+
+    Args:
+        model: A Databricks ``model.json`` (or its folder), a DDL file or folder
+            of ``.sql`` files, ``ref:<id>``, or ``<source>:<industry>[:<flavour>]``
+            for a reference model in the catalog (e.g. ``databricks:healthcare``).
+        industry: Industry name, for the reference comparison (guessed from the path).
+        compare: Compare with Silverston / OMOP reference models when loaded.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import model_review_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(model_review_gen.make_model_review_generator(), model,
+                         output_root, overwrite, model=model, industry=industry,
+                         compare=compare)
+
+
+@mcp.tool
+@_release_catalog
 def generate_guided_conversation(
     goal: str,
     output: str,
