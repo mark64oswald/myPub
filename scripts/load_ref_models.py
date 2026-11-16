@@ -17,6 +17,10 @@ Sources:
     per page; ``load-silverston`` loads them. Files stay in the gitignored
     data/ref_models/silverston/.
   * OMOP CDM 5.4 — the OHDSI field/table CSVs (Apache 2.0), fetched.
+  * CDISC SDTMIG 3.4 variable metadata (``load-sdtm``), from the cdiscdata R
+    package's ig_sdtm.rda (CDISC terms: reference-only, local only; needs
+    ``pip install rdata``).
+  * GA4GH Phenopackets v2 + VRS protobufs (``load-phenopackets``, BSD-3).
   * Any DDL file (``load-ddl``).
 
 Typical run on the Mac (one writer at a time; LLM steps are Claude Code
@@ -53,6 +57,7 @@ sys.path.insert(0, str(ROOT / "mcp-servers" / "kb-mcp"))
 import ref_models as rm  # noqa: E402
 
 DEFAULT_CATALOG = ROOT / "data" / "catalog.ddb"
+CACHE_DIR = ROOT / "data" / "ref_models" / "cache"   # gitignored
 SILVERSTON_DIR = ROOT / "data" / "ref_models" / "silverston"
 DMRB2_GLOB = "The Data Model Resource Book, Vol. 2*.epub"
 EBOOKS = Path.home() / "Documents" / "eBooks"
@@ -205,6 +210,79 @@ def cmd_load_omop(args) -> int:
     finally:
         conn.close()
     return 0
+
+
+# ---------------------------------------------------------------------------
+# CDISC SDTM, GA4GH Phenopackets
+# ---------------------------------------------------------------------------
+
+def _store(model, args, label: str) -> int:
+    n_attr = sum(len(e.attributes) for e in model.entities)
+    if args.dry_run:
+        LOG.info("%s: %d entities, %d attributes, %d relationships", label,
+                 len(model.entities), n_attr, len(model.relationships()))
+        return 0
+    conn = _conn(args.catalog)
+    try:
+        mid = rm.load_model(conn, model)
+        LOG.info("#%d %s: %d entities, %d attributes, %d relationships", mid, label,
+                 len(model.entities), n_attr, len(model.relationships()))
+    finally:
+        conn.close()
+    return 0
+
+
+def sdtm_rows(rda: Path) -> list[dict]:
+    """Rows of cdiscdata's ig_sdtm table (needs ``pip install rdata``)."""
+    try:
+        import rdata  # noqa: PLC0415
+    except ImportError as exc:
+        raise SystemExit("load-sdtm needs the rdata package: .venv/bin/pip install rdata") from exc
+    df = rdata.read_rda(str(rda))["ig_sdtm"]
+    return df.astype(object).where(df.notna(), None).to_dict("records")
+
+
+def cmd_load_sdtm(args) -> int:
+    path = Path(args.rda).expanduser() if args.rda else CACHE_DIR / "ig_sdtm.rda"
+    if not path.is_file():
+        import httpx  # noqa: PLC0415
+        path.parent.mkdir(parents=True, exist_ok=True)
+        r = httpx.get(rm.SDTM_RDA_URL, timeout=60, follow_redirects=True)
+        r.raise_for_status()
+        path.write_bytes(r.content)
+    model = rm.parse_sdtm(sdtm_rows(path), version=args.version, standard=args.standard)
+    if not model.entities:
+        raise SystemExit(f"no {args.standard} v{args.version} rows in {path}")
+    return _store(model, args, model.name)
+
+
+def fetch_proto_tree(root: str, entry: str) -> dict[str, str]:
+    """``entry`` and everything it imports (google/* skipped), fetched over HTTP."""
+    import httpx  # noqa: PLC0415
+    files: dict[str, str] = {}
+    todo = [entry]
+    while todo:
+        path = todo.pop()
+        if path in files or path.startswith("google/"):
+            continue
+        r = httpx.get(rm.PROTO_SYMLINKS.get(path, root + path), timeout=60,
+                      follow_redirects=True)
+        if r.status_code != 200:
+            LOG.warning("skip %s (HTTP %d)", path, r.status_code)
+            continue
+        files[path] = r.text
+        todo += rm.proto_imports(r.text)
+    return files
+
+
+def cmd_load_phenopackets(args) -> int:
+    if args.proto_dir:
+        base = Path(args.proto_dir).expanduser()
+        files = {str(p.relative_to(base)): p.read_text() for p in base.rglob("*.proto")}
+    else:
+        files = fetch_proto_tree(rm.PHENOPACKETS_PROTO_ROOT, rm.PHENOPACKETS_ENTRY)
+    model = rm.parse_proto_model(files)
+    return _store(model, args, model.name)
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +516,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     s.add_argument("--table-csv")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_load_omop)
+
+    s = sub.add_parser("load-sdtm", help="load CDISC SDTMIG variable metadata (reference-only)")
+    s.add_argument("--rda", help="cdiscdata's data/ig_sdtm.rda (fetched if omitted)")
+    s.add_argument("--version", default="3.4")
+    s.add_argument("--standard", default="SDTMIG")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_load_sdtm)
+
+    s = sub.add_parser("load-phenopackets", help="load GA4GH Phenopackets v2 (+VRS) protobufs")
+    s.add_argument("--proto-dir", help="local proto root (fetched from GitHub if omitted)")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_load_phenopackets)
 
     s = sub.add_parser("silverston-pages", help="extract Vol. 2 appendix pages + prompts")
     s.add_argument("--industry", action="append", required=True)
