@@ -79,6 +79,7 @@ LOG = logging.getLogger("seed_odp_family")
 SPEC_AUTHORITY = 0.90
 GUIDE_AUTHORITY = 0.80
 FAQ_AUTHORITY = 0.70
+TUTORIAL_AUTHORITY = 0.75
 MAP_AUTHORITY = 0.60      # our own summary: never outranks the specs
 
 RELATION_TYPES = {"REQUIRES", "EXTENDS", "CONTRASTS_WITH", "IMPLEMENTS", "CITES"}
@@ -121,6 +122,29 @@ SDK_GUIDES = [
     ("Data Contract workflows", "docs/user/data-contracts.md"),
     ("portfolio intake", "docs/user/portfolio-intake.md"),
     ("API reference", "docs/user/API.md"),
+    # Second layer (2026-11-16), linked from the full SDK guide.
+    ("recipe catalog", "docs/recipes/catalog.md"),
+    ("recipe examples", "docs/recipes/examples.md"),
+    ("llms.txt agent summary", "llms.txt"),
+    ("portfolio model design", "docs/development/portfolio.md"),
+]
+
+# odps-knowledge-base/sdk: the step-by-step SDK tutorial track (2026-11-16).
+KB_SDK_PAGES = [
+    ("SDK tutorials index", "sdk/README.md"),
+    ("recipe workflows reference", "sdk/recipe-workflows-reference.md"),
+    ("recipe examples", "sdk/recipes/README.md"),
+]
+KB_SDK_TUTORIALS = [
+    "00-setup-python", "01-validate-product", "02-explain-and-summarize",
+    "03-use-vocabulary-helpers", "04-convert-graph-to-odpg", "05-llm-generate-one-signal",
+    "06-llm-use-online-provider", "07-llm-generate-fragment-set",
+    "08-llm-full-cycle-catalog-and-graph", "09-build-catalog-and-graph-from-fragments",
+    "10-set-up-local-llm-qwen", "11-configure-llms-with-local-config-file",
+    "12-why-recipes-and-what-they-run", "13-validate-list-and-dry-run-recipes",
+    "14-recipe-config-and-execution-policy", "15-run-deterministic-recipes",
+    "16-run-llm-backed-recipes", "17-portfolio-recipes-end-to-end",
+    "18-recipes-for-agents-and-ci",
 ]
 
 # odps-knowledge-base/faq (validate.md is a one-line pointer, left out).
@@ -147,6 +171,11 @@ ODP_SOURCE_SEEDS: list[dict[str, Any]] = [
     *[_gh(f"ODP SDK: {title}", SDK, path, GUIDE_AUTHORITY) for title, path in SDK_GUIDES],
     *[_gh(f"ODP knowledge base FAQ: {slug}", KB, f"faq/{slug}.md", FAQ_AUTHORITY, ttl=30)
       for slug in KB_FAQS],
+    *[_gh(f"ODP knowledge base: {title}", KB, path, TUTORIAL_AUTHORITY, ttl=30)
+      for title, path in KB_SDK_PAGES],
+    *[_gh(f"ODP SDK tutorial {slug[:2]}: {slug[3:].replace('-', ' ')}", KB,
+          f"sdk/{slug}/README.md", TUTORIAL_AUTHORITY, ttl=30)
+      for slug in KB_SDK_TUTORIALS],
     *[_gh(f"ODCS: {title}", BITOL, path, GUIDE_AUTHORITY + 0.05, ttl=30)
       for title, path in ODCS_PAGES],
     {"name": "ODP family map (myPub)", "source_type": "github_raw",
