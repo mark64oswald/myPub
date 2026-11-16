@@ -405,6 +405,7 @@ def test_data_product_package_is_consistent(catalog, tmp_path):
     graph = yaml.safe_load((pkg / "graph/customer-churn.odpg.yaml").read_text())["graph"]
     node_ids = {n["id"] for n in graph["nodes"]}
     assert all(e["from"] in node_ids and e["to"] in node_ids for e in graph["edges"])
+    assert any(e["type"] == "governedBy" for e in graph["edges"])          # not ungoverned
     for n in graph["nodes"]:                                 # every $ref resolves
         target = (pkg / "graph" / n["$ref"].split("#")[0]).resolve()
         assert target.is_file(), n

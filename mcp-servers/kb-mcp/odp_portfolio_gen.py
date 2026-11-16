@@ -157,6 +157,15 @@ def graph_doc(portfolio: str, products: Sequence[Item], use_cases: Sequence[Item
         for p in contributing.values():
             edges.append({"from": f"DP-{og.upper_id(p.slug)}", "to": oid, "type": "contributesTo",
                           "confidence": "medium"})
+    # Governance: every product is governedBy the portfolio policy and by its own data
+    # contract, so odpg-analyze finds no ungoverned assets.
+    pol = f"POL-{pid}"
+    nodes.append({"id": pol, "type": "Policy", "$ref": f"../{policy_path(portfolio)}"})
+    for p in products:
+        dp, ctr = f"DP-{og.upper_id(p.slug)}", f"POL-{og.upper_id(p.slug)}-CONTRACT"
+        nodes.append({"id": ctr, "type": "Policy", "$ref": f"../contracts/{p.slug}.odcs.yaml"})
+        edges += [{"from": dp, "to": pol, "type": "governedBy", "confidence": "high"},
+                  {"from": dp, "to": ctr, "type": "governedBy", "confidence": "high"}]
     doc = {"schema": odp_profile.ODPG_SCHEMA, "version": "1.0", "kind": "Graph", "graph": {
         "metadata": {"id": f"GRAPH-{pid}", "name": {"en": f"{portfolio} value graph"},
                      "description": {"en": "Products, use cases, objectives and KPIs, connected."}},
@@ -166,6 +175,46 @@ def graph_doc(portfolio: str, products: Sequence[Item], use_cases: Sequence[Item
         "open-data-products odpv-relationship <from-type> <type> <to-type>.\n"
         "contributesTo edges are derived (product used by a use case that supports the\n"
         "objective), so they carry medium confidence until someone confirms them."))
+
+
+def policy_path(portfolio: str) -> str:
+    return f"governance/{og.slug(portfolio)}.policy.yaml"
+
+
+def policy_doc(portfolio: str, products: Sequence[Item]) -> str:
+    """A starter portfolio policy in the spirit of Minimum Lovable Governance: a few
+    rules people can follow on day one, each with an owner and a check, rather than a
+    framework nobody reads. Not an ODP spec kind; the graph points at it as a Policy."""
+    pid = og.upper_id(og.slug(portfolio))
+    rules = [
+        ("ownership", "Every data product names a business owner and a technical owner.",
+         "product.details.en has an owner; ODCS team lists both roles"),
+        ("contract-first", "No product ships without an ODCS contract its consumers agreed to.",
+         "contracts/<product>.odcs.yaml exists, passes the ODCS schema, status active"),
+        ("quality-gates", "Quality rules in the contract run on every refresh; failures block "
+         "publishing.", "contract quality rules wired into the pipeline"),
+        ("access", "Access goes through the product's declared access method and is granted "
+         "per consumer, not per table.", "product.dataAccess default set; grants reviewed"),
+        ("personal-data", "Columns flagged restricted in a contract are masked or excluded "
+         "before sharing.", "no restricted column in an output port without a masking rule"),
+        ("value-review", "Each product's KPI is reviewed against its target every quarter; "
+         "products with no consumer for two quarters are retired.", "graph KPIs have targets"),
+    ]
+    doc = {
+        "kind": "PortfolioPolicy", "id": f"POL-{pid}", "version": "0.1.0", "status": "draft",
+        "name": f"{portfolio} governance policy",
+        "approach": "Minimum lovable governance: start with the few rules that protect "
+                    "consumers, automate their checks, add rules only when a real problem "
+                    "shows up.",
+        "owner": "TODO: governance lead",
+        "appliesTo": [f"products/{p.slug}.odps.yaml" for p in products],
+        "rules": [{"id": r, "rule": text, "check": chk, "owner": "TODO"} for r, text, chk in rules],
+        "reviewCadence": "quarterly",
+    }
+    return og.dump_yaml(doc, (
+        "Portfolio governance policy (myPub starter, not an ODP spec kind).\n"
+        "The ODPG graph links every product to this file with governedBy edges.\n"
+        "Trim rules you don't need; add one only when a real problem shows up."))
 
 
 def recipe_doc(portfolio: str, products: Sequence[Item], catalog_path: str, graph_path: str
@@ -235,6 +284,7 @@ A data product portfolio in the Open Data Product standards: {len(products)} pro
 | `catalog/fragments/` | ODPC product references, use cases, objectives + KPIs |
 | `{catalog_path}` | The ODPC catalog built from the fragments (`make catalog`) |
 | `{graph_path}` | ODPG value graph |
+| `governance/` | Starter governance policy; every product is `governedBy` it and its contract |
 | `recipes/validate.recipe.yaml` | ODPR recipe: validate, then build |
 | `guidance.md` | What the library says about portfolios |
 
@@ -264,7 +314,8 @@ def guidance(tm: Optional[ks.TopicMaterial], cites: Sequence[ks.Citation]) -> st
               "- [ ] Every use case names a decision and who makes it.",
               "- [ ] Every objective has a KPI with a baseline and a target date.",
               "- [ ] Derived `contributesTo` edges in the graph are confirmed or removed.",
-              "- [ ] Priorities (`portfolioPriority`, `priority`) reflect the real ranking.", ""]
+              "- [ ] Priorities (`portfolioPriority`, `priority`) reflect the real ranking.",
+              "- [ ] The governance policy has owners, and its rules are ones you'll enforce.", ""]
     lines.append(ks.render_citations(cites, "Spec sections and books behind this layout"))
     return "\n".join(lines)
 
@@ -350,6 +401,7 @@ class PortfolioPlanner:
                 uc, uc_products[uc.slug])
         for o in objectives:
             files[f"catalog/fragments/business_objective_{o.slug}.yaml"] = objective_fragment(o)
+        files[policy_path(portfolio)] = policy_doc(portfolio, products)
         files[graph_path] = graph_doc(portfolio, products, use_cases, uc_products, objectives,
                                       obj_use_cases)
         files["recipes/validate.recipe.yaml"] = recipe_doc(portfolio, products, catalog_path,

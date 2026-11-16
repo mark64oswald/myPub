@@ -2613,9 +2613,9 @@ it, then review what was written.
 | Order | Command | Generator type | Input | Output | Machine check |
 |---:|---|---|---|---|---|
 | 1 | `/kb-data-contract` | `data_contract` | DDL or column list, platform | `<name>.odcs.yaml` + checklist | ODCS JSON Schema |
-| 2 | `/kb-dp-portfolio` | `dp_portfolio` | product / use case / objective ideas | ODPS + ODCS per product, ODPC fragments + catalog, ODPG graph, recipe | `odp validate`, `odpc-build`, `odpg-analyze` |
+| 2 | `/kb-dp-portfolio` | `dp_portfolio` | product / use case / objective ideas | ODPS + ODCS per product, ODPC fragments + catalog, ODPG graph, recipe | `open-data-products validate`, `odpc-build`, `odpg-analyze` |
 | 3 | `/kb-dp-recipe` | `dp_recipe` | ODPS file or description | `ci` + `agent` ODPR recipes, handoff brief | `recipe validate`, `recipe dry-run` |
-| 4 | `/kb-dp-review` | `dp_review` | ODPS file (+ contract, graph) | `review.md`, `findings.json`, fix prompt | `odp validate`, ODCS schema, `odpg-analyze` |
+| 4 | `/kb-dp-review` | `dp_review` | ODPS file (+ contract, graph) | `review.md`, `findings.json`, fix prompt | `open-data-products validate`, ODCS schema, `odpg-analyze` |
 
 Shared pieces live in `odp_gen.py` (column parsing, ODCS building, platform
 detection, SDK runner). Each generator is deterministic; the `_prompts/`
