@@ -42,6 +42,7 @@ from typing import Callable, Optional
 
 import agent_skills
 import lexa_plugin
+import odp_profile
 
 MARKER = "TODO: populate from stack context"
 
@@ -919,10 +920,41 @@ MCP_SERVER = Profile(
     keywords=["mcp server", "mcp-server", "model context protocol server"],
 )
 
+DATA_PRODUCT = Profile(
+    name="data-product",
+    description="Data product specified with the Open Data Product standards "
+                "(ODPS 4.2 + ODPC + ODPG + ODPR + ODCS), validated by the SDK",
+    keywords=["data product", "data-product", "odps", "open data product",
+              "data product specification", "odpc", "odpg", "odpr"],
+    files=odp_profile.FILES,
+    required_files=odp_profile.REQUIRED_FILES,
+    renderers=odp_profile.RENDERERS,
+    guidance=[
+        "The deliverable is a set of ODP spec files, not code: products/*.odps.yaml "
+        "(ODPS 4.2) is the source of truth; catalog fragments (ODPC 1.0), the graph "
+        "(ODPG 1.0) and the recipe (ODPR 1.0) point at it by id and $ref.",
+        "Every YAML file must pass `open-data-products validate <file>` (SDK 0.7+); "
+        "keep the required ODPS keys (schema, version, product.details.en with "
+        "productID, name, visibility, status, type).",
+        "Name things with ODPV terms and use ODPV relationship names as ODPG edge "
+        "types (uses, supports, contributesTo, measures, dependsOn, governedBy).",
+        "The ODPS contract block points at an ODCS v3.1.0 data contract in contracts/; "
+        "define the schema there, not in the ODPS file.",
+        "Never invent SLA, data quality or KPI numbers: keep the draft value and add "
+        "the question to handoff/open-questions.md.",
+    ],
+    anchors=["Open Data Product Specification", "Open Data Product Catalogs",
+             "Open Data Product Graphs", "Open Data Product Vocabulary",
+             "Open Data Product Recipe Specification", "Open Data Contract Standard",
+             "Data Product", "Data Contract"],
+    gitignore=odp_profile.GITIGNORE,
+    prepare=odp_profile.prepare,
+)
+
 # Order matters for keyword detection: the products this project owns first, then
 # the kind of artifact (a plugin about Databricks is a plugin), then platforms.
 PROFILES: dict[str, Profile] = {p.name: p for p in (
-    LEXA, HEALTHSIM, CLAUDE_PLUGIN, MCP_APP, MCP_SERVER, DATABRICKS)}
+    LEXA, HEALTHSIM, CLAUDE_PLUGIN, MCP_APP, MCP_SERVER, DATA_PRODUCT, DATABRICKS)}
 
 ALIASES = {
     "dab": "databricks", "dabs": "databricks", "bundle": "databricks",
@@ -933,6 +965,8 @@ ALIASES = {
     "mcp_app": "mcp-app", "mcp-apps": "mcp-app", "extension": "mcp-app",
     "app": "mcp-app",
     "lexa-bioscience": "lexa", "health-sim": "healthsim",
+    "odp": "data-product", "odps": "data-product", "data_product": "data-product",
+    "dataproduct": "data-product",
 }
 
 
