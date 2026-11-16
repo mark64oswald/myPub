@@ -54,6 +54,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 | Tutorial | `/kb-tutorial <topic>` | [`tutorial.py`](../mcp-servers/kb-mcp/tutorial.py) | Step-by-step walkthrough backed by procedures |
 | Content Brief | `/kb-content-brief <topic>` | [`content_brief.py`](../mcp-servers/kb-mcp/content_brief.py) | Article / blog skeleton with key points and sources |
 | Pattern + Anti-Pattern Catalog | `/kb-pattern-catalog <topic>` | [`pattern_catalog.py`](../mcp-servers/kb-mcp/pattern_catalog.py) | Patterns with canonical implementations + anti-patterns to avoid |
+| Guided Conversation | `/kb-guided-conversation <goal> --output <X>` | [`guided_conversation.py`](../mcp-servers/kb-mcp/guided_conversation.py) | A workflow Agent Skill that drives a chat from a goal to an output (document, plan, decision, code or checklist), one question at a time: frame → prerequisite checks (REQUIRES) → decisions (CONTRASTS_WITH) → procedures → produce → review. Topic-gated; also writes `conversation.json` |
 
 ### Decisions & strategy
 
@@ -77,6 +78,7 @@ Defined in [`mcp-servers/kb-mcp/generator.py`](../mcp-servers/kb-mcp/generator.p
 | Generator | Slash command | Source file | What it does |
 |---|---|---|---|
 | **Project Bootstrap** ★ | `/kb-bootstrap <description>` | [`project_bootstrap.py`](../mcp-servers/kb-mcp/project_bootstrap.py) | Runnable scaffold for any of 8 language stacks (python / rust / node / typescript / java / go / csharp / ruby), inferred from request keywords; emits a generic skeleton if no signal — never Python-by-default |
+| ↳ Bootstrap profiles | `/kb-bootstrap … profile=<name>` | [`bootstrap_profiles.py`](../mcp-servers/kb-mcp/bootstrap_profiles.py) | Category layer over the stacks: `databricks` (Declarative Automation Bundle: pipeline + job + wheel + offline tests), `healthsim` (project using the HealthSim plugin for synthetic test data), `lexa` (custom agent on Lexa BioScience with its guard rails; skills and MCP tools read from the installed plugin via [`lexa_plugin.py`](../mcp-servers/kb-mcp/lexa_plugin.py)); `claude-plugin` / `mcp-server` / `mcp-app` route to the scaffold generators. Detected from keywords when not passed. Walkthrough: [guides/bootstrap-profiles-and-guided-conversation.md](guides/bootstrap-profiles-and-guided-conversation.md) |
 | Refactoring Playbook | `/kb-refactoring <pattern>` | [`refactoring_playbook.py`](../mcp-servers/kb-mcp/refactoring_playbook.py) | Targeted refactor with before/after snippets |
 
 ★ User's #1 motivating example. See [Project Bootstrap](#project-bootstrap) below for the canonical CQRS+Kafka+HL7 walkthrough.

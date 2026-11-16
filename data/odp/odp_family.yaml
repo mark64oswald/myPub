@@ -1,0 +1,152 @@
+# Open Data Product (ODP) standards family: the hand-checked spec map.
+#
+# Read by scripts/seed_odp_family.py. Each spec becomes one concept (with
+# aliases); each edge becomes a concept_relation row anchored to the
+# section of docs/odp-family-map.md that states it, so concept maps and
+# find_prerequisites can show where the edge comes from.
+#
+# Edge types are the KB's own (REQUIRES, EXTENDS, CONTRASTS_WITH,
+# IMPLEMENTS, CITES). "A REQUIRES B" = understand B before A.
+#
+# Endpoints are spec keys below, or `concept:<Name>` for a concept that
+# must already exist in the catalog (looked up by name or alias, never
+# created). A missing `concept:` endpoint skips the edge.
+#
+# Versions as of 2026-11-16: ODPS 4.2, ODPC 1.0, ODPG 1.0, ODPV 1.1,
+# ODPR 1.0 (draft), SDK open-data-products 0.7.0, ODCS 3.1.
+
+specs:
+  - key: odps
+    name: Open Data Product Specification
+    concept_type: Concept
+    aliases: [ODPS, ODPS 4.2, Open Data Product Specification 4.2]
+    section: "ODPS: Open Data Product Specification"
+    url: https://opendataproducts.org/v4.2/
+    odpv_code: ODPS
+    description: >
+      Linux Foundation, vendor-neutral, machine-readable metadata model for
+      one data product (YAML/JSON): details, product strategy, data
+      contract, SLA, data quality, pricing plans, license, data access,
+      data holder and payment gateways. Version 4.2 (October 2026).
+
+  - key: odpc
+    name: Open Data Product Catalogs
+    concept_type: Concept
+    aliases: [ODPC, ODPC 1.0, Open Data Product Catalog specification]
+    section: "ODPC: Open Data Product Catalogs"
+    url: https://opendataproducts.org/odpc-v1.0/
+    odpv_code: ODPC
+    description: >
+      Portfolio layer around ODPS products: a Catalog of ProductReferences
+      (pointing at ODPS files through productModel.$ref), UseCases,
+      BusinessObjectives with nested KPIs, and Signals. Leaves
+      relationships to ODPG. Version 1.0 (June 2026).
+
+  - key: odpg
+    name: Open Data Product Graphs
+    concept_type: Concept
+    aliases: [ODPG, ODPG 1.0, Open Data Product Graph specification]
+    section: "ODPG: Open Data Product Graphs"
+    url: https://opendataproducts.org/odpg-v1.0/
+    odpv_code: ODPG
+    description: >
+      Relationship and intelligence layer: a Graph of typed nodes (data
+      products, use cases, objectives, KPIs, policies, APIs, agents) and
+      edges (uses, supports, contributesTo, dependsOn, governedBy...) with
+      a confidence level, for value mapping, impact analysis and AI-agent
+      traversal. Version 1.0 (June 2026).
+
+  - key: odpv
+    name: Open Data Product Vocabulary
+    concept_type: Concept
+    aliases: [ODPV, ODPV 1.1]
+    section: "ODPV: Open Data Product Vocabulary"
+    url: https://opendataproducts.org/odpv-v1.1/
+    description: >
+      Controlled vocabulary shared by the family: 78 terms in four groups
+      (core, value, governance, relationships), each with a definition,
+      aliases, related terms and the specs that use it. Published as YAML,
+      JSON, JSON-LD and SKOS Turtle, with mapping profiles to DCAT-3,
+      ODCS-3, ODRL-2, PROV-O and OpenLineage. Version 1.1 (October 2026).
+
+  - key: odpr
+    name: Open Data Product Recipe Specification
+    concept_type: Concept
+    aliases: [ODPR, ODPR 1.0, Data Product Recipe Specification, Open Data Product Recipes]
+    section: "ODPR: Open Data Product Recipes"
+    url: https://opendataproducts.org/odpr-v1.0/
+    description: >
+      Draft standard for repeatable data product work: Recipes with
+      ordered steps, gates and human review; DataProductRecipe handoff
+      manifests for developers and AI agents; RuntimeProfiles and
+      RecipeCatalogs. Reads ODPS, ODPC, ODPG and ODPV artifacts and uses
+      ODCS for contract plans. Version 1.0 draft.
+
+  - key: sdk
+    name: Open Data Products SDK
+    concept_type: Framework
+    aliases: [open-data-products, odp-agent-sdk, Open Data Products Python SDK]
+    section: "The SDK: open-data-products"
+    description: >
+      Python SDK and CLI (PyPI open-data-products, 0.7.0) for the whole
+      family: validate, explain, summarize, generate (local or hosted
+      LLMs), build ODPC catalogs and ODPG graphs, resolve ODPV terms, run
+      ODPR recipes, wrap ODCS contracts, and serve a stdio MCP server.
+
+  - key: odcs
+    name: Open Data Contract Standard
+    concept_type: Concept
+    aliases: [ODCS, ODCS v3, Bitol ODCS]
+    section: "ODCS: Open Data Contract Standard"
+    description: >
+      Bitol (Linux Foundation) standard for data contracts between
+      producers and consumers: fundamentals, schema, data quality,
+      service-level agreement, team and servers. Not part of the ODP
+      family, but ODPS contracts and ODPR contract plans build on it.
+
+edges:
+  # The family stack: ODPS first, then the portfolio and graph layers,
+  # then recipes over all of them.
+  - {from: odpc, to: odps, type: REQUIRES, confidence: 1.0}
+  - {from: odpg, to: odps, type: REQUIRES, confidence: 1.0}
+  - {from: odpg, to: odpc, type: REQUIRES, confidence: 0.9}
+  - {from: odpr, to: odps, type: REQUIRES, confidence: 1.0}
+  - {from: odpr, to: odpc, type: REQUIRES, confidence: 0.9}
+  - {from: odpr, to: odpg, type: REQUIRES, confidence: 0.9}
+  # Discovery (catalogs) versus reasoning (graphs).
+  - {from: odpg, to: odpc, type: CONTRASTS_WITH, confidence: 0.7}
+  # Shared vocabulary.
+  - {from: odps, to: odpv, type: CITES, confidence: 0.9}
+  - {from: odpc, to: odpv, type: CITES, confidence: 1.0}
+  - {from: odpg, to: odpv, type: CITES, confidence: 1.0}
+  - {from: odpr, to: odpv, type: CITES, confidence: 1.0}
+  # Data contracts.
+  - {from: odps, to: odcs, type: CITES, confidence: 0.9}
+  - {from: odpr, to: odcs, type: CITES, confidence: 0.9}
+  # The SDK implements every spec.
+  - {from: sdk, to: odps, type: IMPLEMENTS, confidence: 1.0}
+  - {from: sdk, to: odpc, type: IMPLEMENTS, confidence: 1.0}
+  - {from: sdk, to: odpg, type: IMPLEMENTS, confidence: 1.0}
+  - {from: sdk, to: odpv, type: IMPLEMENTS, confidence: 1.0}
+  - {from: sdk, to: odpr, type: IMPLEMENTS, confidence: 1.0}
+  # Into the books' concepts (only when the concept already exists).
+  - {from: odps, to: "concept:Data Product", type: IMPLEMENTS, confidence: 0.9}
+  - {from: odps, to: "concept:Data Mesh", type: CITES, confidence: 0.7}
+  - {from: odps, to: "concept:Data Contract", type: REQUIRES, confidence: 0.8}
+  - {from: odpc, to: "concept:Data Catalog", type: EXTENDS, confidence: 0.7}
+  - {from: odpg, to: "concept:Knowledge Graph", type: CITES, confidence: 0.6}
+  - {from: odpv, to: "concept:DCAT", type: CITES, confidence: 0.8}
+  - {from: odpv, to: "concept:SKOS", type: CITES, confidence: 0.8}
+  - {from: odpv, to: "concept:JSON-LD", type: CITES, confidence: 0.8}
+  - {from: odcs, to: "concept:Data Contract", type: IMPLEMENTS, confidence: 0.9}
+
+# ODPV object terms (core, value, governance) become concepts. A label of
+# one ordinary word ("Domain", "Owner", "Risk") would merge into an
+# unrelated concept of the same name, so it is qualified as
+# "<Label> (ODPV)" unless listed here as safe to merge.
+odpv:
+  file: data/odp/odpv-1.1.yaml
+  merge_single_word: [Dataset, KPI, SLA]
+  term_concept_type: Concept
+  used_in_confidence: 0.8
+  related_confidence: 0.6

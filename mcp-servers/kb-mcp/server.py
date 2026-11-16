@@ -3198,6 +3198,8 @@ def generate_project_bootstrap(
     patterns: Optional[list[str]] = None,
     project_name: Optional[str] = None,
     stack: Optional[str] = None,
+    profile: Optional[str] = None,
+    plugin_path: Optional[str] = None,
     output_root: Optional[str] = None,
     overwrite: bool = True,
 ) -> dict[str, Any]:
@@ -3223,10 +3225,32 @@ def generate_project_bootstrap(
             ``python | rust | node | typescript | java | go | csharp |
             ruby | generic``. Aliases ``py / rs / js / ts / nodejs /
             golang / cs / dotnet / kotlin`` also accepted.
+        profile: Optional project category, on top of the stack:
+            ``databricks`` (Declarative Automation Bundle: pipeline + job +
+            wheel), ``healthsim`` (project using the HealthSim plugin for
+            synthetic test data), ``lexa`` (custom agent on the Lexa
+            BioScience plugin), ``claude-plugin`` / ``mcp-server`` /
+            ``mcp-app`` (routed to generate_plugin_scaffold /
+            generate_mcp_server), or ``none``. Detected from the
+            description when omitted.
+        plugin_path: ``lexa`` only. Folder of the installed lexa-bioscience
+            plugin (or a Lexa checkout). Defaults to ``$LEXA_PLUGIN_ROOT``,
+            then Claude Code's plugin folders. Its skills and MCP tools are
+            read at generation time and written into the agent.
     """
+    # pylint: disable=import-outside-toplevel
+    import bootstrap_profiles
+    try:
+        prof = bootstrap_profiles.detect_profile(description, profile)
+    except ValueError as e:
+        return {"package_id": -1, "validation_issues": [
+            {"severity": "error", "message": str(e)}], "notes": []}
+    if prof is not None and prof.delegate:
+        return _route_bootstrap_profile(prof, description, technologies, patterns,
+                                        project_name, stack, output_root, overwrite)
+
     output_root = _resolve_output_root(output_root)
     _bootstrap()
-    # pylint: disable=import-outside-toplevel
     import project_bootstrap
     gen = project_bootstrap.make_project_bootstrap_generator()
     with _temporarily_open_writer() as rw_conn:
@@ -3235,6 +3259,7 @@ def generate_project_bootstrap(
             rw_conn, rw_resolver, description,
             technologies=technologies, patterns=patterns,
             project_name=project_name, stack=stack,
+            profile=prof.name if prof else "none", plugin_path=plugin_path,
             output_root=output_root, overwrite=overwrite,
         )
         if package_id == -1:
@@ -3253,12 +3278,51 @@ def generate_project_bootstrap(
         "n_elements": metadata.get("n_elements", 0),
         "n_files": metadata.get("n_files", 0),
         "stack": metadata.get("stack"),
+        "profile": metadata.get("profile"),
+        "profile_data": metadata.get("profile_data"),
         "stack_description": metadata.get("stack_description"),
         "file_paths": report.file_paths,
         "validation_issues": [
             {"severity": i.severity, "message": i.message} for i in issues],
         "notes": list(report.notes),
     }
+
+
+def _route_bootstrap_profile(prof: Any, description: str,
+                             technologies: Optional[list[str]],
+                             patterns: Optional[list[str]],
+                             project_name: Optional[str], stack: Optional[str],
+                             output_root: Optional[str], overwrite: bool) -> dict[str, Any]:
+    """Hand a plugin / MCP server / MCP App request to the generator that owns it."""
+    # pylint: disable=import-outside-toplevel
+    language = "typescript" if (stack or "").lower() in ("ts", "typescript", "node", "js") \
+        else "python"
+    topics = list(technologies or []) + list(patterns or [])
+    if prof.delegate == "plugin_scaffold":
+        import plugin_scaffold
+        wants_server = "mcp" in description.lower()
+        out = _run_scaffold(plugin_scaffold.make_plugin_scaffold_generator(), description,
+                            output_root, overwrite, plugin_name=project_name,
+                            skill_topics=topics,
+                            workflows=[] if (topics or wants_server) else ["Main workflow"],
+                            mcp_server=wants_server,
+                            language=language,
+                            transport="stdio", tools=[], domain=None,
+                            ui="mcp app" in description.lower(), hooks=False, author=None)
+        routed = "generate_plugin_scaffold"
+    else:
+        import mcp_server_gen
+        out = _run_scaffold(mcp_server_gen.make_mcp_server_generator(), description,
+                            output_root, overwrite, server_name=project_name,
+                            language=language, transport="stdio", tools=[],
+                            domain=None, ui=prof.delegate == "mcp_app",
+                            skill_topics=[], registry_namespace=None)
+        routed = "generate_mcp_server"
+    out["profile"] = prof.name
+    out["routed_to"] = routed
+    out["notes"] = [f"profile {prof.name!r}: built by {routed}; call it directly "
+                    "for its full options (tools, domain, transport, hooks)"] + out["notes"]
+    return out
 
 
 @mcp.tool
@@ -3789,6 +3853,57 @@ def generate_plugin_scaffold(
                          skill_topics=skill_topics or [], workflows=workflows or [],
                          mcp_server=mcp_server, language=language, transport=transport,
                          tools=tools or [], domain=domain, ui=ui, hooks=hooks, author=author)
+
+
+@mcp.tool
+@_release_catalog
+def generate_guided_conversation(
+    goal: str,
+    output: str,
+    output_type: Optional[str] = None,
+    topics: Optional[list[str]] = None,
+    audience: Optional[str] = None,
+    max_steps: int = 8,
+    skill_name: Optional[str] = None,
+    invocation: str = "user",
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate a Guided Conversation: an Agent Skill that drives a chat from a goal
+    to a finished output, one question at a time.
+
+    Steps come from the KB: frame the goal, check prerequisites (REQUIRES
+    edges), settle decisions (CONTRASTS_WITH alternatives), work through
+    linked procedures, produce the output from a per-type template, and
+    review it. Prerequisites and alternatives pass the topic gate. Writes
+    ``<skill>/SKILL.md`` + ``references/``, ``conversation.json`` (the same
+    flow, machine-readable), README, provenance and a refine prompt.
+
+    Args:
+        goal: What the user wants to achieve.
+        output: What they want at the end ("a design doc", "an ADR").
+        output_type: ``document | plan | decision | code | checklist``;
+            detected from ``output`` when omitted.
+        topics: KB concepts the goal is about; found in the goal text when omitted.
+        audience: Default audience for the output.
+        max_steps: Upper bound on steps (prerequisite and procedure steps are trimmed).
+        skill_name: Skill slug; defaults to ``guide-<goal slug>``.
+        invocation: ``user`` (slash command only, the default) or ``auto``
+            (Claude may also start it when the goal comes up).
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import guided_conversation  # pylint: disable=import-outside-toplevel
+
+    try:
+        guided_conversation.detect_output_type(output, output_type)
+    except ValueError as e:
+        return {"package_id": -1, "validation_issues": [
+            {"severity": "error", "message": str(e)}], "notes": []}
+    return _run_scaffold(guided_conversation.make_guided_conversation_generator(), goal,
+                         output_root, overwrite, output=output, output_type=output_type,
+                         topics=topics or [], audience=audience, max_steps=max_steps,
+                         skill_name=skill_name, invocation=invocation)
 
 
 # ---------------------------------------------------------------------------

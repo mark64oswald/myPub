@@ -92,7 +92,7 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-refresh` | Live-doc refresh | On-demand: plan (dry run) → sync changed pages of doc sites (`doc_sites.py`) and stale single sources; optional extraction prep |
 | `/kb-dialog` | Dialog (14) | Architect/Practitioner divergence |
 | `/kb-author-panel` | Author Panel (14) | N≥2 characters, per-topic positions |
-| `/kb-bootstrap` | Project Bootstrap (15) | **User #1.** Composes Concept→Pattern→Procedure into a project tree + sub-agent prompts. Stack-aware: detects target language (python/rust/node/typescript/java/go/csharp/ruby) from the request keywords; explicit `stack` param overrides; generic skeleton if no signal |
+| `/kb-bootstrap` | Project Bootstrap (15) | **User #1.** Composes Concept→Pattern→Procedure into a project tree + sub-agent prompts. Stack-aware: detects target language (python/rust/node/typescript/java/go/csharp/ruby) from the request keywords; explicit `stack` param overrides; generic skeleton if no signal. Profiles (`profile`, also detected): `databricks` bundle, `healthsim` test-data project, `lexa` agent; `claude-plugin` / `mcp-server` / `mcp-app` route to the scaffold generators |
 | `/kb-refactoring` | Refactoring Playbook (15) | Anti-pattern → refactor target |
 | `/kb-curriculum` | Curriculum (16) | Multi-week composite |
 | `/kb-landscape` | Library Landscape (17) | Multi-job × multi-candidate orientation; rarity-weighted scoring, keyword + vector job seeding |
@@ -100,6 +100,7 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-skill-from-kb` | Agent Skill (2026-11) | One spec-valid Agent Skill (SKILL.md + references/) from a KB concept |
 | `/kb-mcp-server` | MCP Server (2026-11) | MCP 2026-07-28 server skeleton; python or typescript; `ui` adds an MCP App, `skill_topics` serves skills |
 | `/kb-plugin-scaffold` | Plugin Scaffold (2026-11) | Claude Code plugin as a local marketplace: KB skills, workflow skills, hooks, optional MCP server |
+| `/kb-guided-conversation` | Guided Conversation (2026-11) | Workflow skill that drives a chat from a goal to an output: frame → prerequisite checks (REQUIRES) → decisions (CONTRASTS_WITH) → procedures → produce → review; topic-gated; `conversation.json` for other hosts |
 
 ## Other MCP servers
 
