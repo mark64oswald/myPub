@@ -142,3 +142,13 @@ def test_reference_matching_uses_sdtm_labels():
     model.entities = [rm.RefEntity(name="adverse_event", domain="safety")]
     fs = mr.check_reference(model, [ref])
     assert len(fs) == 1 and "VS (Vital Signs)" in fs[0].detail and "AE" not in fs[0].detail
+
+
+def test_package_name_carries_flavour(monkeypatch):
+    conn = duckdb.connect()
+    for flavour in ("mvm", "ecm"):
+        m = rm.RefModel(source="databricks", industry="healthcare", flavour=flavour,
+                        version="v2", name="Healthcare")
+        monkeypatch.setattr(mr, "load_input", lambda c, s, m=m: (m, None, ""))
+        d = mr.ModelReviewDecomposer().decompose(conn, None, "databricks:healthcare", compare=False)
+        assert mr.ModelReviewPlanner().plan(conn, d).package_name == f"model-review-healthcare-{flavour}"

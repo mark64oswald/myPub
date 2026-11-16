@@ -652,9 +652,11 @@ class ModelReviewPlanner:
     def plan(self, conn: duckdb.DuckDBPyConnection, d: dict, *,
              package_name: Optional[str] = None, **_: Any) -> GenPlan:
         model: Optional[rm.RefModel] = d["model"]
+        base = (model.name if model else "") or Path(d["spec"]).stem or "model"
+        if model is not None and model.flavour and model.flavour not in ("ddl", "x"):
+            base += f" {model.flavour}"      # MVM and ECM reviews get their own folders
         name = package_name or ("model-review-" + re.sub(
-            r"[^a-z0-9]+", "-", ((model.name if model else "") or Path(d["spec"]).stem or "model")
-            .lower()).strip("-")[:40])
+            r"[^a-z0-9]+", "-", base.lower()).strip("-")[:48])
         plan = GenPlan(generator_type=GENERATOR_TYPE, package_name=name,
                        domain="data model review", source_query=d["spec"])
         if model is None:
