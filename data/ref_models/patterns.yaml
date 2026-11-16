@@ -1,0 +1,274 @@
+# Data model patterns: the hand-checked pattern map for reference models.
+#
+# Read by mcp-servers/kb-mcp/ref_models.py. Each pattern:
+#   key        stable id used in ref_entity_concept.pattern_key
+#   name       display name; also the first name tried when resolving the
+#              pattern to a catalog concept (then aliases)
+#   aliases    other names for the concept lookup
+#   books      library books that teach the pattern, matched by title
+#              prefix; keywords pick the chapters to cite
+#   names      regexes over the snake_case entity name (full match against
+#              the name, or against any "_"-separated suffix of it)
+#   attrs      attribute-name regexes that signal the pattern (2+ hits needed
+#              when the entity name gives no signal)
+#   review     what /kb-model-review checks for this pattern, if anything
+#
+# The heuristic classifier gives name hits confidence 0.6 and attribute-only
+# hits 0.45. The subagent mapping pass (scripts/load_ref_models.py map-prep /
+# map-apply) confirms, corrects or adds links at higher confidence.
+#
+# Book titles are the ones in Mark's library (2026-11-16): Silverston's Data
+# Model Resource Book Vol. 2 and 3, Hay's two Data Model Patterns books,
+# Blaha's Patterns of Data Modeling and Fowler's Analysis Patterns.
+
+books:
+  dmrb2: "The Data Model Resource Book, Vol. 2"
+  dmrb3: "The Data Model Resource Book, Volume 3"
+  hay_meta: "Data Model Patterns - A Metadata Map"
+  hay: "Data Model Patterns"
+  blaha: "Patterns of Data Modeling"
+  fowler: "Analysis Patterns"
+
+patterns:
+  - key: party
+    name: Party
+    aliases: [Party Model, Party pattern, Parties]
+    books: [{book: dmrb3, keywords: [party]}, {book: hay, keywords: [people, organization]},
+            {book: fowler, keywords: [party]}]
+    description: >
+      One supertype for every person and organization the enterprise deals
+      with, so identity, names and contact details are held once whatever
+      role the party plays.
+    names: ['party', 'person', 'individual', 'organization', 'organisation', 'org', 'legal_entity']
+    attrs: ['first_name', 'last_name', 'middle_name', 'birth_date', 'date_of_birth', 'dob',
+            'gender', 'sex', 'ssn', 'organization_name', 'legal_name', 'tax_id', 'ein']
+
+  - key: party_role
+    name: Party Role
+    aliases: [Role pattern, Party Roles, Role]
+    books: [{book: dmrb3, keywords: [role]}, {book: dmrb2, keywords: [people and organizations]},
+            {book: hay, keywords: [role]}, {book: fowler, keywords: [role]}]
+    description: >
+      A party plays roles (patient, clinician, guarantor, member, payer).
+      Roles reference the party instead of copying its identity, so one
+      person who is both patient and guarantor exists once.
+    names: ['patient', 'member', 'subscriber', 'dependent', 'beneficiary', 'policyholder',
+            'insured', 'claimant', 'guarantor', 'emergency_contact', 'caregiver', 'clinician',
+            'practitioner', 'physician', 'nurse', 'provider', 'org_provider', 'employee', 'staff',
+            'customer', 'client', 'vendor', 'supplier', 'payer', 'insurer', 'carrier', 'agent',
+            'broker', 'producer', 'investigator', 'sponsor', 'subject', 'participant',
+            'contact', 'guardian', 'referrer']
+    review: party_role
+
+  - key: party_relationship
+    name: Party Relationship
+    aliases: [Party Relationships]
+    books: [{book: dmrb3, keywords: [relationship]}, {book: hay, keywords: [relationship]}]
+    description: >
+      A dated, typed relationship between two party roles (patient to
+      primary care provider, member to group, employee to employer).
+    names: ['.*_relationship', 'group_membership', 'membership', 'care_team_member',
+            'pcp_attribution', 'attribution', 'affiliation']
+
+  - key: contact_mechanism
+    name: Contact Mechanism
+    aliases: [Contact Mechanisms, Postal Address, Electronic Address]
+    books: [{book: dmrb3, keywords: [contact mechanism]}, {book: hay, keywords: [address]}]
+    description: >
+      Addresses, phone numbers and e-mail held as contact mechanisms linked
+      to parties by purpose and date, not as columns repeated on every role.
+    names: ['address', 'postal_address', 'phone', 'telephone', 'email', 'electronic_address',
+            'contact_mechanism', 'contact_point']
+    attrs: ['address_line_1', 'address_line1', 'street_address', 'city', 'postal_code', 'zip_code',
+            'phone_number', 'email_address']
+
+  - key: geographic_boundary
+    name: Geographic Boundary
+    aliases: [Geographic Boundaries, Geography]
+    books: [{book: dmrb3, keywords: [geographic]}]
+    description: Countries, states, counties, regions and service areas as one typed hierarchy.
+    names: ['country', 'state', 'county', 'region', 'geography', 'geographic_.*', 'service_area',
+            'census_tract', 'postal_code']
+
+  - key: party_identification
+    name: Party Identification
+    aliases: [Identifier pattern, Alternate Identifier]
+    books: [{book: dmrb3, keywords: [identification]}, {book: hay_meta, keywords: [identifier]}]
+    description: >
+      External identifiers (MRN, member ID, NPI, national IDs) as typed,
+      dated rows tied to the party, with cross-references between systems.
+    names: ['mpi_record', '.*_identifier', 'identifier', 'mrn', 'crosswalk', 'id_crosswalk',
+            'npi_registry']
+
+  - key: agreement
+    name: Agreement
+    aliases: [Agreements, Contract]
+    books: [{book: dmrb3, keywords: [agreement]}, {book: dmrb2, keywords: [agreement]},
+            {book: hay, keywords: [contract]}]
+    description: >
+      Contracts, policies and enrollments as agreements between party roles,
+      with items, terms and dated status.
+    names: ['agreement', 'contract', 'policy', 'enrollment', 'payer_enrollment', 'plan_contract',
+            'fee_schedule', 'agreement_.*']
+
+  - key: coverage
+    name: Insurance Coverage
+    aliases: [Coverage, Insurance Policy, Benefit Coverage]
+    books: [{book: dmrb2, keywords: [coverage, insurance policies]}]
+    description: >
+      What an insurance policy covers for which insured party and when. In a
+      provider model it should exist once and be referenced by registration,
+      encounter, billing and claims.
+    names: ['coverage', '.*_coverage', 'insurance', '.*_insurance', 'insurance_.*', 'eligibility',
+            'eligibility_.*', '.*_eligibility', 'benefit', 'benefit_plan', 'health_plan']
+    review: single_owner
+
+  - key: product_offering
+    name: Product
+    aliases: [Product pattern, Product Offering, Health Care Offering, Service Offering]
+    books: [{book: dmrb3, keywords: [product]}, {book: dmrb2, keywords: [products, offering]},
+            {book: hay, keywords: [product]}]
+    description: >
+      What is offered (services, drugs, tests, procedures) as products with
+      categories, features and prices, separate from the events that deliver them.
+    names: ['product', 'offering', '.*_offering', 'service', 'service_line', 'catalog',
+            '.*_catalog', 'drug_master', 'formulary', 'cdm_entry', 'charge_master', 'item_master',
+            'sku', 'test_catalog']
+
+  - key: order
+    name: Order
+    aliases: [Orders, Order pattern, Order Item]
+    books: [{book: dmrb3, keywords: [order]}, {book: dmrb2, keywords: [orders]},
+            {book: hay, keywords: [order]}]
+    description: An order and its items, with order roles, status and fulfilment links.
+    names: ['order', '.*_order', 'order_.*', 'requisition', 'prescription', 'referral',
+            'referral_order', 'purchase_order']
+
+  - key: encounter
+    name: Health Care Episode
+    aliases: [Health Care Visit, Encounter, Episode of Care, Visit]
+    books: [{book: dmrb2, keywords: [health care episode, visit, delivery]}]
+    description: >
+      The delivery side of health care: episodes and visits, with the
+      practitioners, diagnoses and procedures attached to them.
+    names: ['visit', 'encounter', 'episode', 'episode_of_care', 'admission', 'stay', 'visit_.*',
+            'encounter_.*']
+
+  - key: invoice
+    name: Invoice
+    aliases: [Invoices, Billing, Invoice Item]
+    books: [{book: dmrb3, keywords: [invoice]}, {book: dmrb2, keywords: [invoic]}]
+    description: Invoices and invoice items billed to a party role, linked to what they bill for.
+    names: ['invoice', 'invoice_.*', 'charge', 'statement', 'bill', 'billing_.*', 'patient_account',
+            'account_statement']
+
+  - key: payment
+    name: Payment
+    aliases: [Payments, Payment Settlement, Financial Transaction]
+    books: [{book: dmrb3, keywords: [payment]}, {book: dmrb2, keywords: [payment settlement]}]
+    description: Payments and adjustments applied to invoices or claims.
+    names: ['payment', 'payment_.*', 'remittance', 'remittance_.*', 'settlement', 'adjustment',
+            'refund', 'write_off', 'receipt']
+
+  - key: claim
+    name: Claim
+    aliases: [Claims, Health Care Claim, Policy Claim, Claim Item]
+    books: [{book: dmrb2, keywords: [claim]}]
+    description: >
+      A claim and its items against an agreement, with submissions,
+      resubmissions, settlements and status.
+    names: ['claim', 'claim_.*', 'line', 'denial', 'appeal', 'resubmission', 'submission',
+            'prior_authorization', 'authorization']
+
+  - key: status
+    name: Status
+    aliases: [Status pattern, Status Application, State history]
+    books: [{book: dmrb3, keywords: [status]}, {book: blaha, keywords: [state]}]
+    description: >
+      Status values held as dated history rows against a type list, so the
+      model keeps when each state applied, not only the current one.
+    names: ['.*_status', '.*_status_history', 'status_.*', 'state_history']
+    review: status_history
+
+  - key: classification
+    name: Classification
+    aliases: [Type pattern, Category, Reference Data, Code Table]
+    books: [{book: dmrb3, keywords: [classification, type]}, {book: hay_meta, keywords: [classification]},
+            {book: blaha, keywords: [type]}]
+    description: >
+      Types, categories and code sets as reference entities (with hierarchy
+      and validity dates) instead of free-text or long enumerations.
+    names: ['.*_type', '.*_category', '.*_code', 'code_set', 'code_set_.*', 'crosswalk', 'icd_code',
+            'cpt_code', 'hcpcs_code', 'drg', 'snomed_concept', 'loinc_code', 'ndc_drug', 'specialty',
+            'concept', 'vocabulary', 'reference_range', 'taxonomy']
+
+  - key: observation
+    name: Observation
+    aliases: [Measurement, Observation pattern, Quantity]
+    books: [{book: fowler, keywords: [observation, measurement]}]
+    description: >
+      Fowler's Observation and Measurement: a phenomenon observed about a
+      subject, with value, unit, method and time, one structure for vitals,
+      lab results and assessments.
+    names: ['observation', 'vital_sign', 'test_result', 'result', 'measurement', 'assessment',
+            '.*_assessment', 'lab_result', 'specimen', 'culture', '.*_culture', 'score']
+
+  - key: work_effort
+    name: Work Effort
+    aliases: [Work Efforts, Task, Activity]
+    books: [{book: dmrb3, keywords: [work effort]}, {book: dmrb2, keywords: [work effort]}]
+    description: Planned and actual work (cases, tasks, schedules) with assignments and resources.
+    names: ['work_effort', 'task', 'case', 'surgical_case', 'procedure_event', 'schedule',
+            'schedule_template', 'appointment', '.*_appointment', 'scheduling_.*', 'slot', 'open_slot',
+            'waitlist_entry', 'care_plan', 'assignment', '.*_assignment']
+
+  - key: fixed_asset
+    name: Fixed Asset
+    aliases: [Asset, Resource, Facility]
+    books: [{book: dmrb3, keywords: [asset, facility]}, {book: dmrb2, keywords: [facility]}]
+    description: Facilities, rooms, beds and equipment as typed assets that work is scheduled against.
+    names: ['asset', 'fixed_asset', 'equipment', 'device', 'bed', 'room', 'facility', 'location',
+            'modality', 'schedulable_resource', 'resource', 'blood_bank_unit', 'inventory']
+
+  - key: document
+    name: Document
+    aliases: [Documents, Clinical Document]
+    books: [{book: dmrb3, keywords: [document]}]
+    description: Documents (notes, reports, images, consents) as typed records with authorship and versions.
+    names: ['document', 'note', 'report', '.*_report', 'discharge_summary', 'image', 'attachment',
+            'consent', 'consent_.*', 'advance_directive']
+
+  - key: communication_event
+    name: Communication Event
+    aliases: [Communication Events, Contact Event]
+    books: [{book: dmrb3, keywords: [communication event]}]
+    description: Contacts between parties (calls, messages, portal messages, outreach) with purpose and outcome.
+    names: ['communication', 'communication_.*', 'message', 'portal_message', 'outreach',
+            'contact_event', 'notification', 'critical_result']
+
+  - key: employment
+    name: Position and Employment
+    aliases: [Employment, Position, Credential, Qualification]
+    books: [{book: dmrb3, keywords: [position, employment, qualification]}]
+    description: >
+      Employment, positions, credentials, certifications and privileges held
+      by people, with dates and issuing parties.
+    names: ['employment', 'position', 'credential', 'credentialing_.*', 'privileging', 'privilege',
+            'certification', 'board_certification', 'license', 'dea_registration', 'qualification']
+
+  - key: accounting
+    name: Accounting Transaction
+    aliases: [General Ledger, Accounting]
+    books: [{book: dmrb3, keywords: [accounting]}]
+    description: Ledger accounts, accounting transactions and budgets.
+    names: ['gl_account', 'general_ledger', 'journal', 'journal_entry', 'accounting_.*', 'budget',
+            'budget_.*', 'cost_center']
+
+  - key: event_log
+    name: Event History
+    aliases: [Event Log, Audit Trail, Temporal History]
+    books: [{book: blaha, keywords: [history]}]
+    description: >
+      Append-only events with timestamps (ADT events, dispenses, logs),
+      distinct from the current-state entities they change.
+    names: ['.*_event', '.*_log', '.*_history', 'event', 'audit_.*']
