@@ -101,7 +101,7 @@ or a loaded reference model (`databricks:healthcare`, `ref:<id>`).
 Each finding cites the pattern's books (via `patterns.yaml`) and carries a
 vibe; `vibes.txt` lists them in order of severity. The healthcare MVM v2
 grades **D**: four role tables copy person identity, insurance coverage is
-held in six tables across four domains, nine tables inline addresses, and
+held in three independent copies (patient, billing, claim domains), nine tables inline addresses, and
 741 of 1,056 FKs are LLM-generated links.
 
 ## Data products from a model (`/kb-dp-from-model`)
@@ -124,3 +124,24 @@ cases (denial prevention, length of stay) and two objectives. All products,
 contracts, the graph, recipe and built catalog pass the SDK and ODCS schema
 checks. Because the output contains gallery content, it stays in the local
 `data/generated-packages/`.
+
+## Pattern-first domain models (`/kb-domain-model`)
+
+`domain_model_gen.py` builds a model for a business description from a
+base model. It keeps the base model's domains that the description talks
+about (or the `domains` / `tables` given), then applies four rewrites:
+
+| rewrite | what changes |
+|---|---|
+| party | a `party` domain (party, person, organization, party_role, party_relationship); every table with two or more identity columns moves them to `person` and references `party_role` |
+| contact_mechanism | postal_address, telecom_number, electronic_address, party_contact_mechanism replace inline address, phone and e-mail columns |
+| single_owner | the largest table of a single-owner pattern (coverage) owns it; the others drop the columns they repeated and reference it |
+| status_history | `<table>_status_history` for transactional tables with a status column |
+
+FKs to tables outside the scope are dropped and listed. The output is the
+Databricks `model.json` shape (it reads back through
+`parse_databricks_model`), UC DDL and DBML from `model_emit.py`, and
+`changes.md` with the books for each change. The review then runs on the
+result. A "community hospital revenue cycle" description over the
+healthcare MVM keeps 54 tables, adds the party, contact and status-history
+tables (93 in all) and moves the review grade from **D** to **B**.
