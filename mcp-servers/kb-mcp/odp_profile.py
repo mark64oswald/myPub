@@ -420,7 +420,14 @@ graph:
     - id: {i['node_dp']}
       type: DataProduct
       $ref: ../{p['odps']}
+    - id: {i['node_dp']}-CONTRACT
+      type: Policy
+      $ref: ../{p['odcs']}
   edges:
+    - from: {i['node_dp']}
+      to: {i['node_dp']}-CONTRACT
+      type: governedBy
+      confidence: high
     - from: {i['node_uc']}
       to: {i['node_dp']}
       type: uses

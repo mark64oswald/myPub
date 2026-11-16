@@ -224,6 +224,14 @@ def test_portfolio_graph_follows_the_links(corpus, tmp_path):
     assert ("DP-CUSTOMER-CHURN-SCORES", "contributesTo", "OBJ-REDUCE-CHURN") in edges
     assert ("DP-CUSTOMER-CHURN-SCORES", "contributesTo", "OBJ-FASTER-SUPPORT") not in edges
     assert ("KPI-REDUCE-CHURN", "measures", "OBJ-REDUCE-CHURN") in edges
+    # Governance: each product is governed by the portfolio policy and its contract.
+    for dp, slug in (("DP-CUSTOMER-360", "customer-360"),
+                     ("DP-CUSTOMER-CHURN-SCORES", "customer-churn-scores")):
+        assert (dp, "governedBy", "POL-CUSTOMER-RETENTION-ON-DATABRICKS") in edges
+        assert (dp, "governedBy", f"POL-{slug.upper()}-CONTRACT") in edges
+    policy = yaml.safe_load((root / "governance/customer-retention-on-databricks.policy.yaml")
+                            .read_text())
+    assert {r["id"] for r in policy["rules"]} >= {"ownership", "contract-first"}
     node_ids = {n["id"] for n in graph["nodes"]}
     assert all(f in node_ids and t in node_ids for f, _, t in edges)
     for n in graph["nodes"]:
@@ -252,6 +260,10 @@ def test_portfolio_passes_the_sdk(corpus, tmp_path):
     root, _ = _portfolio(corpus, tmp_path, use_cases=USE_CASES, objectives=OBJECTIVES)
     assert (root / "catalog/customer-retention-on-databricks.odpc.yaml").is_file()
     assert "FAILS" not in (root / "_validation.md").read_text()
+    analysis = subprocess.run([SDK, "odpg-analyze", "graph/customer-retention-on-databricks.odpg.yaml",
+                               "--json"], cwd=root, capture_output=True, text=True, timeout=120)
+    assert analysis.returncode == 0, analysis.stderr
+    assert __import__("json").loads(analysis.stdout)["analysis"]["ungovernedAssets"] == []
     proc = subprocess.run(["make", "all", f"ODP={SDK}"], cwd=root, capture_output=True,
                           text=True, timeout=300)
     assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -522,8 +522,8 @@ Four generators build on the ODP spec family loaded as live docs (see
 [odp-family-map.md](odp-family-map.md)) and share `odp_gen.py`. Every
 output is checked by machine, not by eye: the ODCS JSON Schema (vendored at
 `data/odp/odcs-json-schema-v3.1.0.json`, needs `jsonschema`) and, when the
-`open-data-products` SDK is on PATH, `odp validate`, `odp recipe validate`,
-`odp odpc-build` and `odp odpg-analyze`. Results land in `_validation.md`.
+`open-data-products` SDK is on PATH, `open-data-products validate`, `recipe validate`,
+`odpc-build` and `odpg-analyze`. Results land in `_validation.md`.
 Without the SDK the packages are still written and the notes say which
 checks were skipped.
 
@@ -540,7 +540,10 @@ fill-in prompt cover what only a person can decide.
 ideas (`Name: description => linked, names`) and writes one ODPS product
 and ODCS contract per product, ODPC fragments, an ODPG graph whose
 `uses`/`supports`/`contributesTo`/`measures` edges follow your links, a
-recipe and a Makefile. It then builds the ODPC catalog and runs
+starter governance policy (minimum lovable governance: ownership,
+contract-first, quality gates, access, personal data, value review) that
+every product is `governedBy` along with its own contract, a recipe and a
+Makefile. It then builds the ODPC catalog and runs
 `odpg-analyze`, reporting orphan KPIs and unlinked products as advice.
 
 **`/kb-dp-recipe <product>`** reads an existing ODPS file (or a short
