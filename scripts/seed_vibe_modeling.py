@@ -13,7 +13,7 @@ describing a business and on conventions, and the Genie skills with their
 developer docs (procedure-rich: assess, build, validate, document).
 
 The 80 generated models are loaded separately as structured metadata by
-scripts/ref_models.py, never as doc sections.
+scripts/load_ref_models.py, never as doc sections.
 
 License: the repo is under the Databricks License (use only with Databricks
 services). Indexing it in the local catalog for Mark's own use alongside

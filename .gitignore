@@ -80,3 +80,9 @@ data/refresh/
 
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
+
+# Reference-model data that must not be published (Databricks License,
+# book copyright): Silverston transcriptions and fetched model caches.
+data/ref_models/silverston/
+data/ref_models/cache/
+data/ref_models/mapping-runs/
