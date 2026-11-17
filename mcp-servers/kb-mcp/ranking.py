@@ -369,7 +369,12 @@ _PAGE_KINDS: dict[str, dict[str, Any]] = {
     },
     "api_reference": {
         "factor": API_REFERENCE_RELEVANCE_FACTOR,
-        "url": ("platform.claude.com/docs/en/api/", "docs.databricks.com/api/"),
+        "url": ("platform.claude.com/docs/en/api/", "docs.databricks.com/api/",
+                "gofastmcp.com/docs/python-sdk/",
+                # MCP Apps TypeDoc: symbol pages, not the guides in documents/.
+                *(f"apps.extensions.modelcontextprotocol.io/api/{d}/"
+                  for d in ("classes", "functions", "interfaces", "types",
+                            "variables", "modules"))),
         "name": (),
         "intent": {"api", "endpoint", "endpoints", "request", "response", "parameter",
                    "parameters", "rest", "http", "curl", "sdk", "payload", "schema"},

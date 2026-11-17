@@ -36,7 +36,13 @@ Two kinds of live-doc source:
   Claude developer sites: `claude-platform` (platform.claude.com/docs/en,
   ~916 pages incl. the API reference), `claude-docs` (claude.com/docs,
   developer subset, ~70 pages), `mcp` (modelcontextprotocol.io, current spec
-  revision only) and `agent-skills` (agentskills.io). Register
+  revision only) and `agent-skills` (agentskills.io); and the MCP framework
+  sites `fastmcp` (gofastmcp.com/docs, Markdown, current release only: the
+  archived /docs/v2/ and /docs/v3/ trees are excluded; python-sdk/ is the API
+  reference) and `mcp-apps-api` (apps.extensions.modelcontextprotocol.io/api,
+  the ext-apps TypeDoc site: guides plus one page per symbol, HTML; TypeDoc
+  signatures become code blocks, inherited SDK members are dropped and huge
+  inlined types are truncated). Register
   with `add-site --preset NAME`. A sync re-reads the index, registers new
   pages, sends conditional GETs (ETag / Last-Modified), compares a hash of
   the *extracted text* (Databricks redeploys daily, so HTTP dates alone

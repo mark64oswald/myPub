@@ -823,6 +823,12 @@ def test_page_kind_and_intents():
     assert pk("https://docs.databricks.com/aws/en/error-messages/row-column-access-error-class", None) == "error_reference"
     assert pk("https://platform.claude.com/docs/en/api/beta/events.md", "Claude API: Events") == "api_reference"
     assert pk("https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md", None) is None
+    assert pk("https://gofastmcp.com/docs/python-sdk/fastmcp-apps-app.md", None) == "api_reference"
+    assert pk("https://gofastmcp.com/docs/apps/prefab.md", None) is None
+    assert pk("https://apps.extensions.modelcontextprotocol.io/api/classes/app.App.html", None) \
+        == "api_reference"
+    assert pk("https://apps.extensions.modelcontextprotocol.io/api/documents/quickstart.html",
+              None) is None
     qi = ranking.query_intents
     assert qi("event sourcing") == frozenset()
     assert "api_reference" in qi("messages API request parameters")
