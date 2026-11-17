@@ -32,7 +32,7 @@ Freshness is a command, not a schedule::
             Per site: pages live / retired / never fetched / overdue, last
             sync, recent errors.
 
-    add-site --preset databricks|claude-code  |  --name … --index-url … …
+    add-site --preset NAME (databricks, claude-code, fastmcp, mcp-apps-api, …)  |  --name … --index-url … …
             Writer. Registers (or updates) a site definition.
 
     stale   [--domain example.com] [--source-type T]
@@ -312,6 +312,40 @@ PRESETS: dict[str, Site] = {
         authority_score=0.85,
         refresh_ttl_days=14,
     ),
+    # gofastmcp.com: FastMCP (Python) docs, Mintlify, llms.txt of .md URLs.
+    # The unversioned tree is the current release; /docs/v2/ and /docs/v3/
+    # are archived release lines (near-copies of every page), so they stay
+    # out. python-sdk/ is the generated API reference: searchable, but left
+    # out of LLM extraction, like the other API references.
+    "fastmcp": Site(
+        name="fastmcp",
+        index_url="https://gofastmcp.com/llms.txt",
+        index_kind="llms_txt",
+        page_format="markdown",
+        md_url_suffix=".md",
+        include_patterns=["https://gofastmcp.com/docs/*"],
+        exclude_patterns=["https://gofastmcp.com/docs/v2/*",
+                          "https://gofastmcp.com/docs/v3/*"],
+        name_prefix="FastMCP",
+        authority_score=0.85,
+        refresh_ttl_days=7,          # fast-moving
+    ),
+    # MCP Apps SDK (@modelcontextprotocol/ext-apps) API reference: a TypeDoc
+    # site. Its sitemap lists the guides (documents/) and one page per class,
+    # interface, function, type and variable. HTML only; see _clean_typedoc.
+    "mcp-apps-api": Site(
+        name="mcp-apps-api",
+        index_url="https://apps.extensions.modelcontextprotocol.io/api/sitemap.xml",
+        index_kind="sitemap",
+        page_format="html",
+        content_selector="div.col-content",
+        include_patterns=["https://apps.extensions.modelcontextprotocol.io/api/*"],
+        # Navigation-only pages: lists of links with no prose.
+        exclude_patterns=["*/api/modules.html", "*/api/hierarchy.html"],
+        name_prefix="MCP Apps API",
+        authority_score=0.85,
+        refresh_ttl_days=14,
+    ),
 }
 
 
@@ -462,7 +496,71 @@ class PageFetch:
 _DROP_IN_ARTICLE = ("dialog", "button", "svg", "a.hash-link", "script", "style", "noscript")
 
 
+# TypeDoc page chrome inside div.col-content: breadcrumb, member index,
+# "Defined in" source links, permalink icons, and members inherited from a
+# base class outside the package (the MCP SDK's Protocol), which would repeat
+# the SDK's own reference on every class page.
+_TYPEDOC_DROP = ("ul.tsd-breadcrumb", "section.tsd-index-section", "details.tsd-index-panel",
+                 ".tsd-index-content", "aside.tsd-sources", ".tsd-sources", "a.tsd-anchor-icon",
+                 ".tsd-panel.tsd-is-inherited.tsd-is-external",
+                 ".tsd-signatures.tsd-is-inherited.tsd-is-external")
+
+
+_TYPEDOC_MAX_SIG_LINES = 30
+_TYPEDOC_MAX_TYPE_CHARS = 300
+
+
+def _clean_typedoc(el) -> None:
+    """Give TypeDoc's div-and-span markup a structure html_doc can read:
+    signatures become code blocks, parameter rows become paragraphs."""
+    for sel in _TYPEDOC_DROP:
+        for junk in el.select(sel):
+            junk.decompose()
+    for sig in el.select("div.tsd-signature, div.tsd-signature-type"):
+        for br in sig.find_all("br"):
+            br.replace_with("\n")
+        lines = [" ".join(ln.split()) for ln in sig.get_text("").split("\n")]
+        code = "\n".join(ln for ln in lines if ln)
+        code = re.sub(r"\s+([,;:)>\]])", r"\1", re.sub(r"([(<\[])\s+", r"\1", code))
+        # TypeDoc inlines whole object types (every MCP content-block shape)
+        # into signatures; past a screenful they bury the prose.
+        code_lines = code.split("\n")
+        if len(code_lines) > _TYPEDOC_MAX_SIG_LINES:
+            code = "\n".join(code_lines[:_TYPEDOC_MAX_SIG_LINES] + ["… (type truncated)"])
+        sig.name, sig.attrs = "pre", {}
+        sig.clear()
+        sig.append(code)
+    # Signature and parameter lists hold block content (code, comments);
+    # html_doc would flatten each <li> into one run-on bullet.
+    for ul in el.select("ul.tsd-signatures, ul.tsd-parameter-list, ul.tsd-parameters, "
+                        "ul.tsd-type-parameter-list"):
+        for li in ul.find_all("li", recursive=False):
+            for head in li.find_all(["span", "h5"], recursive=False):
+                text = _short_type(head.get_text(" ", strip=True))
+                head.name, head.attrs = "p", {}
+                head.clear()
+                head.append(text)
+            li.name = "div"
+        ul.name = "div"
+    for h in el.select("h4.tsd-returns-title, h4.tsd-parameters-title"):
+        text = _short_type(h.get_text(" ", strip=True))
+        h.name, h.attrs = "p", {}
+        h.clear()
+        h.append(text)
+
+
+def _short_type(text: str) -> str:
+    text = " ".join(text.split())
+    for a, b in (("< ", "<"), (" <", "<"), (" >", ">"), (" ,", ","), ("?:", "?:"), (" ?:", "?:"),
+                 (" ;", ";"), ("[ ", "["), (" ]", "]"), ("( ", "("), (" )", ")")):
+        text = text.replace(a, b)
+    return text if len(text) <= _TYPEDOC_MAX_TYPE_CHARS else \
+        text[:_TYPEDOC_MAX_TYPE_CHARS].rstrip() + " … (type truncated)"
+
+
 def _clean_article(el) -> None:
+    if el.select_one("[class*=tsd-]") is not None:
+        _clean_typedoc(el)
     for sel in _DROP_IN_ARTICLE:
         for junk in el.select(sel):
             junk.decompose()

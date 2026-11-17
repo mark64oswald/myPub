@@ -640,3 +640,50 @@ def test_front_matter_is_not_a_heading():
     out = sectionizer.strip_front_matter("---\ntitle: T\ndescription: D\n---\n# Real\n\nbody\n")
     assert out.startswith("# Real\n\nD\n\nbody")
     assert sectionizer.strip_front_matter("no front matter\n---\n") == "no front matter\n---\n"
+
+
+def test_fastmcp_and_mcp_apps_api_presets_scope():
+    fm = doc_sites.PRESETS["fastmcp"]
+    assert fm.wants("https://gofastmcp.com/docs/servers/skills.md")
+    assert fm.wants("https://gofastmcp.com/docs/apps/prefab.md")
+    assert fm.wants("https://gofastmcp.com/docs/python-sdk/fastmcp-apps-app.md")
+    assert not fm.wants("https://gofastmcp.com/docs/v2/servers/tools.md")
+    assert not fm.wants("https://gofastmcp.com/docs/v3/servers/tools.md")
+    assert fm.fetch_url("https://gofastmcp.com/docs/apps/overview") \
+        == "https://gofastmcp.com/docs/apps/overview.md"
+    api = doc_sites.PRESETS["mcp-apps-api"]
+    base = "https://apps.extensions.modelcontextprotocol.io/api/"
+    assert api.wants(base + "classes/app.App.html")
+    assert api.wants(base + "documents/quickstart.html")
+    assert not api.wants(base + "modules.html")
+    assert api.source_type == "web_html"
+
+
+TYPEDOC = """<html><head><title>registerAppTool | MCP Apps</title></head><body>
+<div class="col-content">
+ <div class="tsd-page-title"><ul class="tsd-breadcrumb"><li><a>server-helpers</a></li></ul>
+  <h1>Function registerAppTool</h1></div>
+ <section class="tsd-panel"><ul class="tsd-signatures"><li>
+  <div class="tsd-signature tsd-anchor-link"><span>registerAppTool</span><span>(</span><br>
+   <span>server</span><span>:</span> <span>McpServer</span><span>,</span><br>
+   <span>name</span><span>:</span> <span>string</span><br><span>)</span><span>:</span> <span>RegisteredTool</span>
+   <a class="tsd-anchor-icon"><svg></svg></a></div>
+  <div class="tsd-description"><div class="tsd-comment"><p>Register an app tool.</p></div>
+   <div class="tsd-parameters"><h4 class="tsd-parameters-title">Parameters</h4>
+    <ul class="tsd-parameter-list"><li><span><span>server</span>: <span>McpServer</span></span>
+     <div class="tsd-comment"><p>The MCP server instance</p></div></li></ul></div>
+   <h4 class="tsd-returns-title">Returns <span>RegisteredTool</span></h4>
+   <aside class="tsd-sources"><ul><li>Defined in src/server/index.ts:12</li></ul></aside>
+ </div></li></ul></section>
+ <section class="tsd-panel tsd-member tsd-is-inherited tsd-is-external"><h3>request</h3><p>Base SDK method.</p></section>
+</div></body></html>"""
+
+
+def test_typedoc_page_is_cleaned():
+    _, md, _ = doc_sites.html_page_to_markdown(TYPEDOC, "div.col-content")
+    assert "# Function registerAppTool" in md
+    assert "```\nregisterAppTool(server: McpServer,\nname: string): RegisteredTool\n```" in md
+    assert "server: McpServer\n\nThe MCP server instance" in md
+    assert "Returns RegisteredTool" in md
+    assert "server-helpers" not in md and "Defined in" not in md
+    assert "Base SDK method" not in md
