@@ -673,8 +673,11 @@ TYPEDOC = """<html><head><title>registerAppTool | MCP Apps</title></head><body>
     <ul class="tsd-parameter-list"><li><span><span>server</span>: <span>McpServer</span></span>
      <div class="tsd-comment"><p>The MCP server instance</p></div></li></ul></div>
    <h4 class="tsd-returns-title">Returns <span>RegisteredTool</span></h4>
+   <div class="tsd-comment"><div class="tsd-tag-example"><h4 class="tsd-anchor-link">Example: Basic usage</h4>
+    <pre><code>registerAppTool(server, "x", {}, cb);</code></pre></div></div>
    <aside class="tsd-sources"><ul><li>Defined in src/server/index.ts:12</li></ul></aside>
  </div></li></ul></section>
+ <section class="tsd-panel tsd-member"><h3>call<wbr>Server<wbr>Tool</h3><p>Calls a tool.</p></section>
  <section class="tsd-panel tsd-member tsd-is-inherited tsd-is-external"><h3>request</h3><p>Base SDK method.</p></section>
 </div></body></html>"""
 
@@ -685,5 +688,7 @@ def test_typedoc_page_is_cleaned():
     assert "```\nregisterAppTool(server: McpServer,\nname: string): RegisteredTool\n```" in md
     assert "server: McpServer\n\nThe MCP server instance" in md
     assert "Returns RegisteredTool" in md
+    assert "### callServerTool" in md
+    assert "Example: Basic usage:" in md and "#### Example" not in md
     assert "server-helpers" not in md and "Defined in" not in md
     assert "Base SDK method" not in md

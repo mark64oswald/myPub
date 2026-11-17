@@ -516,6 +516,11 @@ def _clean_typedoc(el) -> None:
     for sel in _TYPEDOC_DROP:
         for junk in el.select(sel):
             junk.decompose()
+    # TypeDoc breaks camelCase names with <wbr>; text extraction would turn
+    # "callServerTool" into "call Server Tool".
+    for w in el.find_all("wbr"):
+        w.unwrap()   # some parsers nest the text after <wbr> inside it
+    el.smooth()
     for sig in el.select("div.tsd-signature, div.tsd-signature-type"):
         for br in sig.find_all("br"):
             br.replace_with("\n")
@@ -542,6 +547,15 @@ def _clean_typedoc(el) -> None:
                 head.append(text)
             li.name = "div"
         ul.name = "div"
+    # Doc-comment tags (@example, @throws, @see, @deprecated) are <h4>s under
+    # each member's <h3>. As headings they become sections named only
+    # "Example" or "Throws" that lose the member they document; as labelled
+    # paragraphs they stay in the member's section.
+    for h in el.select("[class*=tsd-tag-] > h4, .tsd-type-declaration > h4"):
+        label = " ".join(h.get_text(" ", strip=True).split())
+        h.name, h.attrs = "p", {}
+        h.clear()
+        h.append(label.rstrip(":") + ":")
     for h in el.select("h4.tsd-returns-title, h4.tsd-parameters-title"):
         text = _short_type(h.get_text(" ", strip=True))
         h.name, h.attrs = "p", {}
