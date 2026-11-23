@@ -300,7 +300,7 @@ export function DataTable({
                   className={onRowClick ? "cursor-pointer" : undefined}
                   onClick={() => onRowClick?.(row.original)}
                 >
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <TableCell key={cell.id}>
                       <table.FlexRender cell={cell} />
                     </TableCell>
@@ -896,6 +896,15 @@ _BASE_DAY = date(2026, 1, 1)
 def sample_value(f: us.Field, i: int, rnd: random.Random) -> Any:
     k = f.kind
     if f.restricted:
+        t = ts_type(f)
+        if t == "number":
+            return 900000 + i
+        if t == "boolean":
+            return False
+        if k in ("date", "timestamp"):
+            return "1900-01-01"
+        if k == "enum" and f.enum_values:
+            return f.enum_values[0]
         return f"SAMPLE-{f.name[:3].upper()}-{1000 + i}"
     if k == "id":
         return f"{f.name[:3].upper()}-{10001 + i}" if ts_type(f) == "string" else 10001 + i
@@ -1523,7 +1532,6 @@ def emit(spec: us.AppSpec) -> dict[str, str]:
         "components/kb/masked-value.tsx": MASKED_VALUE_TSX,
         "components/kb/record-sheet.tsx": RECORD_SHEET_TSX,
         "components/kb/enum-select.tsx": ENUM_SELECT[spec.base],
-        "components/kb/date-field.tsx": DATE_FIELD[spec.base],
         "components/kb/app-shell.tsx": APP_SHELL[spec.base],
         "nav.ts": nav_ts(spec),
         "data/types.ts": types_ts(spec),
@@ -1557,6 +1565,8 @@ def emit(spec: us.AppSpec) -> dict[str, str]:
                                            key=lambda f: names.index(f.name))
     files["data/sample.ts"] = sample_ts(spec, rows, series, breakdowns)
     files["data/source.ts"] = source_ts(spec, series, breakdowns)
+    if any(f.kind in ("date", "timestamp") for fs in forms.values() for f in fs):
+        files["components/kb/date-field.tsx"] = DATE_FIELD[spec.base]
     if forms:
         files["lib/schemas.ts"] = schemas_ts(spec, forms)
         for name, fields in forms.items():

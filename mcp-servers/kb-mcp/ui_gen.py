@@ -391,7 +391,9 @@ if [ ! -f "$APP/components.json" ]; then
 fi
 cd "$APP"
 npx -y shadcn@latest add -y {' '.join(spec.install)}
-npm install {' '.join(spec.npm)}
+# --include=dev: the build needs typescript and the Tailwind PostCSS plugin even
+# when NODE_ENV=production is set in the shell.
+npm install --include=dev {' '.join(spec.npm)}
 
 # The overlay goes under the @/ alias root: src/ when the project has one.
 ROOT=.
