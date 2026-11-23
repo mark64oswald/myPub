@@ -692,3 +692,178 @@ def test_typedoc_page_is_cleaned():
     assert "Example: Basic usage:" in md and "#### Example" not in md
     assert "server-helpers" not in md and "Defined in" not in md
     assert "Base SDK method" not in md
+
+
+# ---- shadcn/ui ---------------------------------------------------------------
+
+SHADCN_REGISTRY = """{"name": "shadcn", "homepage": "https://ui.shadcn.com", "items": [
+ {"name": "index", "type": "registry:style"},
+ {"name": "button", "type": "registry:ui", "files": [{"path": "registry/new-york-v4/ui/button.tsx", "type": "registry:ui"}]},
+ {"name": "button-demo", "type": "registry:example"},
+ {"name": "dashboard-01", "type": "registry:block", "categories": ["dashboard"]},
+ {"name": "chart-area-default", "type": "registry:block", "categories": ["charts", "charts-area"]},
+ {"name": "button", "type": "registry:ui"}]}"""
+
+SHADCN_BLOCK = {
+    "name": "dashboard-01", "type": "registry:block",
+    "description": "A dashboard with sidebar, charts and data table.",
+    "dependencies": ["@tanstack/react-table", "zod"],
+    "registryDependencies": ["sidebar", "chart", "table"],
+    "categories": ["dashboard"],
+    "files": [
+        {"path": "registry/new-york-v4/blocks/dashboard-01/page.tsx", "type": "registry:page",
+         "target": "app/dashboard/page.tsx",
+         "content": "export default function Page() {\n  return <SidebarProvider />\n}\n"},
+        {"path": "registry/new-york-v4/blocks/dashboard-01/data.json", "type": "registry:file",
+         "target": "app/dashboard/data.json", "content": "[" + ",".join(["{\"id\": 1}"] * 300) + "]"},
+        {"path": "registry/new-york-v4/blocks/dashboard-01/components/data-table.tsx",
+         "type": "registry:component", "content": "const s = '```'\nexport function DataTable() {}\n"},
+    ],
+}
+
+
+def test_shadcn_presets_scope():
+    docs = doc_sites.PRESETS["shadcn"]
+    base = "https://ui.shadcn.com/docs"
+    assert docs.wants(base)
+    assert docs.wants(base + "/cli")
+    assert docs.wants(base + "/components/base/button")
+    assert docs.wants(base + "/ai-elements/base/chain-of-thought")
+    assert not docs.wants(base + "/components/radix/button")
+    assert not docs.wants(base + "/components/aria/button")
+    assert not docs.wants(base + "/_blocks")
+    assert not docs.wants(base + "/legacy")
+    assert not docs.wants("https://ui.shadcn.com/blocks")
+    assert docs.fetch_url(base) == base + ".md"
+    assert docs.fetch_url(base + "/cli") == base + "/cli.md"
+    reg = doc_sites.PRESETS["shadcn-registry"]
+    assert reg.source_type == "web_md"
+    item = "https://ui.shadcn.com/r/styles/new-york-v4/button.json"
+    assert reg.wants(item) and reg.fetch_url(item) == item
+    assert doc_sites.PRESETS["shadcn-directory"].source_type == "web_md"
+
+
+def test_shadcn_registry_index_keeps_components_and_blocks_once():
+    import shadcn_registry
+    urls = shadcn_registry.index_item_urls(
+        SHADCN_REGISTRY, "https://ui.shadcn.com/r/styles/new-york-v4/registry.json")
+    assert urls == ["https://ui.shadcn.com/r/styles/new-york-v4/button.json",
+                    "https://ui.shadcn.com/r/styles/new-york-v4/dashboard-01.json",
+                    "https://ui.shadcn.com/r/styles/new-york-v4/chart-area-default.json"]
+
+
+def test_shadcn_registry_item_to_markdown():
+    import shadcn_registry
+    import sectionizer
+    md = shadcn_registry.item_to_markdown(SHADCN_BLOCK)
+    assert md.startswith("# Block: dashboard-01\n")
+    assert "`npx shadcn@latest add dashboard-01`" in md
+    assert "Uses shadcn/ui components: `sidebar`, `chart`, `table`" in md
+    assert "https://ui.shadcn.com/blocks/dashboard#dashboard-01" in md
+    assert "## page.tsx" in md and "installed at `app/dashboard/page.tsx`" in md
+    assert "Sample data" in md and '{"id": 1}' not in md
+    # a file that itself contains ``` gets a longer fence
+    assert "````tsx\nconst s = '```'" in md
+    chart = shadcn_registry.item_to_markdown(
+        {"name": "chart-area-default", "type": "registry:block",
+         "categories": ["charts", "charts-area"], "files": []})
+    assert chart.startswith("# Chart: chart-area-default")
+    assert "https://ui.shadcn.com/charts/area#chart-area-default" in chart
+    secs = sectionizer.sectionize({"source_type": "site_md", "content": md})
+    flat, stack = [], list(secs)
+    while stack:
+        x = stack.pop(0)
+        flat.append(x)
+        stack[:0] = x.children
+    heads = [x.heading_text for x in flat]
+    assert "page.tsx" in heads and "components/data-table.tsx" in heads
+
+
+def test_shadcn_directory_to_markdown_skips_hidden():
+    import json as _json
+    import shadcn_registry
+    regs = [{"name": "@acme", "homepage": "https://acme.dev", "url": "https://acme.dev/r/{name}.json",
+             "description": "Acme blocks.", "health": {"status": "healthy", "score": 97.4}},
+            {"name": "@gone", "description": "x", "health": {"hidden": True}}]
+    md = shadcn_registry.directory_to_markdown(_json.dumps(regs))
+    assert "## @acme" in md and "@gone" not in md
+    assert "score 97/100" in md and "`npx shadcn@latest add @acme/<item>`" in md
+    assert "1 registries listed" in md
+
+
+def test_shadcn_clean_mdx():
+    import shadcn_registry
+    mdx = """---
+title: Button
+---
+
+<CodeTabs>
+
+<TabsList>
+  <TabsTrigger value="cli">Command</TabsTrigger>
+</TabsList>
+<TabsContent value="cli">
+
+```bash
+# not a heading
+npx shadcn@latest add button
+```
+
+</TabsContent>
+<Step>Copy and paste the following code into your project.</Step>
+
+<ComponentSource
+  name="button"
+  title="components/ui/button.tsx"
+  styleName="radix-nova"
+/>
+
+<ComponentPreview
+  name="button-demo"
+  className="x"
+/>
+
+```tsx
+<Button variant="outline">Button</Button>
+```
+"""
+    out = shadcn_registry.clean_mdx(mdx)
+    assert "<CodeTabs>" not in out and "<TabsContent" not in out and "TabsList" not in out
+    assert "ComponentPreview" not in out and 'name="button-demo"' not in out
+    assert "Copy and paste the following code into your project." in out
+    assert "registry item `button` (components/ui/button.tsx)" in out
+    assert '<Button variant="outline">Button</Button>' in out   # code kept
+    assert "# not a heading" in out
+
+
+def test_shadcn_fetch_page_converts_registry_and_docs(monkeypatch):
+    import json as _json
+
+    class R:
+        def __init__(self, text, ctype):
+            self.text, self.status_code = text, 200
+            self.headers = {"content-type": ctype}
+
+    class C:
+        def __init__(self, resp):
+            self.resp = resp
+
+        def get(self, url, headers=None):
+            return self.resp
+
+        def close(self):
+            pass
+
+    reg = doc_sites.PRESETS["shadcn-registry"]
+    pf = doc_sites.fetch_page(reg, "https://ui.shadcn.com/r/styles/new-york-v4/dashboard-01.json",
+                              client=C(R(_json.dumps(SHADCN_BLOCK), "application/json")))
+    assert pf.status == "ok" and pf.title == "Block: dashboard-01"
+    docs = doc_sites.PRESETS["shadcn"]
+    body = ("---\ntitle: Button\ndescription: A button.\n---\n\n```bash\n# install\n```\n\n"
+            "<Steps>\n\n## Usage\n\n" + "Use the button for actions in forms and dialogs. " * 5)
+    pf = doc_sites.fetch_page(docs, "https://ui.shadcn.com/docs/components/base/button",
+                              client=C(R(body, "text/markdown")))
+    assert pf.status == "ok" and pf.title == "Button" and "<Steps>" not in pf.content
+    bad = doc_sites.fetch_page(reg, "https://ui.shadcn.com/r/styles/new-york-v4/x.json",
+                               client=C(R("not json", "application/json")))
+    assert bad.status == "error"
