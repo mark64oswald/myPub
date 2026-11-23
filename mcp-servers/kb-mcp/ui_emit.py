@@ -435,7 +435,7 @@ export function TrendChart({
   kind: ValueKind
   label: string
 }) {
-  const config = { value: { label, color: "var(--chart-1)" } } satisfies ChartConfig
+  const config = { value: { label, color: "var(--primary)" } } satisfies ChartConfig
   const asLine = kind === "percent"
   const axis = (
     <>
@@ -461,12 +461,13 @@ export function TrendChart({
           {asLine ? (
             <LineChart data={data} margin={{ left: 4, right: 12 }}>
               {axis}
-              <Line dataKey="value" type="monotone" stroke="var(--color-value)" strokeWidth={2} dot={false} />
+              <Line isAnimationActive={false} dataKey="value" type="monotone" stroke="var(--color-value)" strokeWidth={2} dot={false} />
             </LineChart>
           ) : (
             <AreaChart data={data} margin={{ left: 4, right: 12 }}>
               {axis}
               <Area
+                isAnimationActive={false}
                 dataKey="value"
                 type="monotone"
                 fill="var(--color-value)"
@@ -519,7 +520,7 @@ export function BreakdownChart({
   kind: ValueKind
   label: string
 }) {
-  const config = { value: { label, color: "var(--chart-2)" } } satisfies ChartConfig
+  const config = { value: { label, color: "var(--primary)" } } satisfies ChartConfig
   const sorted = [...data].sort((a, b) => b.value - a.value)
   return (
     <Card>
@@ -535,7 +536,7 @@ export function BreakdownChart({
               tickFormatter={(v: number) => formatCompact(v, kind)} />
             <YAxis dataKey="category" type="category" tickLine={false} axisLine={false} width={128} />
             <ChartTooltip content={<ChartTooltipContent />} />
-            <Bar dataKey="value" fill="var(--color-value)" radius={4} />
+            <Bar isAnimationActive={false} dataKey="value" fill="var(--color-value)" radius={4} />
           </BarChart>
         </ChartContainer>
       </CardContent>
@@ -944,6 +945,8 @@ def sample_rows(e: us.Entity, n: int = 24) -> list[dict[str, Any]]:
 def sample_series(m: us.Metric, months: int = 12) -> list[dict[str, Any]]:
     rnd = _rng("series", m.name)
     base = {"currency": 250000.0, "percent": 12.0, "integer": 1200.0}.get(m.format, 100.0)
+    if re.match(r"(avg|average|mean|median)_", m.name) and m.format == "currency":
+        base = 2500.0                      # a per-claim average, not a monthly total
     out, v = [], base
     for i in range(months):
         v = max(0.0, v * (1 + rnd.uniform(-0.08, 0.1)))

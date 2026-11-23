@@ -314,6 +314,13 @@ def build_spec(d: dict[str, Any]) -> us.AppSpec:
                     if m:
                         used_metrics[name] = m
     spec.metrics = list(used_metrics.values())
+    # Allowed values the contract left out often sit in the metric views'
+    # dimension comments ("e.g., submitted, paid, denied"): reuse them.
+    dim_values = {d.name: d.values for m in measures for d in m.category_dims if d.values}
+    for e in entities:
+        for f in e.fields:
+            if f.kind == "enum" and not f.enum_values and dim_values.get(f.name):
+                f.enum_values = list(dim_values[f.name])
     lists = entities[:MAX_LIST_PAGES]
     if len(entities) > MAX_LIST_PAGES:
         spec.notes.append(f"{len(entities)} tables; list pages for the first {MAX_LIST_PAGES} "
