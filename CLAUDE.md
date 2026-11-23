@@ -108,6 +108,7 @@ noted; sub-agent dispatch is layered on top for those that need prose.
 | `/kb-model-review` | Data Model Review (2026-11) | Grades a data model (Databricks `model.json`, DDL, or a loaded reference model) against the library's patterns: Party/Role, one owner per concept, contact mechanisms, status history, classification, LLM-invented FKs, structure, Silverston/OMOP coverage; writes paste-ready `vibes.txt` |
 | `/kb-dp-from-model` | Data Products from a Model (2026-11) | Slices an industry model (Databricks gallery, DDL, loaded reference model) into ODPS products: per-table ODCS contracts, KPIs from metric views, UC DDL, model-review notes, ODPC/ODPG portfolio, HealthSim sample-data request; built-in healthcare example (3 products) |
 | `/kb-domain-model` | Domain Model (2026-11) | Pattern-first rewrite of a base industry model scoped to a business description: Party/Role, contact mechanisms, one owner per concept, status history; emits Databricks `model.json`, UC DDL, DBML, `changes.md` with books, before/after review grade |
+| `/kb-ui` | UI (2026-11) | Working shadcn/ui app from a data product (KPI dashboard + read-only lists) or a schema (DDL / ODCS / model.json: lists + record sheet + zod forms); `stack` vite (default) or nextjs, `base` Base UI (default) or radix; `ui-spec.json`, `setup.sh --build`, design notes citing shadcn docs + books; sample data only, restricted columns masked |
 
 ## Other MCP servers
 

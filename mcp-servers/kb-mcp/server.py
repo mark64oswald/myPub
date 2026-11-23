@@ -3909,6 +3909,63 @@ def generate_data_contract(
 
 @mcp.tool
 @_release_catalog
+def generate_ui(
+    request: str,
+    product_path: Optional[str] = None,
+    product: Optional[str] = None,
+    ddl: Optional[str] = None,
+    contract: Optional[str] = None,
+    model_json: Optional[str] = None,
+    metrics_sql: Optional[str] = None,
+    tables: Optional[list[str]] = None,
+    stack: str = "vite",
+    base: str = "base",
+    title: Optional[str] = None,
+    app_name: Optional[str] = None,
+    description: Optional[str] = None,
+    output_root: Optional[str] = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Generate a working shadcn/ui app (dashboard, list + detail, form pages).
+
+    Two input modes. ``data-product`` (``product_path``: an ODPS file or a
+    /kb-dp-from-model package): an overview dashboard from the product KPIs and
+    metric views (KPI cards, trend, breakdown) plus read-only list pages for the
+    contract's tables. ``schema`` (``ddl``, ``contract`` or ``model_json``): a
+    list page per table (Data Table + record sheet) with a "New" form (React
+    Hook Form + zod); ``metrics_sql`` adds a dashboard. Writes ``ui-spec.json``
+    (checked against its JSON Schema), an ``app-src/`` overlay, ``setup.sh``
+    (shadcn init + add + npm install + copy; ``--build`` type-checks),
+    ``design-notes.md`` citing shadcn docs and book chapters per region, and a
+    refine prompt. Sample data is generated; restricted columns stay masked.
+
+    Args:
+        request: What the app is for (one sentence).
+        product_path: ODPS product file or a folder with products/, contracts/, metrics/.
+        product: Product id when the folder holds several.
+        ddl: CREATE TABLE statements (text or a file path).
+        contract: ODCS contract (YAML text or a file path).
+        model_json: Databricks industry model.json path.
+        metrics_sql: Metric view SQL (text or file path) for a dashboard in schema mode.
+        tables: Limit to these tables.
+        stack: vite (default) | nextjs.
+        base: base (Base UI, default) | radix.
+        title: App title. app_name: package/app folder name.
+        description: One or two sentences on the app.
+        output_root: Output folder root.
+        overwrite: When False, skip existing files.
+    """
+    import ui_gen  # pylint: disable=import-outside-toplevel
+
+    return _run_scaffold(ui_gen.make_ui_generator(), request, output_root, overwrite,
+                         product_path=product_path, product=product, ddl=ddl,
+                         contract=contract, model_json=model_json, metrics_sql=metrics_sql,
+                         tables=tables or [], stack=stack, base=base, title=title,
+                         app_name=app_name, description=description)
+
+
+@mcp.tool
+@_release_catalog
 def generate_dp_portfolio(
     portfolio: str,
     products: list[str],

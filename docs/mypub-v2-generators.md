@@ -2623,6 +2623,40 @@ files hand the judgement calls (owners, targets, pricing) to an agent or a
 person. Open follow-ups: grade generated packages on real portfolios, and
 add ODPV (value tracking) once the SDK validates it.
 
+### Phase 19: UI generator, `/kb-ui` (2026-11)
+
+Added after shadcn/ui was loaded as live docs (`shadcn`, `shadcn-registry`,
+`shadcn-directory` doc sites). One pipeline, several inputs:
+
+```text
+input ──► UI spec (ui-spec.json) ──► ground (shadcn docs + book chapters) ──► package
+```
+
+| Mode | Input | Pages |
+|---|---|---|
+| `data-product` | ODPS file or `/kb-dp-from-model` package (product KPIs, ODCS contract, metric views) | Overview dashboard (≤4 KPI cards, trend, breakdown) + read-only list pages |
+| `schema` | DDL, ODCS contract or Databricks `model.json` (+ optional metric view SQL) | List page per table (Data Table + record sheet) + "New" form; dashboard when metrics are given |
+
+- **Stacks**: `vite` (default; hash routes, `src/App.tsx`) and `nextjs`
+  (App Router, `app/<page>/page.tsx`). Views and components are shared.
+- **Primitives**: `base` (Base UI, default) or `radix`; only the app shell,
+  date field and select differ (`render=` vs `asChild`, Base UI `items`).
+- **Rules** (`ui_spec.py`): field kinds from names + logical types; table
+  columns ranked (key, name/number, status, ≤2 money, ≤2 dates; never FK ids,
+  long text, audit or restricted columns); form controls by kind (Radio Group
+  ≤4 values, Select, Date Picker, Switch); trend = area (line for rates),
+  breakdown = horizontal bars sorted.
+- **Safety**: sample data is generated (`SAMPLE-` placeholders for restricted
+  columns), restricted fields are masked in record sheets, `data/source.ts`
+  is the one place real data plugs in.
+- **Checks**: `ui-spec.json` against `ui-spec.schema.json` + cross-references;
+  `setup.sh --build` type-checks and builds the app (Node + network).
+
+Modules: `ui_spec.py` (spec, rules, schema), `ui_inputs.py` (adapters),
+`ui_emit.py` (code), `ui_gen.py` (generator). v2 candidates: `describe` and
+`page` modes, more archetypes (detail page, kanban, settings), and hooks from
+`/kb-bootstrap`, `/kb-dp-from-model` and `/kb-mcp-server` (MCP App UI).
+
 ## 7. Summary
 
 ### Architecture changes (minimal)
