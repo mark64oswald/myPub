@@ -60,8 +60,8 @@ NPM_FORMS = ["react-hook-form", "@hookform/resolvers", "zod"]
 DOCS_BY_ROLE: dict[str, list[str]] = {
     "shell": ["shadcn/ui: Sidebar"],
     "kpi": ["shadcn/ui Registry: Block: dashboard-01", "shadcn/ui: Card"],
-    "trend": ["shadcn/ui: Chart", "shadcn/ui Registry: Block: chart-area-interactive"],
-    "breakdown": ["shadcn/ui: Chart", "shadcn/ui Registry: Block: chart-bar-horizontal"],
+    "trend": ["shadcn/ui: Chart", "shadcn/ui Registry: Chart: chart-area-interactive"],
+    "breakdown": ["shadcn/ui: Chart", "shadcn/ui Registry: Chart: chart-bar-horizontal"],
     "table": ["shadcn/ui: Data Table", "shadcn/ui: Table", "shadcn/ui: Sheet"],
     "form": ["shadcn/ui: Forms / React Hook Form", "shadcn/ui: Field", "shadcn/ui: Date Picker"],
 }
@@ -75,14 +75,41 @@ KEYWORDS_BY_ROLE: dict[str, tuple[str, ...]] = {
 }
 INSTALL_DOCS = {"vite": "shadcn/ui: Installation / Vite", "nextjs": "shadcn/ui: Installation / Next.js"}
 
-# Book chapters behind each role: chapter titles that carry these phrases.
+# Book chapters behind each role: (book title prefix, chapter title prefix), checked
+# against the library (2026-11 coverage check). The healthcare dataviz book goes
+# first for healthcare apps, last otherwise.
+HEALTH_VIZ = "Visualizing Health and Healthcare Data"
+CURATED_CHAPTERS: dict[str, list[tuple[str, str]]] = {
+    "shell": [("Designing Interfaces", "2. Organizing the Content"),
+              ("Designing Interfaces", "Navigation and Browsing")],
+    "kpi": [(HEALTH_VIZ, "Dashboards"), ("Designing Interfaces", "Dashboard")],
+    "trend": [(HEALTH_VIZ, "Shape Two: Lines"),
+              ("Fundamentals of Data Visualization", "Individual Time Series"),
+              ("Visualize This", "TRENDS")],
+    "breakdown": [(HEALTH_VIZ, "Shape One: Bars"),
+                  ("Fundamentals of Data Visualization", "Bar Plots"),
+                  ("Visualize This", "AMOUNTS")],
+    "table": [(HEALTH_VIZ, "Fundamentals of Table Design"),
+              ("Designing Interfaces", "Searching and Filtering"),
+              ("Designing Interfaces", "Sorting and Rearranging")],
+    "form": [("Designing Interfaces", "The Basics of Form Design"),
+             ("Learn React with TypeScript", "Using React Hook Form"),
+             ("React Design Patterns and Best Practices", "The challenges of form handling")],
+}
+# Fallback when a curated chapter is missing: title search in these books only, so a
+# chapter called "Tables" in a database book never gets cited for a UI table.
+UI_BOOKS = ("Designing Interfaces", "Laws of UX", "Practical UI Patterns", "Building Design Systems",
+            "The Joy of UX", "A Project Guide to UX Design", "The Art and Science of UX Design",
+            "Fundamentals of Data Visualization", HEALTH_VIZ, "Visualize This",
+            "Hands-On Data Visualization", "Learn React with TypeScript",
+            "React Design Patterns and Best Practices", "Real-World Next.js")
 BOOK_TERMS: dict[str, tuple[str, ...]] = {
-    "kpi": ("dashboard", "key performance indicator", "kpi", "metrics"),
-    "trend": ("visualiz", "time series", "chart", "graph"),
-    "breakdown": ("visualiz", "bar chart", "comparison", "chart"),
-    "table": ("table", "data grid", "tabular", "search", "filter"),
-    "form": ("form", "input", "validation"),
-    "shell": ("navigation", "information architecture", "layout"),
+    "kpi": ("dashboard",),
+    "trend": ("time series", "lines", "trend"),
+    "breakdown": ("bar", "amounts", "comparison"),
+    "table": ("table", "filter", "sort"),
+    "form": ("form",),
+    "shell": ("navigation", "information architecture"),
 }
 KB_TOPICS = ("Dashboard", "Data Visualization", "Form Validation", "User Interface Design")
 
@@ -111,27 +138,45 @@ RULES: dict[str, str] = {
 # Grounding
 # ---------------------------------------------------------------------------
 
-def chapter_citations(conn: duckdb.DuckDBPyConnection, terms: Sequence[str], *,
-                      limit: int = 2, exclude: Sequence[int] = ()) -> list[ks.Citation]:
-    """Chapters whose title carries one of ``terms``, from active books. Titles only, so a
-    passing mention never counts; the first term ranks first."""
+def _chapter(conn: duckdb.DuckDBPyConnection, book: str, chapter: str
+             ) -> Optional[ks.Citation]:
+    row = conn.execute(
+        "SELECT c.chapter_id, b.title, c.title FROM chapter c JOIN book b ON b.book_id = c.book_id "
+        "WHERE b.title ILIKE ? AND c.title ILIKE ? AND coalesce(b.status, 'active') = 'active' "
+        "ORDER BY length(coalesce(c.content, '')) DESC LIMIT 1",
+        [book + "%", chapter + "%"]).fetchone()
+    return ks.Citation("chapter", int(row[0]), f"{row[1]} — {row[2]}") if row else None
+
+
+def chapter_citations(conn: duckdb.DuckDBPyConnection, role: str, *, healthcare: bool = False,
+                      limit: int = 2) -> list[ks.Citation]:
+    """Book chapters for a region role: the curated chapters first (the healthcare
+    dataviz book leads only for healthcare apps), then a title search in UI_BOOKS."""
     out: list[ks.Citation] = []
+    picks = list(CURATED_CHAPTERS.get(role, []))
+    if not healthcare:
+        picks.sort(key=lambda bc: bc[0] == HEALTH_VIZ)
     try:
-        for t in terms:
-            rows = conn.execute(
-                "SELECT c.chapter_id, b.title, c.title FROM chapter c "
-                "JOIN book b ON b.book_id = c.book_id "
-                "WHERE lower(c.title) LIKE ? AND coalesce(b.status, 'active') = 'active' "
-                "ORDER BY length(c.title), c.chapter_id LIMIT 8",
-                [f"%{t.lower()}%"]).fetchall()
-            for cid, btitle, ctitle in rows:
-                if cid in exclude or any(c.source_id == cid for c in out):
-                    continue
-                if any(c.label.split(" — ")[0] == btitle for c in out):
-                    continue                     # one chapter per book per role
-                out.append(ks.Citation("chapter", int(cid), f"{btitle} — {ctitle}"))
-                if len(out) >= limit:
-                    return out
+        for book, chapter in picks:
+            c = _chapter(conn, book, chapter)
+            if c and all(x.source_id != c.source_id for x in out):
+                out.append(c)
+            if len(out) >= limit:
+                return out
+        for t in BOOK_TERMS.get(role, ()):
+            for book in UI_BOOKS:
+                rows = conn.execute(
+                    "SELECT c.chapter_id, b.title, c.title FROM chapter c "
+                    "JOIN book b ON b.book_id = c.book_id WHERE b.title ILIKE ? "
+                    "AND lower(c.title) LIKE ? AND coalesce(b.status, 'active') = 'active' "
+                    "AND length(coalesce(c.content, '')) > 1500 "
+                    "ORDER BY length(c.title), c.chapter_id LIMIT 1",
+                    [book + "%", f"%{t}%"]).fetchall()
+                for cid, btitle, ctitle in rows:
+                    if all(x.source_id != cid for x in out):
+                        out.append(ks.Citation("chapter", int(cid), f"{btitle} — {ctitle}"))
+                    if len(out) >= limit:
+                        return out
     except Exception:  # catalog without book tables (tests)
         return out
     return out
@@ -142,13 +187,12 @@ def _why(c: ks.Citation, source: str) -> us.Why:
                   ref=c.url or f"{c.source_type}:{c.source_id}")
 
 
-def ground(conn: duckdb.DuckDBPyConnection, roles: Sequence[str]
+def ground(conn: duckdb.DuckDBPyConnection, roles: Sequence[str], *, healthcare: bool = False
            ) -> tuple[dict[str, list[ks.Citation]], dict[str, list[ks.Citation]], list[str]]:
     """(docs by role, books by role, doc pages that were not in the catalog)."""
     docs: dict[str, list[ks.Citation]] = {}
     books: dict[str, list[ks.Citation]] = {}
     missing: list[str] = []
-    used: list[int] = []
     for role in roles:
         names = DOCS_BY_ROLE.get(role, [])
         cites = ks.doc_citations(conn, names, keywords=KEYWORDS_BY_ROLE.get(role, ()),
@@ -158,8 +202,7 @@ def ground(conn: duckdb.DuckDBPyConnection, roles: Sequence[str]
             if not any(f.startswith(n) or n in f for f in found) and not _has_source(conn, n):
                 missing.append(n)
         docs[role] = cites
-        books[role] = chapter_citations(conn, BOOK_TERMS.get(role, ()), exclude=used)
-        used += [c.source_id for c in books[role]]
+        books[role] = chapter_citations(conn, role, healthcare=healthcare)
     return docs, books, us.unique(missing)
 
 
@@ -548,7 +591,7 @@ class UIDecomposer:
                                          " ".join(e.name for e in entities))
         roles = ["shell", "table"] + (["form"] if mode == "schema" else []) + \
             (["kpi", "trend", "breakdown"] if (kpis or metrics) else [])
-        docs, books, missing_docs = ground(conn, roles)
+        docs, books, missing_docs = ground(conn, roles, healthcare=healthcare)
         docs.setdefault("install", ks.doc_citations(conn, [INSTALL_DOCS[stack]], per_source=1))
         topics = [t for t in (ks.topic_material(conn, resolver, name_, max_procedures=4)
                               for name_ in KB_TOPICS) if t]

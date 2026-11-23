@@ -266,11 +266,12 @@ def test_grounding_uses_catalog(catalog, tmp_path):
     bid = conn.execute("INSERT INTO book (title, source_path) VALUES ('Designing Interfaces', 'x.epub') "
                        "RETURNING book_id").fetchone()[0]
     conn.execute("INSERT INTO chapter (book_id, chapter_num, title, content) VALUES "
-                 "(?, 1, 'Lists of Things and Tables', 'tables')", [bid])
+                 "(?, 1, 'Searching and Filtering: How Can I See Only the Data That I Need?', 'filters'), "
+                 "(?, 2, 'Tables', 'tables')", [bid, bid])
     root, issues = _run(catalog, tmp_path, request="web shop orders", ddl=DDL, app_name="shop2")
     notes = (root / "design-notes.md").read_text()
     assert "shadcn docs: shadcn/ui: Data Table" in notes
-    assert "Book: Designing Interfaces — Lists of Things and Tables" in notes
+    assert "Book: Designing Interfaces — Searching and Filtering" in notes
     assert not any("no book chapters" in i.message for i in issues)
 
 
