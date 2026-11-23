@@ -867,3 +867,14 @@ def test_shadcn_fetch_page_converts_registry_and_docs(monkeypatch):
     bad = doc_sites.fetch_page(reg, "https://ui.shadcn.com/r/styles/new-york-v4/x.json",
                                client=C(R("not json", "application/json")))
     assert bad.status == "error"
+
+
+def test_shadcn_framework_pages_get_their_section_in_the_title():
+    import shadcn_registry as sr
+    base = "https://ui.shadcn.com/docs/"
+    assert sr.qualify_title(base + "dark-mode/vite", "Vite") == "Dark Mode / Vite"
+    assert sr.qualify_title(base + "installation/vite", "Vite") == "Installation / Vite"
+    assert sr.qualify_title(base + "rtl/vite", "Vite") == "RTL / Vite"
+    assert sr.qualify_title(base + "dark-mode/next", "Dark Mode - Next.js") == "Dark Mode - Next.js"
+    assert sr.qualify_title(base + "dark-mode", "Dark Mode") == "Dark Mode"
+    assert sr.qualify_title(base + "components/base/button", "Button") == "Button"

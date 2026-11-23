@@ -791,6 +791,7 @@ def fetch_page(site: Site, page_url: str, *, etag: Optional[str] = None,
             # would otherwise pass for the H1.
             fm = re.match(r"---\n(?:.*\n)*?title:\s*(.+)\n(?:.*\n)*?---", text)
             pf.title = fm.group(1).strip().strip("'\"") if fm else markdown_title(text)
+            pf.title = shadcn_registry.qualify_title(page_url, pf.title)
         else:
             pf.title = with_endpoint(markdown_title(text), text)
     elif site.page_format in ("registry_item", "registry_directory"):

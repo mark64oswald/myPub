@@ -239,12 +239,27 @@ def clean_mdx(md: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
+# Docs sections whose pages are titled by framework alone: installation/vite,
+# dark-mode/vite and rtl/vite are all "Vite". Their section goes in front.
+_SECTION_LABELS = {"installation": "Installation", "dark-mode": "Dark Mode",
+                   "rtl": "RTL", "forms": "Forms"}
+
+
+def qualify_title(url: str, title: Optional[str]) -> Optional[str]:
+    """'Vite' on /docs/dark-mode/vite → 'Dark Mode / Vite'."""
+    m = re.match(re.escape(SITE) + r"/docs/([^/]+)/[^/]+/?$", url.split("#", 1)[0])
+    if not (title and m and m.group(1) in _SECTION_LABELS):
+        return title
+    label = _SECTION_LABELS[m.group(1)]
+    return title if label.lower() in title.lower() else f"{label} / {title}"
+
+
 def is_shadcn_url(url: str) -> bool:
     return url.startswith(SITE + "/")
 
 
 __all__ = ["ITEM_TYPES", "index_item_urls", "item_to_markdown", "item_json_to_markdown",
-           "directory_to_markdown", "clean_mdx", "is_shadcn_url"]
+           "directory_to_markdown", "clean_mdx", "qualify_title", "is_shadcn_url"]
 
 
 def _demo(argv: Optional[list[str]] = None) -> Any:  # pragma: no cover
