@@ -32,7 +32,7 @@ Freshness is a command, not a schedule::
             Per site: pages live / retired / never fetched / overdue, last
             sync, recent errors.
 
-    add-site --preset NAME (databricks, claude-code, fastmcp, mcp-apps-api, …)  |  --name … --index-url … …
+    add-site --preset NAME (databricks, claude-code, fastmcp, shadcn, …)  |  --name … --index-url … …
             Writer. Registers (or updates) a site definition.
 
     stale   [--domain example.com] [--source-type T]
@@ -95,8 +95,8 @@ CREATE TABLE IF NOT EXISTS doc_site (
     site_id            BIGINT PRIMARY KEY DEFAULT nextval('seq_doc_site_id'),
     name               VARCHAR NOT NULL UNIQUE,
     index_url          VARCHAR NOT NULL,
-    index_kind         VARCHAR NOT NULL,          -- 'sitemap' | 'llms_txt'
-    page_format        VARCHAR NOT NULL,          -- 'markdown' | 'html'
+    index_kind         VARCHAR NOT NULL,          -- 'sitemap' | 'llms_txt' | 'registry' | 'single'
+    page_format        VARCHAR NOT NULL,          -- 'markdown' | 'html' | 'registry_item' | 'registry_directory'
     md_url_suffix      VARCHAR,                   -- page URL + suffix = Markdown URL
     content_selector   VARCHAR,                   -- CSS selector for the article (html)
     include_patterns   VARCHAR[],                 -- glob on page URL; empty = all
@@ -192,7 +192,8 @@ class Site:
 
     @property
     def source_type(self) -> str:
-        return "web_md" if self.page_format == "markdown" else "web_html"
+        # Registry JSON is converted to Markdown before ingest.
+        return "web_html" if self.page_format == "html" else "web_md"
 
 
 _SITE_COLS = ("site_id", "name", "index_url", "index_kind", "page_format", "md_url_suffix",
@@ -346,6 +347,47 @@ PRESETS: dict[str, Site] = {
         authority_score=0.85,
         refresh_ttl_days=14,
     ),
+    # ui.shadcn.com docs: every docs page has a Markdown twin at <url>.md
+    # (MDX; see shadcn_registry.clean_mdx). Component and AI Elements pages
+    # exist once per primitive library (base / radix / aria) as near-copies;
+    # the unprefixed URL redirects to base, the site default, so only base
+    # is kept. Underscore pages and /legacy are hidden or retired pages.
+    "shadcn": Site(
+        name="shadcn",
+        index_url="https://ui.shadcn.com/sitemap.xml",
+        index_kind="sitemap",
+        page_format="markdown",
+        md_url_suffix=".md",
+        include_patterns=["https://ui.shadcn.com/docs", "https://ui.shadcn.com/docs/*"],
+        exclude_patterns=["*/radix/*", "*/aria/*", "https://ui.shadcn.com/docs/_*",
+                          "https://ui.shadcn.com/docs/legacy*"],
+        name_prefix="shadcn/ui",
+        authority_score=0.85,
+        refresh_ttl_days=7,          # fast-moving
+    ),
+    # shadcn/ui registry: one page per component (registry:ui) and per block
+    # or chart (registry:block), with the full source the CLI would install.
+    # Stands in for the /blocks and /charts pages, which are live previews.
+    "shadcn-registry": Site(
+        name="shadcn-registry",
+        index_url="https://ui.shadcn.com/r/styles/new-york-v4/registry.json",
+        index_kind="registry",
+        page_format="registry_item",
+        include_patterns=["https://ui.shadcn.com/r/styles/new-york-v4/*"],
+        name_prefix="shadcn/ui Registry",
+        authority_score=0.85,
+        refresh_ttl_days=14,
+    ),
+    # The community registry directory behind ui.shadcn.com/docs/directory.
+    "shadcn-directory": Site(
+        name="shadcn-directory",
+        index_url="https://ui.shadcn.com/r/registries.json",
+        index_kind="single",
+        page_format="registry_directory",
+        name_prefix="shadcn/ui",
+        authority_score=0.70,        # community listings, not vendor docs
+        refresh_ttl_days=14,
+    ),
 }
 
 
@@ -450,6 +492,13 @@ def read_index(site: Site, client: Optional[httpx.Client] = None) -> list[str]:
             r = client.get(site.index_url)
             r.raise_for_status()
             urls = parse_llms_txt(r.text, site.index_url)
+        elif site.index_kind == "registry":
+            import shadcn_registry
+            r = client.get(site.index_url)
+            r.raise_for_status()
+            urls = shadcn_registry.index_item_urls(r.text, site.index_url)
+        elif site.index_kind == "single":
+            urls = [site.index_url]
         elif site.index_kind == "sitemap":
             queue, seen_maps = [site.index_url], set()
             while queue:
@@ -735,7 +784,25 @@ def fetch_page(site: Site, page_url: str, *, etag: Optional[str] = None,
             return pf
         import refresh_docs
         text = refresh_docs.WebMarkdownFetcher.strip_index_note(text)
-        pf.title = with_endpoint(markdown_title(text), text)
+        if page_url.startswith("https://ui.shadcn.com/"):
+            import shadcn_registry
+            text = shadcn_registry.clean_mdx(text)
+            # Front matter names the page; a "# comment" in a bash fence
+            # would otherwise pass for the H1.
+            fm = re.match(r"---\n(?:.*\n)*?title:\s*(.+)\n(?:.*\n)*?---", text)
+            pf.title = fm.group(1).strip().strip("'\"") if fm else markdown_title(text)
+        else:
+            pf.title = with_endpoint(markdown_title(text), text)
+    elif site.page_format in ("registry_item", "registry_directory"):
+        import shadcn_registry
+        try:
+            text = (shadcn_registry.item_json_to_markdown(text)
+                    if site.page_format == "registry_item"
+                    else shadcn_registry.directory_to_markdown(text))
+        except (ValueError, TypeError, AttributeError) as e:
+            pf.status, pf.error = "error", f"bad registry JSON: {e}"
+            return pf
+        pf.title = markdown_title(text)
     else:
         page_title, text, pf.content_date = html_page_to_markdown(text, site.content_selector)
         pf.title = markdown_title(text) or page_title
