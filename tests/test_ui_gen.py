@@ -245,6 +245,8 @@ def test_schema_package_has_forms(catalog, tmp_path):
     assert "RadioGroup" in form and "EnumSelect" in form and "DateField" in form
     assert "Switch" in form and "Textarea" in form
     assert "asChild" in (src / "components/kb/date-field.tsx").read_text()
+    assert not (src / "components/kb/trend-chart.tsx").exists()     # no metrics, no charts
+    assert "chart" not in (src / "data/sample.ts").read_text()
     setup = (root / "setup.sh").read_text()
     for item in ("field", "radio-group", "switch", "textarea", "popover", "calendar"):
         assert f" {item}" in setup

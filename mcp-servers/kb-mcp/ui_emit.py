@@ -1006,9 +1006,11 @@ def sample_ts(spec: us.AppSpec, rows: dict[str, list[dict]], series: dict[str, l
               breakdowns: dict[str, list[dict]]) -> str:
     types = ", ".join(us.pascal(e.name) for e in spec.entities)
     lines = ["// Sample data, generated deterministically by myPub /kb-ui.",
-             "// Not real records: restricted columns hold SAMPLE- placeholders.",
-             'import type { Point } from "@/components/kb/trend-chart"',
-             'import type { Slice } from "@/components/kb/breakdown-chart"']
+             "// Not real records: restricted columns hold SAMPLE- placeholders."]
+    if series:
+        lines.append('import type { Point } from "@/components/kb/trend-chart"')
+    if breakdowns:
+        lines.append('import type { Slice } from "@/components/kb/breakdown-chart"')
     if types:
         lines.append(f'import type {{ {types} }} from "@/data/types"')
     lines.append("")
@@ -1045,8 +1047,10 @@ def source_ts(spec: us.AppSpec, series: dict[str, list[dict]],
     ]
     if imports:
         lines.append("import {\n" + "".join(f"  {i},\n" for i in imports) + '} from "@/data/sample"')
-    lines += ['import type { Point } from "@/components/kb/trend-chart"',
-              'import type { Slice } from "@/components/kb/breakdown-chart"']
+    if series:
+        lines.append('import type { Point } from "@/components/kb/trend-chart"')
+    if breakdowns:
+        lines.append('import type { Slice } from "@/components/kb/breakdown-chart"')
     if types:
         lines.append(f'import type {{ {types} }} from "@/data/types"')
     lines.append("")
@@ -1527,8 +1531,6 @@ def emit(spec: us.AppSpec) -> dict[str, str]:
         "lib/kb-format.ts": FORMAT_TS,
         "components/kb/data-table.tsx": DATA_TABLE_TSX,
         "components/kb/kpi-card.tsx": KPI_CARD_TSX,
-        "components/kb/trend-chart.tsx": TREND_CHART_TSX,
-        "components/kb/breakdown-chart.tsx": BREAKDOWN_CHART_TSX,
         "components/kb/masked-value.tsx": MASKED_VALUE_TSX,
         "components/kb/record-sheet.tsx": RECORD_SHEET_TSX,
         "components/kb/enum-select.tsx": ENUM_SELECT[spec.base],
@@ -1563,6 +1565,10 @@ def emit(spec: us.AppSpec) -> dict[str, str]:
                     names = r.bindings.get("fields", [])
                     forms[e.name] = sorted([f for f in e.fields if f.name in names],
                                            key=lambda f: names.index(f.name))
+    if series:
+        files["components/kb/trend-chart.tsx"] = TREND_CHART_TSX
+    if breakdowns:
+        files["components/kb/breakdown-chart.tsx"] = BREAKDOWN_CHART_TSX
     files["data/sample.ts"] = sample_ts(spec, rows, series, breakdowns)
     files["data/source.ts"] = source_ts(spec, series, breakdowns)
     if any(f.kind in ("date", "timestamp") for fs in forms.values() for f in fs):
