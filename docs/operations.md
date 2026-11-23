@@ -42,7 +42,16 @@ Two kinds of live-doc source:
   reference) and `mcp-apps-api` (apps.extensions.modelcontextprotocol.io/api,
   the ext-apps TypeDoc site: guides plus one page per symbol, HTML; TypeDoc
   signatures become code blocks, inherited SDK members are dropped and huge
-  inlined types are truncated). Register
+  inlined types are truncated); and shadcn/ui as three sites: `shadcn`
+  (ui.shadcn.com/docs via the sitemap, Markdown twins at `<url>.md`, MDX
+  wrappers stripped by `shadcn_registry.clean_mdx`; components and AI
+  Elements only in their default `base` variant, the radix/aria near-copies
+  are excluded; ~210 pages), `shadcn-registry` (index_kind `registry`: one
+  page per component and per block/chart in the new-york-v4 registry, with
+  install command, dependencies and full source; stands in for the /blocks
+  and /charts preview pages; ~158 pages) and `shadcn-directory` (index_kind
+  `single`: the community registry directory from /r/registries.json, one
+  section per registry). Register
   with `add-site --preset NAME`. A sync re-reads the index, registers new
   pages, sends conditional GETs (ETag / Last-Modified), compares a hash of
   the *extracted text* (Databricks redeploys daily, so HTTP dates alone

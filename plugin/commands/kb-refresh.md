@@ -89,7 +89,7 @@ are in. Below, `PY` means `"${CLAUDE_PLUGIN_ROOT}/../.venv/bin/python3"` and
 ## Adding a site
 
 ```bash
-PY S/doc_sites.py add-site --preset databricks     # or databricks-api, claude-code, claude-platform, claude-docs, mcp, agent-skills, fastmcp, mcp-apps-api
+PY S/doc_sites.py add-site --preset databricks     # or databricks-api, claude-code, claude-platform, claude-docs, mcp, agent-skills, fastmcp, mcp-apps-api, shadcn, shadcn-registry, shadcn-directory
 PY S/doc_sites.py add-site --name NAME --index-url https://…/sitemap.xml \
     --page-format html --selector article --include 'https://…/en/*' \
     --exclude '*/archive/*' --name-prefix 'Vendor' --ttl 14
